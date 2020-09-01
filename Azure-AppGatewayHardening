@@ -1,0 +1,7 @@
+az account list --output table
+az account set --subscription "SUBSCRIPTION-NAME"
+Get-AzApplicationGatewaySslPredefinedPolicy
+$gw = Get-AzApplicationGateway -Name APPGATEWAY-NAME -ResourceGroup RESOURCEGROUP
+Set-AzApplicationGatewaySslPolicy -ApplicationGateway $gw -PolicyType Custom -MinProtocolVersion TLSv1_2 -CipherSuite "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384","TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384","TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256","TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256","TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256","TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384"
+Get-AzApplicationGatewaySslPolicy -ApplicationGateway $gw
+Set-AzApplicationGateway -ApplicationGateway $gw

@@ -1,3 +1,3 @@
 # Ops
 
-A Collection of Ops Scripts
+A Collection of Ops and Infosec Scripts

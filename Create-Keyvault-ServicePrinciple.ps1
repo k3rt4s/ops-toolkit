@@ -1,4 +1,6 @@
-﻿# Create a service principal and configure its access to Azure resources
+# Created and authored by Jon Bowker 09/24/2020
+
+# Create a service principal and configure its access to Azure resources
 # Documentation - https://github.com/Azure/azure-sdk-for-net/tree/2d11c6664e68c145a988729e6598449bba130694/sdk/keyvault/Azure.Security.KeyVault.Certificates#azure-key-vault-certificate-client-library-for-net
 # A keyvault should already exist. If not, please create one in the correct resource group. "az keyvault create --resource-group <your-resource-group-name> --name <your-key-vault-name>"
 

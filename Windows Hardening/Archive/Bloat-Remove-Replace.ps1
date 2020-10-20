@@ -1,7 +1,7 @@
-#remove MS installed Junk
+﻿#remove MS installed Junk
 
-$junk = Import-Csv -path C:\scripts\demo.csv
-$ComPack = Import-Csv -path C:\scripts\demo.csv
+$junk = Import-Csv -path C:\scripts\Bloat.csv
+$ComPack = Import-Csv -path C:\scripts\Safe.csv
 
 
 

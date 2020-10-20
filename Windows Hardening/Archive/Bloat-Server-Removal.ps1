@@ -14,7 +14,7 @@ Get-AppxPackage -name "Microsoft.3DBuilder" | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.BingNews" | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.XboxApp" | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.BingSports" | Remove-AppxPackage
-Get-AppxPackage -name "Microsoft.WindowsCamera" | Remove-AppxPackage
+Get-AppxPackage -name "Microsoft.WindowsCamera" | add-AppxPackage
 Get-AppxPackage -name "Microsoft.Getstarted" | Remove-AppxPackage
 Get-AppxPackage *xbox* | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.WindowsMaps" | Remove-AppxPackage
@@ -27,8 +27,8 @@ Get-AppxPackage Microsoft.YourPhone -AllUsers | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.WindowsPhone" | Remove-AppxPackage
 get-appxpackage Microsoft. GamingServices | remove-AppxPackage -allusers
 Get-AppxPackage -name "Microsoft.Windows.Photos" | Remove-AppxPackage
-Get-AppxPackage -name "Microsoft.WindowsStore" | Remove-AppxPackage
-Get-AppxPackage -name "Microsoft.Office.OneNote" | Remove-AppxPackage
-Get-AppxPackage -name "Microsoft.WindowsCalculator" | Remove-AppxPackage
+Get-AppxPackage -name "Microsoft.WindowsStore" | add-AppxPackage
+Get-AppxPackage -name "Microsoft.Office.OneNote" | add-AppxPackage
+Get-AppxPackage -name "Microsoft.WindowsCalculator" | add-AppxPackage
 Get-AppxPackage -name "Microsoft.Advertising.Xaml" | Remove-AppxPackage
 Get-AppxPackage -name "Microsoft.Print3D" | Remove-AppxPackage

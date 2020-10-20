@@ -1,3 +1,1 @@
-# Ops
-
-A Collection of Ops and Infosec Scripts
+Ops and Info Sec Scripts

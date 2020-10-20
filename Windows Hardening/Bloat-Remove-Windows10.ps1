@@ -5,46 +5,86 @@ $ErrorActionPreference = 'SilentlyContinue'
         #This is the switch parameter for running this script as a 'silent' script, for use in MDT images or any type of mass deployment without user interaction.
 
 $global:Bloatware = @(
-    "Microsoft.WindowsCalculator"
-    "Microsoft.Windows.Photos"
-    "Microsoft.MicrosoftOfficeHub"
-    "Microsoft.WindowsStore"
-    "Microsoft.Xbox.TCUI"
-    "Microsoft.XboxApp"
-    "Microsoft.XboxGameOverlay"
-    "Microsoft.XboxGamingOverlay"
-    "Microsoft.XboxIdentityProvider"
-    "Microsoft.XboxSpeechToTextOverlay"
-    "Microsoft.StorePurchaseApp"
-    "Microsoft.BingNews"
-    "Microsoft.Office.Lens"
-    "Microsoft.Office.OneNote"
-    "Microsoft.Office.Sway"
-    "Microsoft.OneConnect"
-    "Microsoft.People"
-    "Microsoft.Print3D"
-    "Microsoft.SkypeApp"
-    "Microsoft.StorePurchaseApp"
-    "Microsoft.WindowsMaps"
-    "Microsoft.Xbox.TCUI"
-    "Microsoft.XboxApp"
-    "Microsoft.XboxGameOverlay"
-    "Microsoft.XboxGamingOverlay"
-    "Microsoft.XboxIdentityProvider"
-    "Microsoft.XboxSpeechToTextOverlay"
-    "Microsoft.ZuneMusic"
-    "Microsoft.ZuneVideo"
-    "PandoraMediaInc"
-    "CandyCrush"
-    "BubbleWitch3Saga"
-    "Wunderlist"
-    "Flipboard"
-    "Twitter"
-    "Facebook"
-    "Spotify"
-    "Minecraft"
-    "Royal Revolt"
-    "Windows.MiracastView"
+        "BubbleWitch3Saga"
+        "CandyCrush"
+        "Dolby"
+        "Duolingo-LearnLanguagesforFree"
+        "Facebook"
+        "Flipboard"
+        "MAGIX.MusicMakerJam"
+        "Microsoft.Advertising.Xaml"
+        "Microsoft.Advertising.Xaml"
+        "Microsoft.BingNews"
+        "Microsoft.BingTranslator"
+        "Microsoft.BingWeather"
+        "Microsoft.DesktopAppInstaller"
+        "Microsoft.GamingApp"
+        "Microsoft.GamingServices"
+        "Microsoft.GetHelp"
+        "Microsoft.Getstarted"
+        "Microsoft.HEIFImageExtension"
+        "Microsoft.LanguageExperiencePackar-SA"
+        "Microsoft.LanguageExperiencePackde-DE"
+        "Microsoft.LanguageExperiencePackes-ES"
+        "Microsoft.LanguageExperiencePackfr-FR"
+        "Microsoft.LanguageExperiencePackja-JP"
+        "Microsoft.LanguageExperiencePackko-KR"
+        "Microsoft.LanguageExperiencePacknl-NL"
+        "Microsoft.LanguageExperiencePackpt-BR"
+        "Microsoft.LanguageExperiencePackth-TH"
+        "Microsoft.LanguageExperiencePackzh-CN"
+        "Microsoft.LanguageExperiencePackzh-TW"
+        "Microsoft.MicrosoftSolitaireCollection"
+        "Microsoft.MicrosoftStickyNotes"
+        "Microsoft.MicrosoftStickyNotes"
+        "Microsoft.MixedReality.Portal"
+        "Microsoft.News"
+        "Microsoft.Office.Lens"
+        "Microsoft.Office.Sway"
+        "Microsoft.OneConnect"
+        "Microsoft.People"
+        "Microsoft.Print3D"
+        "Microsoft.ScreenSketch"
+        "Microsoft.SkypeApp"
+        "Microsoft.StorePurchaseApp"
+        "Microsoft.StorePurchaseApp"
+        "Microsoft.VP9VideoExtensions"
+        "Microsoft.Wallet"
+        "Microsoft.WebMediaExtensions"
+        "Microsoft.WebpImageExtension"
+        "Microsoft.WindowsCamera"
+        "Microsoft.WindowsFeedbackHub"
+        "Microsoft.WindowsMaps"
+        "Microsoft.Xbox.TCUI"
+        "Microsoft.XboxApp"
+        "Microsoft.XboxGameOverlay"
+        "Microsoft.XboxGamingOverlay"
+        "Microsoft.XboxIdentityProvider"
+        "Microsoft.XboxSpeechToTextOverlay"
+        "Microsoft.YourPhone"
+        "Microsoft.ZuneMusic"
+        "Microsoft.ZuneVideo"
+        "MIDIBerry"
+        "Minecraft"
+        "PandoraMediaInc"
+        "Royal Revolt"
+        "Spotify"
+        "Sway"
+        "Twitter"
+        "WindSynthBerry"
+        "Wunderlist"
+        "Microsoft.Xbox.TCUI"
+        "Microsoft.3DBuilder"
+        "Microsoft.BingFinance"
+        "Microsoft.BingFoodAndDrink"
+        "Microsoft.BingHealthAndFitness"
+        "Microsoft.BingSports"
+        "Microsoft.BingTravel"
+        "Microsoft.MicrosoftSolitaireCollection"
+        "Microsoft.Music.Preview"
+        "Microsoft.WindowsPhone"
+        "Microsoft.XboxGameBar"
+        "XboxGameCallableUI"
 )
        
         
@@ -63,9 +103,9 @@ $global:Bloatware = @(
 
         Function DebloatAll {
             #Removes AppxPackages
-            Get-AppxPackage | Where { !($_.Name -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.Name) } | Remove-AppxPackage
-            Get-AppxProvisionedPackage -Online | Where { !($_.DisplayName -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.DisplayName) } | Remove-AppxProvisionedPackage -Online
-            Get-AppxPackage -AllUsers | Where { !($_.Name -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.Name) } | Remove-AppxPackage
+            Get-AppxPackage | Where-Object { !($_.Name -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.Name) } | Remove-AppxPackage
+            Get-AppxProvisionedPackage -Online | Where-Object { !($_.DisplayName -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.DisplayName) } | Remove-AppxProvisionedPackage -Online
+            Get-AppxPackage -AllUsers | Where-Object { !($_.Name -cmatch $global:WhiteListedAppsRegex) -and !($NonRemovables -cmatch $_.Name) } | Remove-AppxPackage
         }
   
         #Creates a PSDrive to be able to access the 'HKCR' tree
@@ -222,9 +262,9 @@ $global:Bloatware = @(
             (New-Object -Com Shell.Application).
             NameSpace('shell:::{4234d49b-0245-4df3-b780-3893943456e1}').
             Items() |
-            % { $_.Verbs() } |
-            ? { $_.Name -match 'Un.*pin from Start' } |
-            % { $_.DoIt() }
+            ForEach-Object { $_.Verbs() } |
+            Where-Object { $_.Name -match 'Un.*pin from Start' } |
+            ForEach-Object { $_.DoIt() }
         }
 
         Function Remove3dObjects {

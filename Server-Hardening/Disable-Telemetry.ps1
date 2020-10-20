@@ -1,7 +1,6 @@
 ## Disable Telemetry        
-        
-        Write-Host "Disabling Windows Feedback Experience program"
-        $Advertising = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+Write-Host "Disabling Windows Feedback Experience program"
+$Advertising = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
         If (Test-Path $Advertising) {
             Set-ItemProperty $Advertising Enabled -Value 0 
         }

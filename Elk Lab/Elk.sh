@@ -26,5 +26,5 @@ systemctl enable containerd.service &&
 docker pull sebp/elk &&
 #pulls docker elk
 #
-docker run -it -p 5601:5601 -p 9200:9200 -p 5044:5044 --restart always sebp/elk && 
+docker run -it -p 5601:5601 -p 9200:9200 -p 5044:5044 --restart always sebp/elk
 #Create Image

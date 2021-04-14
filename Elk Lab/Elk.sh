@@ -1,6 +1,11 @@
 #!/bin/bash
 ​#Check to see if user is Root
 #
+#Updating
+apt-get update
+#upgrading
+apt-get upgrade
+#
 apt install docker.io &&
 #installs docker to box
 #

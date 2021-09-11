@@ -17,5 +17,3 @@ curl -L -O https://gist.githubusercontent.com/slape/5cc350109583af6cbe577bbcc071
 mv Filebeat /etc/filebeat/filebeat.yml
 #open
 nano /etc/filebeat/filebeat.yml
-#Set Max Memor
-Echo "vm.max_map_count=262144" >> /etc/sysctl.conf

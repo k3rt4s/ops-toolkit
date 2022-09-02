@@ -1,0 +1,61 @@
+0. Delete Everything by Deleting your Resource Group
+*Everything will be built in West3
+1. Create a Resource Group called "Red-Team"
+2. Create a Vnet, keeping the subnet the same, with the name "Red-Team"
+3. Create an NSG called Vnet
+4. Place a Default / Implict Deny in place 
+5. Associate the NSG to the Vnet
+6. Build your first VM
+	Name: JumpBox
+	Image: Ubuntu
+	Size: B1s
+	Auth: SSH Public Key
+	UN: azureuser
+	SSH Public Key Source: Use Existing Public Key
+	SSH Public Key: Use Key generated in GitBash (See below for SSH key Instructions)
+	Public Inbound ports: Allow Selected ports
+	Inbound Ports: SSH (22) 
+		*We are going to use SSH to connect to the server
+	Select Networking Tab
+	NIC Security Group: None
+	Click to create and build the server
+7. After, Allow SSH to the server
+	by navigating to the NSG and adding an inbound port rule
+	Source: IP Addresses
+	Source IP: Your PUBLIC IP address
+	Destination: IP Addresses
+	Destination IP: Private IP of your Jumpbox VM
+	Service: SSH
+	Priority: 110
+	Name: Jumpbox-Access
+	click to create
+8. Test Connecting to the VM
+	Using gitbash run ssh azureuser@JUMPBOX-PUBLIC-IP
+	* You can find the public IP on your jumpbox's status page
+	If you connect successfully, your prompt will be azureuser@Jumpbox:~$
+9. Build two Web Servers next
+	Each VM should be named "Web-1" and "Web-2"
+	Same Resource Group
+	Image: Ubuntu
+	Size: B1s
+	Auth: SSH Public Key
+	UN: azureuser
+	SSH Public Key Source: Use Existing Public Key
+	SSH Public Key: Use Key generated in GitBash (See below for SSH key Instructions)
+	Public Inbound ports: None
+	*We will use the jumpbox to connect to them
+	Inbound Ports: None
+	Select Networking Tab
+	NIC Security Group: None
+	Click to create and build each server
+
+	
+** SSH Key Gen Instructions
+1. Open Gitbash or Terminal
+2. Run ssh-keygen keeping defaults and setting a passphrase
+3. Run cat ~/.ssh/id_rsa.pub to display your id_rsa.pub key
+4. Highlight and copy the SSH key string to your clipboard.
+* LEAVE THE LAST PIECE THAT CONTAINS LAPTOP INFORMATION OFF. EXAMPLE BELOW
+<redacted-ssh-rsa-public-key>
+
+

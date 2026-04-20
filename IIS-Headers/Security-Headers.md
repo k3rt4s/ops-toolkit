@@ -1,4 +1,7 @@
-Content-Security-Policy
+# Security Headers Reference
+
+## Content-Security-Policy
+
 Is an effective measure to protect your site from XSS attacks. By whitelisting sources of approved content, you can prevent the browser from loading malicious assets. frame-ancestors 
 Example: frame-ancestors https://DOMAIN.com https://*.DOMAIN.com http://DOMAIN.com http://*.DOMAIN.com (directive specifies valid parents that may embed a page using <frame>, <iframe>, <object>, <embed>, or <applet>.)
  

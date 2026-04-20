@@ -11,7 +11,7 @@ configuration, Windows hardening, and general IT administration.
 ## Contents
 
 | Folder | Purpose |
-|--------|---------|
+| -------- | --------- |
 | `Azure\` | Azure PowerShell — NSG export, VPN config, Key Vault, App Gateway |
 | `IIS Configuration\` | IIS setup scripts |
 | `IIS-Headers\` | HTTP security header configuration for IIS |
@@ -28,7 +28,7 @@ configuration, Windows hardening, and general IT administration.
 
 ## Structure
 
-```
+```text
 SecOps\
 ├── Azure\
 ├── IIS Configuration\

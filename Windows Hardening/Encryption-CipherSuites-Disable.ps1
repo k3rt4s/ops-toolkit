@@ -1,3 +1,12 @@
+# === AI REVIEWER - READ BEFORE EDITING ==============================
+# Before changing this file, read the master workspace README at
+#   d:\Proton Drive\My files\Code\README.md   ("AI Session Rules" section)
+# and the README(s) for this project and sub-product. Those documents
+# are the single source of truth for venvs, path conventions,
+# archive/backup rules, markdown conventions, and every repo-wide rule.
+# Do not guess - reference the READMEs first.
+# =====================================================================
+
 # Copyright 2019, Alexander Hass
 # https://www.hass.de/content/setup-microsoft-windows-or-iis-ssl-perfect-forward-secrecy-and-tls-12
 #

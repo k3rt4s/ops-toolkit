@@ -1,3 +1,12 @@
+# === AI REVIEWER - READ BEFORE EDITING ==============================
+# Before changing this file, read the master workspace README at
+#   d:\Proton Drive\My files\Code\README.md   ("AI Session Rules" section)
+# and the README(s) for this project and sub-product. Those documents
+# are the single source of truth for venvs, path conventions,
+# archive/backup rules, markdown conventions, and every repo-wide rule.
+# Do not guess - reference the READMEs first.
+# =====================================================================
+
 $ErrorActionPreference = 'SilentlyContinue'
         #This function finds any AppX/AppXProvisioned package and uninstalls it, except for Freshpaint, Windows Calculator, Windows Store, and Windows Photos.
         #Also, to note - This does NOT remove essential system services/software/etc such as .NET framework installations, Cortana, Edge, etc.

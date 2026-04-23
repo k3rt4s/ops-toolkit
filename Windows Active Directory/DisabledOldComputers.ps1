@@ -1,3 +1,12 @@
+# === AI REVIEWER - READ BEFORE EDITING ==============================
+# Before changing this file, read the master workspace README at
+#   d:\Proton Drive\My files\Code\README.md   ("AI Session Rules" section)
+# and the README(s) for this project and sub-product. Those documents
+# are the single source of truth for venvs, path conventions,
+# archive/backup rules, markdown conventions, and every repo-wide rule.
+# Do not guess - reference the READMEs first.
+# =====================================================================
+
 # This PowerShell Command will query Active Directory and return the computer accounts which have not logged for the past
 # 30 days.  You can easily change the number of days from 30 to any number of your choosing. After, the computers will be
 # moved to the "DisabledComputers" OU

@@ -1,3 +1,12 @@
+# === AI REVIEWER - READ BEFORE EDITING ==============================
+# Before changing this file, read the master workspace README at
+#   d:\Proton Drive\My files\Code\README.md   ("AI Session Rules" section)
+# and the README(s) for this project and sub-product. Those documents
+# are the single source of truth for venvs, path conventions,
+# archive/backup rules, markdown conventions, and every repo-wide rule.
+# Do not guess - reference the READMEs first.
+# =====================================================================
+
 Import-Module WebAdministration
 Clear-WebConfiguration "/system.webServer/httpProtocol/customHeaders/add"
 Add-WebConfigurationProperty //system.webServer/httpProtocol/customHeaders "IIS:\sites\" -AtIndex 0 -Name collection -value @{name='Content-Security-Policy';value=' frame-ancestors https://ncontracts.com https://*.ncontracts.com http://ncontracts.com http://*.ncontracts.com'}

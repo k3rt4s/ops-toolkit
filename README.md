@@ -12,19 +12,19 @@ configuration, Windows hardening, and general IT administration.
 
 ## Contents
 
-| Folder | Purpose |
-| -------- | --------- |
-| `Azure\` | Azure PowerShell — NSG export, VPN config, Key Vault, App Gateway |
-| `IIS Configuration\` | IIS setup scripts |
-| `IIS-Headers\` | HTTP security header configuration for IIS |
-| `Labs\` | Azure cloud lab instructions, ELK stack lab materials |
-| `Misc\` | General utilities — bginfo, dark mode toggle, ping tools |
-| `Office365\` | O365 distribution group and UPN management |
-| `PenTesting\` | AutoRecon wrapper script |
-| `Printers\` | Printer add/remove VBS scripts |
-| `Windows Active Directory\` | AD user management, expiring passwords, GPO scripts |
-| `Windows File Cleanup\` | File and folder cleanup VBS scripts |
-| `Windows Hardening\` | Bloat removal, telemetry disable, cipher suite hardening |
+| Folder                      | Purpose                                                           |
+| --------------------------- | ----------------------------------------------------------------- |
+| `Azure\`                    | Azure PowerShell — NSG export, VPN config, Key Vault, App Gateway |
+| `IIS Configuration\`        | IIS setup scripts                                                 |
+| `IIS-Headers\`              | HTTP security header configuration for IIS                        |
+| `Labs\`                     | Azure cloud lab instructions, ELK stack lab materials             |
+| `Misc\`                     | General utilities — bginfo, dark mode toggle, ping tools          |
+| `Office365\`                | O365 distribution group and UPN management                        |
+| `PenTesting\`               | AutoRecon wrapper script                                          |
+| `Printers\`                 | Printer add/remove VBS scripts                                    |
+| `Windows Active Directory\` | AD user management, expiring passwords, GPO scripts               |
+| `Windows File Cleanup\`     | File and folder cleanup VBS scripts                               |
+| `Windows Hardening\`        | Bloat removal, telemetry disable, cipher suite hardening          |
 
 ---
 

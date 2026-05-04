@@ -132,7 +132,6 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
 | `scripts\printers\Add-WindowsPrinterConnections.ps1`                | `Add-LegacyPrinterConnections.vbs`           |
 | `scripts\printers\Remove-WindowsPrinterConnections.ps1`             | `Remove-LegacyPrinterConnection.vbs`         |
-| `scripts\utilities\Convert-IpAddressToDecimalAndBinary.ps1`         | `Convert-IpAddressToDecimalAndBinary.vbs`    |
 | `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
 | `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                | `Clear-UserAndDriveTempFolders.vbs`          |
 | `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       | `Remove-OldFilesRecursively.vbs`             |

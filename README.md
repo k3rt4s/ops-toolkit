@@ -58,9 +58,9 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\iis\`                  | IIS setup and HTTP security header configuration       |
 | `scripts\microsoft-365\`        | Exchange Online and Microsoft 365 administration       |
 | `scripts\pentesting\`           | AutoRecon workstation/lab setup helper                 |
-| `scripts\printers\`             | Legacy printer connection helpers                      |
+| `scripts\printers\`             | Printer connection helpers                             |
 | `scripts\utilities\`            | General utilities and CSV comparison helpers           |
-| `scripts\windows-file-cleanup\` | Legacy file and folder cleanup helpers                 |
+| `scripts\windows-file-cleanup\` | File and folder cleanup helpers                        |
 | `scripts\windows-hardening\`    | Windows telemetry, bloatware, and cipher hardening     |
 | `data\windows-hardening\`       | Bloatware allow/remove package lists                   |
 | `docs\labs\`                    | Azure and ELK lab materials                            |
@@ -83,6 +83,23 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                      |
 | `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                    |
 
+## Modernized Legacy Scripts
+
+The remaining VBScript/CMD entry points were replaced with PowerShell equivalents and the originals were moved to `archive\legacy-scripts\retired-2026-05-04\`.
+
+| Replacement                                                         | Replaces                                     |
+| ------------------------------------------------------------------- | -------------------------------------------- |
+| `scripts\active-directory\Export-AdUserAttributesToCsv.ps1`         | `Export-AdUserAttributesToExcel.vbs`         |
+| `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
+| `scripts\printers\Add-WindowsPrinterConnections.ps1`                | `Add-LegacyPrinterConnections.vbs`           |
+| `scripts\printers\Remove-WindowsPrinterConnections.ps1`             | `Remove-LegacyPrinterConnection.vbs`         |
+| `scripts\utilities\Convert-IpAddressToDecimalAndBinary.ps1`         | `Convert-IpAddressToDecimalAndBinary.vbs`    |
+| `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
+| `scripts\utilities\Set-WindowsVolumeProductKey.ps1`                 | `Set-WindowsVolumeProductKey.vbs`            |
+| `scripts\utilities\Start-BgInfo.ps1`                                | `Start-BgInfoForLegacyWindows.cmd`           |
+| `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                | `Clear-UserAndDriveTempFolders.vbs`          |
+| `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       | `Remove-OldFilesRecursively.vbs`             |
+
 ## Script Header Standard
 
 Every kept script should start with instructions in the native comment format for its language:
@@ -102,7 +119,7 @@ The header should tell the operator to read this README, review parameters or va
 - State-changing scripts should support `-WhatIf` and `-Confirm` through `SupportsShouldProcess`.
 - Avoid hard-coded customer domains, email addresses, tenant IDs, subscription IDs, storage keys, and local output paths. Pass them as parameters.
 - Use `PSScriptAnalyzerSettings.psd1` when linting PowerShell scripts.
-- Treat VBScript as legacy keep only. Replace it with PowerShell before relying on it for new automation.
+- Treat VBScript/CMD as archived reference only. Active automation should be PowerShell unless a target system requires another shell.
 - Put generated reports under `reports\`; do not commit generated output.
 
 ## Validation

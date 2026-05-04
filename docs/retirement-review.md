@@ -26,12 +26,11 @@ This review identifies what should be retired, what should stay active, and what
 
 ## Legacy Keep / Replacement Recommended
 
-| Item                                 | Status        | Recommendation                                                                                                        |
-| ------------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `scripts\printers\*.vbs`             | Legacy keep   | VBScript is deprecated in Windows and should be replaced with PowerShell printer cmdlets when time allows.            |
-| `scripts\windows-file-cleanup\*.vbs` | Legacy keep   | Replace with PowerShell equivalents before VBScript becomes unavailable by default in target Windows builds.          |
-| `scripts\active-directory\*.vbs`     | Legacy keep   | Replace with ActiveDirectory PowerShell module scripts, but keep for environments that still rely on cscript/wscript. |
-| `docs\labs\elk-lab\scripts\*.sh`     | Lab reference | Keep with lab docs; do not treat as production deployment automation.                                                 |
+| Item                                                 | Status             | Recommendation                                                                              |
+| ---------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
+| `archive\legacy-scripts\retired-2026-05-04\**\*.vbs` | Archived reference | Replaced with PowerShell equivalents under `scripts\`; keep only for historical comparison. |
+| `archive\legacy-scripts\retired-2026-05-04\**\*.cmd` | Archived reference | Replaced with PowerShell equivalents under `scripts\`; keep only for historical comparison. |
+| `docs\labs\elk-lab\scripts\*.sh`                     | Lab reference      | Keep with lab docs; do not treat as production deployment automation.                       |
 
 ## Sources Checked
 

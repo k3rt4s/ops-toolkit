@@ -13,7 +13,7 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 | `Misc\`                     | `scripts\utilities\`                                                                      |
 | `Office365\`                | `scripts\microsoft-365\` and `docs\`                                                      |
 | `PenTesting\`               | `scripts\pentesting\`                                                                     |
-| `Printers\`                 | `scripts\printers\`                                                                       |
+| `Printers\`                 | `ITOps\scripts\printers\`                                                                 |
 | `Windows Active Directory\` | `scripts\active-directory\`                                                               |
 | `Windows File Cleanup\`     | `scripts\windows-file-cleanup\`                                                           |
 | `Windows Hardening\`        | `scripts\windows-hardening\`, `data\windows-hardening\`, and `archive\windows-hardening\` |

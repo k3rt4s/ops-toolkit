@@ -26,6 +26,7 @@ SecOps\
 ├── archive\                 Retired legacy scripts and supporting files
 ├── data\                    Package lists and non-secret script input data
 ├── docs\                    Labs, diagrams, review notes, and reference material
+├── ITOps\                   Temporary staging area for IT operations scripts
 ├── notes\                   CherryTree and other notebook exports
 ├── reports\                 Generated script output, ignored by git
 ├── scripts\                 Runnable automation grouped by platform/domain
@@ -58,7 +59,6 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\iis\`                  | IIS setup and HTTP security header configuration       |
 | `scripts\microsoft-365\`        | Exchange Online and Microsoft 365 administration       |
 | `scripts\pentesting\`           | AutoRecon workstation/lab setup helper                 |
-| `scripts\printers\`             | Printer connection helpers                             |
 | `scripts\utilities\`            | General utilities and CSV comparison helpers           |
 | `scripts\windows-file-cleanup\` | File and folder cleanup helpers                        |
 | `scripts\windows-hardening\`    | Windows telemetry, bloatware, and cipher hardening     |
@@ -67,6 +67,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `docs\iis\`                     | IIS header notes                                       |
 | `notes\`                        | CherryTree notes database                              |
 | `archive\`                      | Retired material retained inside the SecOps repo       |
+| `ITOps\scripts\printers\`       | Temporary home for Windows printer connection helpers  |
 
 ## Examples
 
@@ -85,7 +86,7 @@ pwsh -File .\scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1 -Output
 Add printer connections from a text file after previewing the action:
 
 ```powershell
-pwsh -File .\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\data\printers\printers.example.txt -WhatIf
+pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
 ```
 
 Preview recursive file cleanup:
@@ -130,8 +131,8 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | ------------------------------------------------------------------- | -------------------------------------------- |
 | `scripts\active-directory\Export-AdUserAttributesToCsv.ps1`         | `Export-AdUserAttributesToExcel.vbs`         |
 | `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
-| `scripts\printers\Add-WindowsPrinterConnections.ps1`                | `Add-LegacyPrinterConnections.vbs`           |
-| `scripts\printers\Remove-WindowsPrinterConnections.ps1`             | `Remove-LegacyPrinterConnection.vbs`         |
+| `ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
+| `ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1`       | `Remove-LegacyPrinterConnection.vbs`         |
 | `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
 | `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                | `Clear-UserAndDriveTempFolders.vbs`          |
 | `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       | `Remove-OldFilesRecursively.vbs`             |

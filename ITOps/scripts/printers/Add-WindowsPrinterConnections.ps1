@@ -30,8 +30,8 @@ function Show-Usage {
 Missing required arguments.
 
 Usage:
-  pwsh -File .\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterPath "\\print01\Accounting","\\print01\Warehouse" -WhatIf
-  pwsh -File .\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\data\printers\printers.example.txt -WhatIf
+  pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterPath "\\print01\Accounting","\\print01\Warehouse" -WhatIf
+  pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
 
 Options:
   -PrinterPath      One or more printer UNC paths.

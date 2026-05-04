@@ -6,10 +6,11 @@ If this area grows enough to justify its own repository, move this folder into a
 
 ## Contents
 
-| Path                | Purpose                                 |
-| ------------------- | --------------------------------------- |
-| `scripts\printers\` | Windows printer connection helpers.     |
-| `data\printers\`    | Example non-secret printer input files. |
+| Path                            | Purpose                                 |
+| ------------------------------- | --------------------------------------- |
+| `scripts\printers\`             | Windows printer connection helpers.     |
+| `scripts\windows-file-cleanup\` | File and temp-folder cleanup helpers.   |
+| `data\printers\`                | Example non-secret printer input files. |
 
 ## Examples
 
@@ -23,4 +24,16 @@ Preview removing all Windows connection printers:
 
 ```powershell
 pwsh -File .\ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1 -AllConnectionPrinters -WhatIf
+```
+
+Preview recursive file cleanup:
+
+```powershell
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+```
+
+Preview temp folder cleanup:
+
+```powershell
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1 -TempPath $env:TEMP -WhatIf
 ```

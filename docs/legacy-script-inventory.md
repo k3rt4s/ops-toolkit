@@ -12,8 +12,8 @@ These files were retired from active use on 2026-05-04 and kept under `archive\l
 | `scripts\utilities\Set-WindowsVolumeProductKey.vbs`                   | Installed a Windows volume product key through WMI.                                      | Removed from SecOps; no active replacement.                         |
 | `scripts\utilities\Show-CurrentUser.vbs`                              | Reported current user and logon context details from a legacy workstation script.        | `scripts\utilities\Get-CurrentUserContext.ps1`                      |
 | `scripts\utilities\Start-BgInfoForLegacyWindows.cmd`                  | Started BGInfo from legacy local or network paths.                                       | Removed from SecOps; no active replacement.                         |
-| `scripts\windows-file-cleanup\Clear-UserAndDriveTempFolders.vbs`      | Cleared user and drive temp folders after an interactive confirmation prompt.            | `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                |
-| `scripts\windows-file-cleanup\Remove-OldFilesRecursively.vbs`         | Removed files older than a configured age from a folder tree.                            | `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       |
+| `scripts\windows-file-cleanup\Clear-UserAndDriveTempFolders.vbs`      | Cleared user and drive temp folders after an interactive confirmation prompt.            | `ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1`          |
+| `scripts\windows-file-cleanup\Remove-OldFilesRecursively.vbs`         | Removed files older than a configured age from a folder tree.                            | `ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1` |
 
 ## Retirement Notes
 

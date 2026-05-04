@@ -29,7 +29,7 @@ function Show-Usage {
 Missing required arguments.
 
 Usage:
-  pwsh -File .\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+  pwsh -File .\ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
 
 Options:
   -Path           Folder tree to scan.

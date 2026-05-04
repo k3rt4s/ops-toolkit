@@ -52,22 +52,22 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 
 ## Contents
 
-| Path                            | Purpose                                                |
-| ------------------------------- | ------------------------------------------------------ |
-| `scripts\active-directory\`     | AD reports, exports, and password notification scripts |
-| `scripts\azure\`                | Azure PowerShell and Azure CLI automation              |
-| `scripts\iis\`                  | IIS setup and HTTP security header configuration       |
-| `scripts\microsoft-365\`        | Exchange Online and Microsoft 365 administration       |
-| `scripts\pentesting\`           | AutoRecon workstation/lab setup helper                 |
-| `scripts\utilities\`            | General utilities and CSV comparison helpers           |
-| `scripts\windows-file-cleanup\` | File and folder cleanup helpers                        |
-| `scripts\windows-hardening\`    | Windows telemetry, bloatware, and cipher hardening     |
-| `data\windows-hardening\`       | Bloatware allow/remove package lists                   |
-| `docs\labs\`                    | Azure and ELK lab materials                            |
-| `docs\iis\`                     | IIS header notes                                       |
-| `notes\`                        | CherryTree notes database                              |
-| `archive\`                      | Retired material retained inside the SecOps repo       |
-| `ITOps\scripts\printers\`       | Temporary home for Windows printer connection helpers  |
+| Path                                  | Purpose                                                |
+| ------------------------------------- | ------------------------------------------------------ |
+| `scripts\active-directory\`           | AD reports, exports, and password notification scripts |
+| `scripts\azure\`                      | Azure PowerShell and Azure CLI automation              |
+| `scripts\iis\`                        | IIS setup and HTTP security header configuration       |
+| `scripts\microsoft-365\`              | Exchange Online and Microsoft 365 administration       |
+| `scripts\pentesting\`                 | AutoRecon workstation/lab setup helper                 |
+| `scripts\utilities\`                  | General utilities and CSV comparison helpers           |
+| `scripts\windows-hardening\`          | Windows telemetry, bloatware, and cipher hardening     |
+| `data\windows-hardening\`             | Bloatware allow/remove package lists                   |
+| `docs\labs\`                          | Azure and ELK lab materials                            |
+| `docs\iis\`                           | IIS header notes                                       |
+| `notes\`                              | CherryTree notes database                              |
+| `archive\`                            | Retired material retained inside the SecOps repo       |
+| `ITOps\scripts\printers\`             | Temporary home for Windows printer connection helpers  |
+| `ITOps\scripts\windows-file-cleanup\` | Temporary home for file and temp cleanup helpers       |
 
 ## Examples
 
@@ -92,7 +92,7 @@ pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterLi
 Preview recursive file cleanup:
 
 ```powershell
-pwsh -File .\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
 ```
 
 Preview adding a custom IIS response header:
@@ -134,8 +134,8 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | `ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
 | `ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1`       | `Remove-LegacyPrinterConnection.vbs`         |
 | `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
-| `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                | `Clear-UserAndDriveTempFolders.vbs`          |
-| `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       | `Remove-OldFilesRecursively.vbs`             |
+| `ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1`          | `Clear-UserAndDriveTempFolders.vbs`          |
+| `ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1` | `Remove-OldFilesRecursively.vbs`             |
 
 ## Script Header Standard
 

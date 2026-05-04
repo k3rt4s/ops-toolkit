@@ -10,7 +10,6 @@ Runnable automation lives under this folder, grouped by platform or operational 
 - `microsoft-365/` - Exchange Online and Microsoft 365 administration.
 - `pentesting/` - Lab or workstation setup helpers for security testing.
 - `utilities/` - Small workstation and CSV utilities.
-- `windows-file-cleanup/` - File cleanup helpers.
 - `windows-hardening/` - Windows telemetry, bloatware, and cipher hardening.
 
 ## Header Rule

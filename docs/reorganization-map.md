@@ -15,7 +15,7 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 | `PenTesting\`               | `scripts\pentesting\`                                                                     |
 | `Printers\`                 | `ITOps\scripts\printers\`                                                                 |
 | `Windows Active Directory\` | `scripts\active-directory\`                                                               |
-| `Windows File Cleanup\`     | `scripts\windows-file-cleanup\`                                                           |
+| `Windows File Cleanup\`     | `ITOps\scripts\windows-file-cleanup\`                                                     |
 | `Windows Hardening\`        | `scripts\windows-hardening\`, `data\windows-hardening\`, and `archive\windows-hardening\` |
 | `CherryTree.ctb`            | `notes\CherryTree.ctb`                                                                    |
 | `File Check.ps1`            | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                                |

@@ -1,246 +1,181 @@
 <#
 .SYNOPSIS
-Email users and administrators about AD passwords that are expired or expiring soon.
+Generate a password-expiry report and optionally email users or administrators.
 
 .INSTRUCTIONS
 - Read the root README.md before running this script.
-- Review parameters with Get-Help .\Send-AdPasswordExpiryReminderEmails.ps1 -Full or by opening the script.
-- Run from an elevated shell when the target system, tenant, or server requires admin rights.
-- If this script supports -WhatIf, run with -WhatIf first before making live changes.
+- Pass SMTP values explicitly when using -SendUserEmails or -SendAdminReport.
+- Use -WhatIf first before sending reminder emails.
 - Write generated output under the repo reports\ folder unless a different path is required.
 
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-#    Copyright 2009 Dan Penning
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-#
-# Start of script
-# ExpiringPasswords.ps1
-# 12/30/2009
-#
-#
-# Purpose:
-# Powershell script to find out a list of users
-# whose password is expiring within x number of days (as specified in $days_before_expiry).
-# Email notification will be sent to them reminding them that they need to change their password.
-#
-# Requirements:
-# ExpiringPasswords.ps1 is dependant on Quest.ActiveRoles.ADManagementsnapin to get the AD attributes.
-# The Quest.ActiveRoles.ADManagement snapin can be downloaded from'PowerShell Commands (CMDLETs) for Active Directory by Quest Software'(http://www.quest.com/powershell/activeroles-server.aspx)
-# Look for ActiveRoles Management Shell for Active Directory (both32-bit or 64-bit versions available)
-# Also available in P:\Software\Microsoft\Windows Powershell snap-in.
-#
-# Note: This script needs to be run with administrator priviledges.
-#       If script is not run with administrator priviledges,
-#       Get-QADUser function will not return PasswordExpires and PwdLastSetattributes correctly.
-#
-#       You might need to sign the powershell script so that it can run inbatch mode (as opposed to interactive mode).
-#       To do that, you will need to run elevated command prompt, runpowershell (by typing powershell on the command prompt),
-#       next, type "set-executionpolicy RemoteSigned" (without the doublequotes) on the powershell prompt.
+#Requires -Modules ActiveDirectory
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [Parameter()]
+    [ValidateRange(1, 365)]
+    [int]$DaysBeforeExpiry = 7,
 
-#####################
-# Variables to change
-#####################
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$OutputPath = '.\reports\active-directory\password-expiry.html',
 
-# Days to Password Expiry
-$days_before_expiry = 7
+    [Parameter()]
+    [switch]$SendUserEmails,
 
-# SMTP Server to be used
-$smtp = "Server"
+    [Parameter()]
+    [switch]$SendAdminReport,
 
-# "From" address of the email
-$from = "Email@domain.com"
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$SmtpServer,
 
-# Administrator email
-$admin = "Email@domain.com"
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$From,
 
-# Web address of your OWA url - tested only with Exchange 2007 SP2
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$AdminTo,
 
-# First name of administrator
-$AdminName = "Name"
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$ResetUrl
+)
 
-# Define font and font size
-# ` or \ is an escape character in powershell
-$font = "<font size=`"3`" face=`"Calibri`">"
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
 
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
 
-##########################################
-# Should require no change below this line
-# (Except message body)
-##########################################
+Usage:
+  pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1
+  pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -DaysBeforeExpiry 14 -OutputPath .\reports\active-directory\password-expiry.html
+  pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -SendAdminReport -SmtpServer smtp.example.com -From secops@example.com -AdminTo admins@example.com -WhatIf
+  pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -SendUserEmails -SmtpServer smtp.example.com -From secops@example.com -AdminTo admins@example.com -ResetUrl https://password.example.com -WhatIf
 
-function Send-Mail {
-    param($smtpServer, $from, $to, $subject, $body)
-    $smtp = new-object system.net.mail.smtpClient($SmtpServer)
-    $mail = new-object System.Net.Mail.MailMessage
-    $mail.from = $from
-    $mail.to.add($to)
-    $mail.subject = $subject
-    $mail.body = $body
-    # Send email in HTML format
-    $mail.IsBodyHtml = $true
-    $smtp.send($mail)
-
+Options:
+  -DaysBeforeExpiry  Include passwords expiring within this many days. Defaults to 7.
+  -OutputPath        HTML report path.
+  -SendUserEmails    Email users with mail attributes.
+  -SendAdminReport   Email the admin summary report.
+  -SmtpServer        SMTP server required when sending email.
+  -From              Sender address required when sending email.
+  -AdminTo           Admin recipient list required when sending email or when users have no email.
+  -ResetUrl          Optional reset URL included in user reminders.
+  -WhatIf            Preview email sends without sending messages.
+'@
 }
 
-# Newline character
-#$newline = [char]13+[char]10
-$newline = "<br>"
+$willSendEmail = $SendUserEmails -or $SendAdminReport
+if ($willSendEmail -and (-not $SmtpServer -or -not $From -or -not $AdminTo)) {
+    Show-Usage
+    exit 2
+}
 
-# Get today's day, date and time
-$today = (Get-date)
+function Send-HtmlMail {
+    param(
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$Recipient,
 
-# Loads the Quest.ActiveRoles.ADManagement snapin required for thescript.
-# (Will unload once powershell is exited)
-add-pssnapin "Quest.ActiveRoles.ADManagement"
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$Subject,
 
-# Retrieves list of users whose account is enabled, has a passwordexpiry date and whose password expiry date within (is less than) today+$days_before_expiry
-$users_to_be_notified = Get-QADUser -Enabled -passwordNeverExpires:$False | Where-Object { ($_.PasswordExpires -lt
-        $today.AddDays($days_before_expiry)) }
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$Body
+    )
 
-# Send email to notify users
-foreach ($user in $users_to_be_notified) {
+    Send-MailMessage -SmtpServer $SmtpServer -From $From -To $Recipient -Subject $Subject -Body $Body -BodyAsHtml
+}
 
-    # Calculate the remaining days
-    # If result is negative, then it means password has already expired.
-    # If result is positive, then it means password is expiring soon.
-    $days_remaining = ($user.PasswordExpires - $today).days
-
-    # Set font for HTML message
-    $body = $font
-
-    # For users whose password already expired
-    if ($days_remaining -le 0) {
-
-        # Make the days remaining positive (because we are reporting it as expired)
-        $days_remaining = [math]::abs($days_remaining)
-
-        # Add it in a list (to be sent to admin)
-        $expired_users += $user.name + " - <font color=blue>" + $user.LogonName + "</font>'s password has expired <font color=blue>" + $days_remaining + "</font> day(s) ago." + $newline
-
-        # If there is an email attached to profile
-        if ($null -ne $user.Email) {
-
-            # Email notification to user
-            $to = $user.Email
-            $subject = "Reminder - Password has expired " + $days_remaining + "day(s) ago."
-
-            # Message body is in HTML font
-            $body += "Dear " + $user.givenname + "," + $newline + $newline
-            $body += "This is a friendly reminder that your password for account'<font color=blue>" + $user.LogonName + "</font>' has already expired " + $days_remaining + " day(s) ago."
-            $body += " Please contact the systems administrator to arrange for your password to be reset."
-        }
-        else {
-
-            # Email notification to administrator
-            $to = $admin
-            $subject = "Reminder - " + $user.LogonName + "'s Password has expired" + $days_remaining + " day(s) ago."
-
-            # Message body is in HTML font
-            $body += "Dear administrator," + $newline + $newline
-            $body += "<font color=blue>" + $user.LogonName + "</font>'s password has expired <font color=blue>" + $days_remaining + " day(s) ago</font>."
-            $body += " However, the system has detected that there is no email address attached to the profile."
-            $body += " Therefore, no email notifications has been sent to " + $user.Name + "."
-            $body += " Kindly reset the password and notify user of the password change."
-            $body += " In addition, please add a corresponding email address to the profile so emails can be sent directly for future notifications."
+$today = Get-Date
+$users = Get-ADUser -Filter { Enabled -eq $true -and PasswordNeverExpires -eq $false } -Properties mail, givenName, SamAccountName, 'msDS-UserPasswordExpiryTimeComputed' |
+    ForEach-Object {
+        $rawExpiry = $_.'msDS-UserPasswordExpiryTimeComputed'
+        if (-not $rawExpiry -or $rawExpiry -eq 0 -or $rawExpiry -eq 9223372036854775807) {
+            return
         }
 
-        # Put a timestamp on the email
-        $body += $newline + $newline + $newline + $newline
-        $body += "<h5>Message generated on: " + $today + ".</h5>"
-        $body += "</font>"
+        $expiry = [datetime]::FromFileTime($rawExpiry)
+        $daysRemaining = [int][math]::Floor(($expiry - $today).TotalDays)
+        if ($daysRemaining -le $DaysBeforeExpiry) {
+            [pscustomobject]@{
+                Name = $_.Name
+                SamAccountName = $_.SamAccountName
+                Mail = $_.mail
+                GivenName = $_.givenName
+                PasswordExpires = $expiry
+                DaysRemaining = $daysRemaining
+                Status = if ($daysRemaining -lt 0) { 'Expired' } else { 'Expiring' }
+            }
+        }
+    } |
+    Sort-Object DaysRemaining, Name
 
-        # Invokes the Send-Mail function to send notification email
-        # Comment out this line if you do not want to send email to users with already expired passwords.
-        Send-Mail -smtpServer $smtp -from $from -to $to -subject $subject-body $body
+$generatedAt = Get-Date
+$html = @"
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Password expiry report</title>
+</head>
+<body>
+  <h1>Password expiry report</h1>
+  <p>Generated on $generatedAt. Threshold: $DaysBeforeExpiry days.</p>
+  $($users | ConvertTo-Html -Fragment)
+</body>
+</html>
+"@
+
+$parent = Split-Path -Parent $OutputPath
+if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+}
+$html | Set-Content -LiteralPath $OutputPath -Encoding utf8
+
+if ($SendUserEmails) {
+    foreach ($user in $users) {
+        $recipient = if ($user.Mail) { @($user.Mail) } else { $AdminTo }
+        $displayName = if ($user.GivenName) { $user.GivenName } else { $user.Name }
+        $resetLine = if ($ResetUrl) { "<p>You can reset your password here: <a href=`"$ResetUrl`">$ResetUrl</a></p>" } else { '' }
+        $subject = if ($user.DaysRemaining -lt 0) {
+            "Password expired for $($user.SamAccountName)"
+        } else {
+            "Password expires in $($user.DaysRemaining) day(s)"
+        }
+
+        $body = @"
+<html>
+<body>
+  <p>Hello $displayName,</p>
+  <p>The password for account <strong>$($user.SamAccountName)</strong> is $($user.Status.ToLowerInvariant()). Expiration date: $($user.PasswordExpires).</p>
+  $resetLine
+</body>
+</html>
+"@
+
+        if ($PSCmdlet.ShouldProcess(($recipient -join ', '), "Send password expiry reminder for $($user.SamAccountName)")) {
+            Send-HtmlMail -Recipient $recipient -Subject $subject -Body $body
+        }
     }
-
-    # For users whose password is expiring
-    # if ($days_remaining -gt 0) {
-    else {
-
-        # Add it in a list (to be sent to admin)
-        $expiring_users += $user.name + " - <font color=blue>" + $user.LogonName + "</font> has <font color=blue>" + $days_remaining + "</font> day(s) remaing left to change his/her password." + $newline
-
-        # If there is an email attached to profile
-        if ($null -ne $user.Email) {
-
-            # Email notification to user
-            $to = $user.Email
-            $subject = "Reminder - Password is expiring in " + $days_remaining + " day(s)."
-
-            # Message body is in HTML font
-            $body += "Dear " + $user.givenname + "," + $newline + $newline
-            $body += "This is a friendly reminder that your password for account '<font color=blue>" + $user.LogonName + "</font>' is due to expire in " + $days_remaining + " day(s)."
-            $body += "You can reset your password by visiting <a href=https://mailsvr.example.com/ecp/?rfr=owa&p=PersonalSettings/Password.aspx</a> and completing the form."
-            $body += " Please remember to change your password before <fontcolor=blue>" + $user.PasswordExpires.date.tostring('MM/dd/yyyy') + "</font>."
-        }
-        else {
-
-            # Email notification to administrator
-            $to = $admin
-            $subject = "Reminder - " + $user.LogonName + "'s Password is expiringin " + $days_remaining + " day(s)."
-
-            # Message body is in HTML font
-            $body += "Dear administrator," + $newline + $newline
-            $body += "<font color=blue>" + $user.LogonName + "</font>'s password is expiring in <font color=blue>" + $days_remaining + " day(s)</font>."
-            $body += " However, the system has detected that there is no email address attached to the profile."
-            $body += " Therefore, no email notifications has been sent to " + $user.Name + "."
-            $body += " Kindly remind him/her to change the password before <fontcolor=blue>" + $user.PasswordExpires.date.tostring('dd/MM/yyyy') + "</font>."
-            $body += " In addition, please add a corresponding email address to the profile so emails can be sent directly for future notifications."
-        }
-
-        # Put a timestamp on the email
-        $body += $newline + $newline + $newline + $newline
-        $body += "<h5>Message generated on: " + $today + ".</h5>"
-        $body += "</font>"
-
-        # Invokes the Send-Mail function to send notification email
-        Send-Mail -smtpServer $smtp -from $from -to $to -subject $subject -body $body
-    }
-
 }
 
-# If there are users with expired password or users whose password is
-expiring soon
-if ($null -ne $expired_users -and $null -ne $expiring_users) {
-
-    # Email notification to administrator
-    $to = $admin
-    $subject = "Password Expiry Report"
-
-    # Message body is in HTML font          
-    $body = $font
-    $body += "Dear " + $AdminName + "," + $newline + $newline
-    $body += "The following users' passwords are expiring soon or have already expired." + $newline + $newline + $newline
-    $body += "<b>Users with expired passwords:</b>" + $newline
-    $body += $expired_users + $newline + $newline
-    $body += "<b>Users with passwords expiring soon:</b>" + $newline
-    $body += $expiring_users
-
-    # Put a timestamp on the email
-    $body += $newline + $newline + $newline + $newline
-    $body += "<h5>Message generated on: " + $today + ".</h5>"
-    $body += "</font>"
-
-    # Invokes the Send-Mail function to send notification email
-    Send-Mail -smtpServer $smtp -from $from -to $to -subject $subject -body $body
-
+if ($SendAdminReport -and $PSCmdlet.ShouldProcess(($AdminTo -join ', '), 'Send password expiry admin report')) {
+    Send-HtmlMail -Recipient $AdminTo -Subject "Password expiry report $generatedAt" -Body $html
 }
 
-# End of script 
-
-
+[pscustomobject]@{
+    DaysBeforeExpiry = $DaysBeforeExpiry
+    AccountCount = @($users).Count
+    OutputPath = (Resolve-Path -LiteralPath $OutputPath).Path
+    UserEmailsEnabled = [bool]$SendUserEmails
+    AdminReportEnabled = [bool]$SendAdminReport
+}

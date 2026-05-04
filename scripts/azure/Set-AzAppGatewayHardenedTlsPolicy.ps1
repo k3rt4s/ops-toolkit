@@ -12,14 +12,13 @@ Apply a hardened custom TLS policy to an Azure Application Gateway.
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-#Requires -Modules Az.Accounts, Az.Network
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$ResourceGroupName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$ApplicationGatewayName,
 
@@ -38,6 +37,30 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -WhatIf
+
+Options:
+  -ResourceGroupName        Application Gateway resource group.
+  -ApplicationGatewayName   Application Gateway name.
+  -MinimumProtocolVersion   TLSv1_2 or TLSv1_3. Defaults to TLSv1_2.
+  -CipherSuite              Cipher suites to allow.
+  -WhatIf                   Preview the gateway update.
+'@
+}
+
+if (-not $ResourceGroupName -or -not $ApplicationGatewayName) {
+    Show-Usage
+    exit 2
+}
+
+Import-Module Az.Accounts -ErrorAction Stop
+Import-Module Az.Network -ErrorAction Stop
 
 if (-not (Get-AzContext)) {
     Connect-AzAccount | Out-Null

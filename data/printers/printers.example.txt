@@ -1,0 +1,4 @@
+# Example printer list for scripts\printers\Add-WindowsPrinterConnections.ps1
+# Replace these sample UNC paths with approved production printer shares.
+\\print01.example.com\Accounting
+\\print01.example.com\Warehouse

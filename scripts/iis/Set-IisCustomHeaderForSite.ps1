@@ -12,24 +12,44 @@ Set one custom HTTP response header on one IIS site.
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-#Requires -Modules WebAdministration
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$SiteName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$HeaderName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$HeaderValue
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\iis\Set-IisCustomHeaderForSite.ps1 -SiteName "Default Web Site" -HeaderName "X-Content-Type-Options" -HeaderValue "nosniff" -WhatIf
+
+Options:
+  -SiteName     IIS site name.
+  -HeaderName   HTTP response header name.
+  -HeaderValue  HTTP response header value.
+  -WhatIf       Preview IIS changes without applying them.
+'@
+}
+
+if (-not $SiteName -or -not $HeaderName -or -not $HeaderValue) {
+    Show-Usage
+    exit 2
+}
+
 Import-Module WebAdministration -ErrorAction Stop
 
 $sitePath = "IIS:\Sites\$SiteName"

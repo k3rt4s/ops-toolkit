@@ -14,25 +14,46 @@ Active script kept in the reorganized SecOps repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidatePattern('^[A-Z]$')]
     [string]$DriveLetter,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$StorageAccountName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$ShareName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$StorageAccountKey
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\azure\New-AzFileShareMappedDrive.ps1 -DriveLetter Z -StorageAccountName examplestorage -ShareName data -StorageAccountKey "<key>" -WhatIf
+
+Options:
+  -DriveLetter         Drive letter to map, without a colon.
+  -StorageAccountName  Azure Storage account name.
+  -ShareName           Azure file share name.
+  -StorageAccountKey   Storage account key.
+  -WhatIf              Preview credential and drive changes.
+'@
+}
+
+if (-not $DriveLetter -or -not $StorageAccountName -or -not $ShareName -or -not $StorageAccountKey) {
+    Show-Usage
+    exit 2
+}
 
 $root = "\\$StorageAccountName.file.core.windows.net\$ShareName"
 $userName = "Azure\$StorageAccountName"

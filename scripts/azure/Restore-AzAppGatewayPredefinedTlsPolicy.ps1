@@ -12,14 +12,13 @@ Restore an Azure Application Gateway to a predefined TLS policy.
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-#Requires -Modules Az.Accounts, Az.Network
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$ResourceGroupName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$ApplicationGatewayName,
 
@@ -30,6 +29,29 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyName AppGwSslPolicy20220101S -WhatIf
+
+Options:
+  -ResourceGroupName        Application Gateway resource group.
+  -ApplicationGatewayName   Application Gateway name.
+  -PolicyName               Predefined policy name. Defaults to AppGwSslPolicy20170401S.
+  -WhatIf                   Preview the gateway update.
+'@
+}
+
+if (-not $ResourceGroupName -or -not $ApplicationGatewayName) {
+    Show-Usage
+    exit 2
+}
+
+Import-Module Az.Accounts -ErrorAction Stop
+Import-Module Az.Network -ErrorAction Stop
 
 if (-not (Get-AzContext)) {
     Connect-AzAccount | Out-Null

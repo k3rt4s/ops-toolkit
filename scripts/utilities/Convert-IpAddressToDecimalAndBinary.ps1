@@ -11,7 +11,7 @@ Active PowerShell replacement for Convert-IpAddressToDecimalAndBinary.vbs.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateScript({ [ipaddress]::TryParse($_, [ref]([ipaddress]$null)) -and ([ipaddress]$_).AddressFamily -eq 'InterNetwork' })]
     [string]$IpAddress,
 
@@ -22,13 +22,31 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\utilities\Convert-IpAddressToDecimalAndBinary.ps1 -IpAddress 192.0.2.10
+
+Options:
+  -IpAddress            IPv4 address to convert.
+  -PingDecimalAddress   Also ping the decimal representation.
+'@
+}
+
+if (-not $IpAddress) {
+    Show-Usage
+    exit 2
+}
+
 $bytes = [ipaddress]::Parse($IpAddress).GetAddressBytes()
 $binary = ($bytes | ForEach-Object { [Convert]::ToString($_, 2).PadLeft(8, '0') }) -join ''
 $decimal = [uint32](
-    ($bytes[0] -shl 24) -bor
-    ($bytes[1] -shl 16) -bor
-    ($bytes[2] -shl 8) -bor
-    $bytes[3]
+    ([uint32]$bytes[0] * 16777216) +
+    ([uint32]$bytes[1] * 65536) +
+    ([uint32]$bytes[2] * 256) +
+    [uint32]$bytes[3]
 )
 
 $result = [pscustomobject]@{

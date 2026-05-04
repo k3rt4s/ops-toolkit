@@ -13,7 +13,7 @@ This repo was reviewed and reorganized in place. Files remain inside the SecOps 
 
 The review answers five maintenance questions:
 
-1. What is no longer relevant and should be retired: see [docs/retirement-review.md](docs/retirement-review.md).
+1. What is no longer relevant and should be retired: see [docs/retirement-review.md](docs/retirement-review.md) and [docs/legacy-script-inventory.md](docs/legacy-script-inventory.md).
 2. What we are keeping and how it is organized: see [Layout](#layout) and [Contents](#contents).
 3. Which scripts needed updates: see [Updated Scripts](#updated-scripts).
 4. What instructions belong at the top of kept scripts: see [Script Header Standard](#script-header-standard).
@@ -68,6 +68,38 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `notes\`                        | CherryTree notes database                              |
 | `archive\`                      | Retired material retained inside the SecOps repo       |
 
+## Examples
+
+Preview disabling and moving stale AD computer accounts:
+
+```powershell
+pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
+```
+
+Generate an AD Domain Admins report without sending email:
+
+```powershell
+pwsh -File .\scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1 -OutputPath .\reports\active-directory\domain-admins.html
+```
+
+Add printer connections from a text file after previewing the action:
+
+```powershell
+pwsh -File .\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\data\printers\printers.example.txt -WhatIf
+```
+
+Preview recursive file cleanup:
+
+```powershell
+pwsh -File .\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+```
+
+Preview adding a custom IIS response header:
+
+```powershell
+pwsh -File .\scripts\iis\Set-IisCustomHeaderForSite.ps1 -SiteName "Default Web Site" -HeaderName "X-Content-Type-Options" -HeaderValue "nosniff" -WhatIf
+```
+
 ## Updated Scripts
 
 | Script                                                                    | Update                                                                                            |
@@ -78,6 +110,12 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                    |
 | `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                      |
 | `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                       |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.    |
+| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.       |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.   |
+| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.       |
+| `scripts\active-directory\Set-AdMailboxUserUpnSuffix.ps1`                 | Replaced old one-liner and placeholder suffix with scoped, parameterized UPN updates.             |
+| `scripts\active-directory\Set-AdUserUpnSuffixForOu.ps1`                   | Replaced placeholder suffix, OU, and server values with command-line parameters and `-WhatIf`.    |
 | `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`. |
 | `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Parameterized lookback and output path; fixed active-recipient matching.                          |
 | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                      |
@@ -117,6 +155,7 @@ The header should tell the operator to read this README, review parameters or va
 - Use `Az` cmdlets for Azure PowerShell. Do not add new `AzureRM` automation.
 - New or updated PowerShell scripts should use `[CmdletBinding()]`, named parameters, explicit output paths, and `Set-StrictMode -Version 3.0` where compatible.
 - State-changing scripts should support `-WhatIf` and `-Confirm` through `SupportsShouldProcess`.
+- Do not use interactive menus or mandatory prompts for automation. If required arguments are missing, print usage and exit with code `2`.
 - Avoid hard-coded customer domains, email addresses, tenant IDs, subscription IDs, storage keys, and local output paths. Pass them as parameters.
 - Use `PSScriptAnalyzerSettings.psd1` when linting PowerShell scripts.
 - Treat VBScript/CMD as archived reference only. Active automation should be PowerShell unless a target system requires another shell.
@@ -130,8 +169,5 @@ Last local validation performed on 2026-05-04:
 - `PSScriptAnalyzerSettings.psd1` parse check.
 - Markdown cleanup with `Code\scripts\fix_md.py`.
 - Stale reference search for old top-level folders and retired AzureRM script content.
-
-Not run locally:
-
-- Full PSScriptAnalyzer rule pass, because `Invoke-ScriptAnalyzer` was not installed.
-- Bash syntax check, because WSL/bash was not available in this shell environment.
+- Full PSScriptAnalyzer rule pass after installing `PSScriptAnalyzer`.
+- Bash syntax check for `scripts\pentesting\Install-AutoReconDependencies.sh` with Git Bash.

@@ -1,122 +1,103 @@
 <#
 .SYNOPSIS
-Email an HTML report of AD accounts with passwords set to never expire.
+Generate or email an HTML report of AD accounts with passwords set to never expire.
 
 .INSTRUCTIONS
 - Read the root README.md before running this script.
-- Review parameters with Get-Help .\Send-AdPasswordNeverExpiresEmailReport.ps1 -Full or by opening the script.
-- Run from an elevated shell when the target system, tenant, or server requires admin rights.
-- If this script supports -WhatIf, run with -WhatIf first before making live changes.
+- Pass mail settings on the command line only when using -SendEmail.
 - Write generated output under the repo reports\ folder unless a different path is required.
 
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-# This PowerShell Command will query Active Directory and return all admin accounts 
-# You can easily change the number of days from 30 to any number of your choosing
+#Requires -Modules ActiveDirectory
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$OutputPath = '.\reports\active-directory\password-never-expires.html',
 
-# Email notification will be sent to email@domain.com
+    [Parameter()]
+    [switch]$SendEmail,
 
-# Note: This script needs to be run with administrator priviledges.
-#       If script is not run with administrator priviledges,
-#       Get-QADUser function will not return PasswordExpires and PwdLastSetattributes correctly.
-#
-#       You might need to sign the powershell script so that it can run inbatch mode (as opposed to interactive mode).
-#       To do that, you will need to run elevated command prompt, runpowershell (by typing powershell on the command prompt),
-#       next, type "set-executionpolicy RemoteSigned" (without the doublequotes) on the powershell prompt.
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$SmtpServer,
 
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$From,
 
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$To,
 
-#####################
-# Variables to change
-#####################
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$ContactEmail
+)
 
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
 
-# SMTP Server to be used
-$smtp = "IP"
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
 
-# "From" address of the email
-$from = "email@domain.com"
+Usage:
+  pwsh -File .\scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1
+  pwsh -File .\scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1 -OutputPath .\reports\active-directory\password-never-expires.html
+  pwsh -File .\scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1 -SendEmail -SmtpServer smtp.example.com -From secops@example.com -To admins@example.com
 
-# Administrator email
-$admin = "email@domain.com"
-
-# Web address of your OWA url - tested only with Exchange 2007 SP2
-
-# First name of administrator
-
-# Define font and font size
-# ` or \ is an escape character in powershell
-$font = "<font size=`"3`" face=`"Calibri`">"
-
-
-
-##########################################
-# Should require no change below this line
-# (Except message body)
-##########################################
-
-# AD List for Corp Domain Administrators 
-Search-ADAccount -PasswordNeverExpires
-
-# AD Output for Corp Domain Administrators
-$string = Search-ADAccount -PasswordNeverExpires | Select-Object  Name, SamAccountName | Sort-Object -property name | ConvertTo-Html -fragment | Out-string
-
-
-# Send Email to Techops
-function Send-Mail {
-    param($smtpServer, $from, $to, $subject, $body)
-    $smtp = new-object system.net.mail.smtpClient($SmtpServer)
-    $mail = new-object System.Net.Mail.MailMessage
-    $mail.from = $from
-    $mail.to.add($to)
-    $mail.subject = $subject
-    $mail.body = $body
-    # Send email in HTML format
-    $mail.IsBodyHtml = $true
-    $smtp.send($mail)
-
+Options:
+  -OutputPath    HTML report path.
+  -SendEmail     Send the report by email.
+  -SmtpServer    SMTP server required with -SendEmail.
+  -From          Sender address required with -SendEmail.
+  -To            Recipient address list required with -SendEmail.
+  -ContactEmail  Optional contact mailbox included in the report text.
+'@
 }
 
-# Newline character
-#$newline = [char]13+[char]10
-$newline = "<br>"
+if ($SendEmail -and (-not $SmtpServer -or -not $From -or -not $To)) {
+    Show-Usage
+    exit 2
+}
 
-# Get today's day, date and time
-$today = (Get-date)
+$accounts = Search-ADAccount -PasswordNeverExpires -UsersOnly |
+    Select-Object Name, SamAccountName, Enabled, DistinguishedName |
+    Sort-Object Name
 
-# Loads the Quest.ActiveRoles.ADManagement snapin required for thescript.
-# (Will unload once powershell is exited)
-add-pssnapin "Quest.ActiveRoles.ADManagement"
+$generatedAt = Get-Date
+$contactLine = if ($ContactEmail) { "<p>Contact <a href=`"mailto:$ContactEmail`">$ContactEmail</a> with questions or concerns.</p>" } else { '' }
+$html = @"
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Password never expires report</title>
+</head>
+<body>
+  <h1>Password never expires report</h1>
+  <p>Generated on $generatedAt.</p>
+  $contactLine
+  $($accounts | ConvertTo-Html -Fragment)
+</body>
+</html>
+"@
 
-# If there are computers than have not Logged in within $LL
-# Email notification to administrator
-$to = $admin
-$subject = "Users Set to Never Expire $today"
+$parent = Split-Path -Parent $OutputPath
+if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+}
+$html | Set-Content -LiteralPath $OutputPath -Encoding utf8
 
-# Message body is in HTML font          
-$body = $font
-$body += "Dear Administrators,"
-$body += $newline
-$body += $newline
-$body += " The following accounts are set to never expire."
-$body += $newline
-$body += $newline
-$body += " Please contact Info Sec at infosec@example.com with any questions or concerns"
-$body += $newline
-$body += $newline
-$body += $string
-				
-				
-# Put a timestamp on the email
-$body += $newline + $newline + $newline + $newline
-$body += "<h5>Message generated on: " + $today + ".</h5>"
-$body += "</font>"
+if ($SendEmail) {
+    Send-MailMessage -SmtpServer $SmtpServer -From $From -To $To -Subject "Password never expires report $generatedAt" -Body $html -BodyAsHtml
+}
 
-# Invokes the Send-Mail function to send notification email
-Send-Mail -smtpServer $smtp -from $from -to $to -subject $subject -body $body
-
-
-# End of script 
-
-
+[pscustomobject]@{
+    AccountCount = @($accounts).Count
+    OutputPath = (Resolve-Path -LiteralPath $OutputPath).Path
+    EmailSent = [bool]$SendEmail
+}

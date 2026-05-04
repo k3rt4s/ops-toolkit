@@ -4,129 +4,126 @@ Disable stale AD computer accounts and move them to a disabled-computers OU.
 
 .INSTRUCTIONS
 - Read the root README.md before running this script.
-- Review parameters with Get-Help .\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -Full or by opening the script.
-- Run from an elevated shell when the target system, tenant, or server requires admin rights.
-- If this script supports -WhatIf, run with -WhatIf first before making live changes.
-- Write generated output under the repo reports\ folder unless a different path is required.
+- Pass -TargetOu explicitly; do not store environment-specific distinguished names in this script.
+- Run with -WhatIf first before disabling or moving computer accounts.
+- Use -SendEmail only when SMTP settings are supplied on the command line.
 
 .STATUS
 Active script kept in the reorganized SecOps repo.
 #>
-# This PowerShell Command will query Active Directory and return the computer accounts which have not logged for the past
-# 30 days.  You can easily change the number of days from 30 to any number of your choosing. After, the computers will be
-# moved to the "DisabledComputers" OU
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
+param(
+    [Parameter()]
+    [ValidateRange(1, 3650)]
+    [int]$InactiveDays = 30,
 
-# Email notification will be sent to techops@example.com
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$TargetOu,
 
-# Note: This script needs to be run with administrator priviledges.
-#       If script is not run with administrator priviledges,
-#       Get-QADUser function will not return PasswordExpires and PwdLastSetattributes correctly.
-#
-#       You might need to sign the powershell script so that it can run inbatch mode (as opposed to interactive mode).
-#       To do that, you will need to run elevated command prompt, runpowershell (by typing powershell on the command prompt),
-#       next, type "set-executionpolicy RemoteSigned" (without the doublequotes) on the powershell prompt.
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$OutputPath = '.\reports\active-directory\stale-computers.html',
 
+    [Parameter()]
+    [switch]$SendEmail,
 
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$SmtpServer,
 
-#####################
-# Variables to change
-#####################
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$From,
 
-# Time
-$LL = (Get-Date).AddDays(-30)
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$To,
 
-# SMTP Server to be used
-$smtp = "192.0.2.230"
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$ContactEmail
+)
 
-# "From" address of the email
-$from = "OldCorpComputers@example.com"
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
 
-# Administrator email
-$admin = "techops@example.com"
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
 
-# Web address of your OWA url - tested only with Exchange 2007 SP2
+Usage:
+  pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
+  pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -OutputPath .\reports\active-directory\stale-computers.html -WhatIf
+  pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -SendEmail -SmtpServer smtp.example.com -From secops@example.com -To admins@example.com -WhatIf
 
-# First name of administrator
-
-# Define font and font size
-# ` or \ is an escape character in powershell
-$font = "<font size=`"3`" face=`"Calibri`">"
-
-
-
-##########################################
-# Should require no change below this line
-# (Except message body)
-##########################################
-
-# AD List for computers older than $LL 
-Get-ADComputer -Property Name, lastLogonDate -Filter { lastLogonDate -lt $LL } | Format-Table Name, lastLogonDate
-
-# AD Output for computers older than $LL
-$string = Get-ADComputer -Property Name, lastLogonDate -Filter { (enabled -eq "true") -and (lastLogonDate -lt $LL) } -ResultSetSize $null | Select-Object Name, LastLogonDate | Sort-Object -property name | ConvertTo-Html -fragment | Out-string
-
-# Disable computers older than $LL
-Get-ADComputer -Property Name, lastLogonDate -Filter { (enabled -eq "true") -and (lastLogonDate -lt $LL) } | Set-ADComputer -Enabled $false
-
-# Move computers older than $LL to the "DisabledComputers" OU
-Get-ADComputer -Property Name, lastLogonDate -Filter { (enabled -eq "true") -and (lastLogonDate -lt $LL) } | Move-ADObject -TargetPath "OU=DisabledComputers,DC=example,DC=local"
-
-# If you would like to Remove these computer accounts, uncomment the following line:
-# Get-ADComputer -Property Name,lastLogonDate -Filter {(enabled -eq "true") -and (lastLogonDate -lt $LL)} | Remove-ADComputer
-
-# Send Email to Techops
-function Send-Mail {
-    param($smtpServer, $from, $to, $subject, $body)
-    $smtp = new-object system.net.mail.smtpClient($SmtpServer)
-    $mail = new-object System.Net.Mail.MailMessage
-    $mail.from = $from
-    $mail.to.add($to)
-    $mail.subject = $subject
-    $mail.body = $body
-    # Send email in HTML format
-    $mail.IsBodyHtml = $true
-    $smtp.send($mail)
-
+Options:
+  -InactiveDays  Minimum days since last logon. Defaults to 30.
+  -TargetOu      Distinguished name of the OU where stale computers are moved.
+  -OutputPath    HTML report path.
+  -SendEmail     Send the report by email after processing.
+  -SmtpServer    SMTP server required with -SendEmail.
+  -From          Sender address required with -SendEmail.
+  -To            Recipient address list required with -SendEmail.
+  -ContactEmail  Optional contact mailbox included in the report text.
+  -WhatIf        Preview disables and moves without changing AD.
+'@
 }
 
-# Newline character
-#$newline = [char]13+[char]10
-$newline = "<br>"
+if (-not $TargetOu -or ($SendEmail -and (-not $SmtpServer -or -not $From -or -not $To))) {
+    Show-Usage
+    exit 2
+}
 
-# Get today's day, date and time
-$today = (Get-date)
+Import-Module ActiveDirectory -ErrorAction Stop
 
-# Loads the Quest.ActiveRoles.ADManagement snapin required for thescript.
-# (Will unload once powershell is exited)
-add-pssnapin "Quest.ActiveRoles.ADManagement"
+$cutoff = (Get-Date).AddDays(-$InactiveDays)
+$computers = Get-ADComputer -Filter { Enabled -eq $true -and LastLogonDate -lt $cutoff } -Properties LastLogonDate |
+    Select-Object Name, DistinguishedName, LastLogonDate |
+    Sort-Object Name
 
-# If there are computers than have not Logged in within $LL
-# Email notification to administrator
-$to = $admin
-$subject = "Disabled Corp Computers $today"
+$generatedAt = Get-Date
+$contactLine = if ($ContactEmail) { "<p>Contact <a href=`"mailto:$ContactEmail`">$ContactEmail</a> if an account was disabled in error.</p>" } else { '' }
+$html = @"
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Stale AD computer report</title>
+</head>
+<body>
+  <h1>Stale AD computer report</h1>
+  <p>Generated on $generatedAt. Threshold: no logon since $cutoff.</p>
+  $contactLine
+  $($computers | ConvertTo-Html -Fragment)
+</body>
+</html>
+"@
 
-# Message body is in HTML font          
-$body = $font
-$body += "Dear Administrators,"
-$body += $newline
-$body += $newline
-$body += " The following computer accounts have been disabled as of $today."
-$body += $newline
-$body += " Please contact Info Sec at infosec@example.com if computers have been disabled in error."
-$body += $newline
-$body += $newline
-$body += $string
-				
-				
-# Put a timestamp on the email
-$body += $newline + $newline + $newline + $newline
-$body += "<h5>Message generated on: " + $today + ".</h5>"
-$body += "</font>"
+$parent = Split-Path -Parent $OutputPath
+if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+}
+$html | Set-Content -LiteralPath $OutputPath -Encoding utf8
 
-# Invokes the Send-Mail function to send notification email
-Send-Mail -smtpServer $smtp -from $from -to $to -subject $subject -body $body
+foreach ($computer in $computers) {
+    if ($PSCmdlet.ShouldProcess($computer.Name, 'Disable AD computer account')) {
+        Disable-ADAccount -Identity $computer.DistinguishedName
+    }
 
+    if ($PSCmdlet.ShouldProcess($computer.Name, "Move AD computer account to $TargetOu")) {
+        Move-ADObject -Identity $computer.DistinguishedName -TargetPath $TargetOu
+    }
+}
 
-# End of script 
+if ($SendEmail) {
+    Send-MailMessage -SmtpServer $SmtpServer -From $From -To $To -Subject "Stale AD computer report $generatedAt" -Body $html -BodyAsHtml
+}
 
-
+[pscustomobject]@{
+    InactiveDays = $InactiveDays
+    ComputerCount = @($computers).Count
+    TargetOu = $TargetOu
+    OutputPath = (Resolve-Path -LiteralPath $OutputPath).Path
+    EmailSent = [bool]$SendEmail
+}

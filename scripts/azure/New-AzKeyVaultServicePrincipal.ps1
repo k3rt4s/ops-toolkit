@@ -14,19 +14,19 @@ Active script kept in the reorganized SecOps repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$SubscriptionId,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidatePattern('^[a-z0-9-]+$')]
     [string]$EnvironmentName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidatePattern('^[a-z0-9-]+$')]
     [string]$ApplicationShortName,
 
-    [Parameter(Mandatory)]
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$KeyVaultName,
 
@@ -36,6 +36,28 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Show-Usage {
+    Write-Output @'
+Missing required arguments.
+
+Usage:
+  pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -SubscriptionId "<subscription-id>" -EnvironmentName prod -ApplicationShortName app -KeyVaultName kv-prod-app -WhatIf
+
+Options:
+  -SubscriptionId          Azure subscription ID.
+  -EnvironmentName         Environment slug, for example prod.
+  -ApplicationShortName    Application slug.
+  -KeyVaultName            Target Key Vault name.
+  -CertificatePermissions  Certificate permissions to grant. Defaults to backup, delete, get, list, create, update, purge.
+  -WhatIf                  Preview creation and policy changes where supported.
+'@
+}
+
+if (-not $SubscriptionId -or -not $EnvironmentName -or -not $ApplicationShortName -or -not $KeyVaultName) {
+    Show-Usage
+    exit 2
+}
 
 $az = Get-Command az -ErrorAction Stop
 $applicationName = "$EnvironmentName-$ApplicationShortName-serviceprincipal"

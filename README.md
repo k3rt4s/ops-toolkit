@@ -135,7 +135,6 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | `scripts\utilities\Convert-IpAddressToDecimalAndBinary.ps1`         | `Convert-IpAddressToDecimalAndBinary.vbs`    |
 | `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
 | `scripts\utilities\Set-WindowsVolumeProductKey.ps1`                 | `Set-WindowsVolumeProductKey.vbs`            |
-| `scripts\utilities\Start-BgInfo.ps1`                                | `Start-BgInfoForLegacyWindows.cmd`           |
 | `scripts\windows-file-cleanup\Clear-TempFolders.ps1`                | `Clear-UserAndDriveTempFolders.vbs`          |
 | `scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1`       | `Remove-OldFilesRecursively.vbs`             |
 

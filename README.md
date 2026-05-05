@@ -115,7 +115,7 @@ pwsh -File .\scripts\iis\Set-IisCustomHeaderForSite.ps1 -SiteName "Default Web S
 | `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.        |
 | `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.    |
 | `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.        |
-| `scripts\active-directory\Set-AdMailboxUserUpnSuffix.ps1`                 | Replaced old one-liner and placeholder suffix with scoped, parameterized UPN updates.              |
+| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries. |
 | `scripts\active-directory\Set-AdUserUpnSuffixForOu.ps1`                   | Replaced placeholder suffix, OU, and server values with command-line parameters and `-WhatIf`.     |
 | `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`.  |
 | `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.          |

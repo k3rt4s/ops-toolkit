@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-Set the UPN suffix for AD users that have mailbox attributes.
+Set the UPN suffix for mailbox-enabled Active Directory users.
 
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Pass -NewSuffix explicitly; do not edit the script for environment-specific values.
-- Use -SearchBase to limit scope before running in production.
+- Use -SearchBase and -OldSuffix to limit scope before running in production.
 - Run with -WhatIf first before changing user principal names.
 
 .STATUS
@@ -18,12 +18,19 @@ param(
     [string]$NewSuffix,
 
     [Parameter()]
+    [ValidatePattern('^[^@\s]+\.[^@\s]+$')]
+    [string]$OldSuffix,
+
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$SearchBase,
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$Server
+    [string]$Server,
+
+    [Parameter()]
+    [switch]$IncludeDisabledUsers
 )
 
 Set-StrictMode -Version 3.0
@@ -34,13 +41,16 @@ function Show-Usage {
 Missing required arguments.
 
 Usage:
-  pwsh -File .\scripts\active-directory\Set-AdMailboxUserUpnSuffix.ps1 -NewSuffix example.com -SearchBase "OU=Users,DC=example,DC=com" -WhatIf
+  pwsh -File .\scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1 -NewSuffix example.com -SearchBase "OU=Users,DC=example,DC=com" -WhatIf
+  pwsh -File .\scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1 -OldSuffix old.example.com -NewSuffix example.com -SearchBase "OU=Users,DC=example,DC=com" -WhatIf
 
 Options:
-  -NewSuffix   UPN suffix to apply, for example example.com.
-  -SearchBase  Optional distinguished name used to limit the AD search scope.
-  -Server      Optional domain controller to target.
-  -WhatIf      Preview UPN updates without changing AD.
+  -NewSuffix             UPN suffix to apply, for example example.com.
+  -OldSuffix             Optional current UPN suffix filter, for example old.example.com.
+  -SearchBase            Optional distinguished name used to limit the AD search scope.
+  -Server                Optional domain controller to target.
+  -IncludeDisabledUsers  Include disabled mailbox-enabled AD user accounts.
+  -WhatIf                Preview UPN updates without changing AD.
 '@
 }
 
@@ -53,7 +63,7 @@ Import-Module ActiveDirectory -ErrorAction Stop
 
 $queryParameters = @{
     Filter = '*'
-    Properties = 'homeMDB', 'SamAccountName', 'UserPrincipalName'
+    Properties = 'Enabled', 'homeMDB', 'SamAccountName', 'UserPrincipalName'
 }
 if ($SearchBase) {
     $queryParameters.SearchBase = $SearchBase
@@ -62,11 +72,35 @@ if ($Server) {
     $queryParameters.Server = $Server
 }
 
-Get-ADUser @queryParameters |
-    Where-Object { $_.homeMDB } |
+$changedCount = 0
+$skippedCount = 0
+
+$results = Get-ADUser @queryParameters |
+    Where-Object {
+        $_.homeMDB -and
+        ($IncludeDisabledUsers -or $_.Enabled) -and
+        (-not $OldSuffix -or $_.UserPrincipalName -like "*@$OldSuffix")
+    } |
+    Sort-Object SamAccountName |
     ForEach-Object {
+        $oldUpn = [string]$_.UserPrincipalName
         $newUpn = '{0}@{1}' -f $_.SamAccountName, $NewSuffix
-        if ($_.UserPrincipalName -ne $newUpn -and $PSCmdlet.ShouldProcess($_.DistinguishedName, "Set UPN to $newUpn")) {
+        $changed = $false
+
+        if ($oldUpn -eq $newUpn) {
+            $skippedCount++
+            [pscustomobject]@{
+                SamAccountName = $_.SamAccountName
+                DistinguishedName = $_.DistinguishedName
+                OldUserPrincipalName = $oldUpn
+                NewUserPrincipalName = $newUpn
+                Changed = $false
+                Reason = 'Already set'
+            }
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($_.DistinguishedName, "Set UPN to $newUpn")) {
             $setParameters = @{
                 Identity = $_.DistinguishedName
                 UserPrincipalName = $newUpn
@@ -76,5 +110,26 @@ Get-ADUser @queryParameters |
             }
 
             Set-ADUser @setParameters
+            $changed = $true
+            $changedCount++
+        }
+
+        [pscustomobject]@{
+            SamAccountName = $_.SamAccountName
+            DistinguishedName = $_.DistinguishedName
+            OldUserPrincipalName = $oldUpn
+            NewUserPrincipalName = $newUpn
+            Changed = $changed
+            Reason = if ($changed) { 'Updated' } else { 'Previewed' }
         }
     }
+
+[pscustomobject]@{
+    NewSuffix = $NewSuffix
+    OldSuffix = $OldSuffix
+    SearchBase = $SearchBase
+    IncludeDisabledUsers = [bool]$IncludeDisabledUsers
+    ChangedCount = $changedCount
+    SkippedCount = $skippedCount
+    Results = @($results)
+}

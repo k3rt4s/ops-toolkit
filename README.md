@@ -85,7 +85,7 @@ pwsh -File .\scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1 -Output
 Add printer connections from a text file after previewing the action:
 
 ```powershell
-pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
+pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
 ```
 
 Preview recursive file cleanup:
@@ -172,8 +172,8 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | ------------------------------------------------------------------- | -------------------------------------------- |
 | `scripts\active-directory\Export-AdUserAttributesToCsv.ps1`         | `Export-AdUserAttributesToExcel.vbs`         |
 | `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
-| `ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
-| `ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1`       | `Remove-LegacyPrinterConnection.vbs`         |
+| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
+| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Remove-LegacyPrinterConnection.vbs`         |
 | `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`                | `Show-CurrentUser.vbs`                       |
 | `ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1`          | `Clear-UserAndDriveTempFolders.vbs`          |
 | `ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1` | `Remove-OldFilesRecursively.vbs`             |

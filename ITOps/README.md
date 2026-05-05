@@ -18,13 +18,13 @@ If this area grows enough to justify its own repository, move this folder into a
 Preview adding printer connections from a text file:
 
 ```powershell
-pwsh -File .\ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1 -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
+pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
 ```
 
 Preview removing all Windows connection printers:
 
 ```powershell
-pwsh -File .\ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1 -AllConnectionPrinters -WhatIf
+pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
 ```
 
 Preview recursive file cleanup:

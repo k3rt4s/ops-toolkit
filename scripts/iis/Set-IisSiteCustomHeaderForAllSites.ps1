@@ -20,7 +20,7 @@ validation expectations. Do not guess path conventions or safety behavior.
 
 .PURPOSE
 Use this only when one response header should be added or updated for every IIS
-site on the local server. For one site, use Set-IisCustomHeaderForSite.ps1.
+site on the local server. For one site, use Set-IisSiteCustomHeader.ps1.
 
 .REQUIRED SYNTAX
 pwsh -File .\scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1 -HeaderName "X-Content-Type-Options" -HeaderValue "nosniff" -WhatIf

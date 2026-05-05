@@ -40,13 +40,13 @@ SecOps\
 
 The current retire-now items are:
 
-| Path                                                               | Why retired                                                                                   |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `archive\windows-hardening\retired-2026-05-04\Disable-Cortana.ps1` | Cortana in Windows standalone app is deprecated/retired.                                      |
-| `archive\windows-hardening\retired-2026-05-04\Enable-Cortana.ps1`  | Same Cortana retirement reason.                                                               |
-| `archive\windows-hardening\Bloat-Remove-Replace.ps1`               | Historical bloat-removal script superseded by the active Windows hardening script.            |
-| `archive\windows-hardening\Bloat-Server-Removal.ps1`               | Historical bloat-removal script superseded by the active Windows hardening script.            |
-| Old AzureRM-style NSG export snippets                              | Replaced with `scripts\azure\Export-AzNetworkInventory.ps1` using the supported `Az` modules. |
+| Path                                                 | Why retired                                                                                   |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `archive\windows-hardening\Bloat-Remove-Replace.ps1` | Historical bloat-removal script superseded by the active Windows hardening script.            |
+| `archive\windows-hardening\Bloat-Server-Removal.ps1` | Historical bloat-removal script superseded by the active Windows hardening script.            |
+| Deleted Cortana enable/disable archive scripts       | Cortana in Windows standalone app is deprecated/retired.                                      |
+| Deleted old bloatware CSV archives                   | Superseded by `data\windows-hardening\` package lists.                                        |
+| Old AzureRM-style NSG export snippets                | Replaced with `scripts\azure\Export-AzNetworkInventory.ps1` using the supported `Az` modules. |
 
 See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/retire rationale and sources.
 

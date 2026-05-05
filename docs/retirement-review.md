@@ -4,13 +4,13 @@ This review identifies what should be retired, what should stay active, and what
 
 ## Retire Now
 
-| Item                                                               | Decision                  | Reason                                                                                                                                                               |
-| ------------------------------------------------------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `archive\windows-hardening\retired-2026-05-04\Disable-Cortana.ps1` | Retired                   | Cortana in Windows as a standalone app is deprecated/retired, so Cortana-specific enable/disable registry toggles are no longer useful for modern Windows hardening. |
-| `archive\windows-hardening\retired-2026-05-04\Enable-Cortana.ps1`  | Retired                   | Same Cortana retirement reason; keeping this active would imply support for a feature Microsoft has moved away from.                                                 |
-| `archive\windows-hardening\Bloat-Remove-Replace.ps1`               | Retired historical script | Superseded by `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` and retained only for comparison.                                               |
-| `archive\windows-hardening\Bloat-Server-Removal.ps1`               | Retired historical script | Superseded by `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` and retained only for comparison.                                               |
-| Old AzureRM-style NSG export snippets                              | Retired by replacement    | AzureRM is deprecated; the active replacement is `scripts\azure\Export-AzNetworkInventory.ps1` using `Az` modules.                                                   |
+| Item                                                 | Decision                  | Reason                                                                                                                                                               |
+| ---------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `archive\windows-hardening\Bloat-Remove-Replace.ps1` | Retired historical script | Superseded by `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` and retained only for comparison.                                               |
+| `archive\windows-hardening\Bloat-Server-Removal.ps1` | Retired historical script | Superseded by `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` and retained only for comparison.                                               |
+| Deleted Cortana enable/disable archive scripts       | Deleted                   | Cortana in Windows as a standalone app is deprecated/retired, so Cortana-specific enable/disable registry toggles are no longer useful for modern Windows hardening. |
+| Deleted old bloatware CSV archives                   | Deleted                   | Superseded by `data\windows-hardening\` package lists.                                                                                                               |
+| Old AzureRM-style NSG export snippets                | Retired by replacement    | AzureRM is deprecated; the active replacement is `scripts\azure\Export-AzNetworkInventory.ps1` using `Az` modules.                                                   |
 
 ## Keep Active
 

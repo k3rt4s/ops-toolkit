@@ -1,1 +1,0 @@
-https://petri.com/identifying-obsolete-office-365-groups-powershell

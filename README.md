@@ -100,6 +100,12 @@ Preview adding a custom IIS response header:
 pwsh -File .\scripts\iis\Set-IisSiteCustomHeader.ps1 -SiteName "Default Web Site" -HeaderName "X-Content-Type-Options" -HeaderValue "nosniff" -WhatIf
 ```
 
+Preview adding IIS site-default custom logging fields:
+
+```powershell
+pwsh -File .\scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1 -WhatIf
+```
+
 ## Updated Scripts
 
 | Script                                                                    | Update                                                                                                   |
@@ -119,6 +125,7 @@ pwsh -File .\scripts\iis\Set-IisSiteCustomHeader.ps1 -SiteName "Default Web Site
 | `scripts\active-directory\Set-AdOuUserUpnSuffix.ps1`                      | Renamed and hardened OU-scoped AD user UPN suffix updates with explicit search scope and summary output. |
 | `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.        |
 | `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.           |
+| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.   |
 | `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`.        |
 | `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.                |
 | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                             |

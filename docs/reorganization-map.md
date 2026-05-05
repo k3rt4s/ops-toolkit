@@ -25,6 +25,7 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `scripts\azure\New-AzKeyVaultServicePrincipal.ps1` parameterizes subscription, environment, app name, and Key Vault policy assignment.
 - `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1` removes the embedded rollback block and supports `-WhatIf`, per-site targeting, optional IIS restart, validation, replacement review reports, and summary output.
 - `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1` replaces the older one-way Schannel hardening script with a report-first `-WhatIf` workflow, registry backups, and summary output.
+- `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1` replaces the older one-way telemetry and consumer-feature script with a Windows 11 scoped report-first workflow, registry backups, and summary output.
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
 - `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.

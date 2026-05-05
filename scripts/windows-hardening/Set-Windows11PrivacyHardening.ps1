@@ -26,7 +26,8 @@ activity history, feedback prompts, selected app privacy surfaces, and related
 content-delivery settings. Optional switches can also disable selected telemetry
 scheduled tasks and services.
 
-The hardening list was checked against Microsoft Windows privacy documentation.
+The hardening list was checked against Microsoft Windows privacy documentation,
+Windows hardening baselines, and community-maintained privacy hardening guidance.
 It intentionally does not disable security-sensitive Microsoft connections such
 as Defender, SmartScreen, Windows Update, licensing, or root certificate updates.
 
@@ -343,6 +344,15 @@ function Get-Windows11PrivacyHardeningPlan {
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsRunInBackground -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny Store apps running in the background by policy.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'DeliveryOptimization' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Name DODownloadMode -HardenedValue 0 -RollbackDeletesValue -HardenedState 'HTTPOnly' -RollbackState 'NotConfigured' -Reason 'Disable peer-to-peer Delivery Optimization downloads.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'Feeds' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' -Name EnableFeeds -HardenedValue 0 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Windows feeds/news and interests policy surface.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'CloudClipboard' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowCrossDeviceClipboard -HardenedValue 0 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable cloud clipboard sync across devices.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name AllowRecallEnablement -HardenedValue 0 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Keep Windows Recall unavailable where the policy applies.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name DisableAIDataAnalysis -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable saving snapshots for Recall.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name DisableClickToDo -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Click to Do screen analysis entry points.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name DisableSettingsAgent -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Settings agentic search experience.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name RemoveMicrosoftCopilotApp -HardenedValue 1 -RollbackDeletesValue -HardenedState 'RemovalEnabled' -RollbackState 'NotConfigured' -Reason 'Request Microsoft Copilot app removal when supported by the OS and app state.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Paint' -Name DisableCocreator -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Paint Cocreator AI feature.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Paint' -Name DisableGenerativeFill -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Paint generative fill AI feature.' -Rollback:$Rollback
+    Add-DWordPlanItem -Plan $plan -Category 'WindowsAI' -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\Paint' -Name DisableImageCreator -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Paint Image Creator AI feature.' -Rollback:$Rollback
 
     if (-not $SkipCurrentUserSettings) {
         Add-DWordPlanItem -Plan $plan -Category 'CurrentUserAdvertising' -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo' -Name Enabled -HardenedValue 0 -RollbackValue 1 -HardenedState 'Disabled' -RollbackState 'Enabled' -Reason 'Disable current-user advertising ID.' -Rollback:$Rollback
@@ -365,6 +375,9 @@ function Get-Windows11PrivacyHardeningPlan {
         Add-DWordPlanItem -Plan $plan -Category 'CurrentUserContentDelivery' -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name SubscribedContent-353696Enabled -HardenedValue 0 -RollbackValue 1 -HardenedState 'Disabled' -RollbackState 'Enabled' -Reason 'Disable suggested content.' -Rollback:$Rollback
         Add-DWordPlanItem -Plan $plan -Category 'CurrentUserContentDelivery' -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' -Name SystemPaneSuggestionsEnabled -HardenedValue 0 -RollbackValue 1 -HardenedState 'Disabled' -RollbackState 'Enabled' -Reason 'Disable Start/System pane suggestions.' -Rollback:$Rollback
         Add-DWordPlanItem -Plan $plan -Category 'CurrentUserNotifications' -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\PushNotifications' -Name NoTileApplicationNotification -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable tile application notifications policy.' -Rollback:$Rollback
+        Add-DWordPlanItem -Plan $plan -Category 'CurrentUserWindowsAI' -Path 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' -Name TurnOffWindowsCopilot -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable the classic Windows Copilot policy surface for the current user.' -Rollback:$Rollback
+        Add-DWordPlanItem -Plan $plan -Category 'CurrentUserWindowsAI' -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name DisableAIDataAnalysis -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable current-user Recall snapshot saving policy.' -Rollback:$Rollback
+        Add-DWordPlanItem -Plan $plan -Category 'CurrentUserWindowsAI' -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name DisableClickToDo -HardenedValue 1 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable current-user Click to Do screen analysis entry points.' -Rollback:$Rollback
     }
 
     if ($IncludeScheduledTasks) {
@@ -437,6 +450,22 @@ function Export-RegistryBackup {
         @{
             Key = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'
             File = 'windows-feeds-policy.reg'
+        },
+        @{
+            Key = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
+            File = 'windows-ai-policy.reg'
+        },
+        @{
+            Key = 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\Paint'
+            File = 'paint-ai-policy.reg'
+        },
+        @{
+            Key = 'HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot'
+            File = 'current-user-windows-copilot-policy.reg'
+        },
+        @{
+            Key = 'HKCU\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
+            File = 'current-user-windows-ai-policy.reg'
         },
         @{
             Key = 'HKCU\SOFTWARE\Policies\Microsoft\Windows\CloudContent'

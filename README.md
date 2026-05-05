@@ -120,7 +120,7 @@ pwsh -File .\scripts\iis\Set-IisCustomHeaderForSite.ps1 -SiteName "Default Web S
 | `scripts\active-directory\Set-AdMailboxUserUpnSuffix.ps1`                 | Replaced old one-liner and placeholder suffix with scoped, parameterized UPN updates.              |
 | `scripts\active-directory\Set-AdUserUpnSuffixForOu.ps1`                   | Replaced placeholder suffix, OU, and server values with command-line parameters and `-WhatIf`.     |
 | `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`.  |
-| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Parameterized lookback and output path; fixed active-recipient matching.                           |
+| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.          |
 | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                       |
 | `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                     |
 

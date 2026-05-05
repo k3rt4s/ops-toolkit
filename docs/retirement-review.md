@@ -14,15 +14,15 @@ This review identifies what should be retired, what should stay active, and what
 
 ## Keep Active
 
-| Area              | Kept path                    | Notes                                                                                                                                   |
-| ----------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Azure             | `scripts\azure\`             | Updated toward `Az` cmdlets, parameters, explicit output paths, and `-WhatIf` where changes are made.                                   |
-| IIS               | `scripts\iis\`               | Kept for Windows Server IIS administration; security header script was updated to avoid automatic rollback execution.                   |
-| Microsoft 365     | `scripts\microsoft-365\`     | Kept for Exchange Online administration; message-trace usage should move toward current Exchange Online cmdlets as tenants expose them. |
-| Active Directory  | `scripts\active-directory\`  | Kept for on-prem AD operations; several scripts are legacy but still relevant in hybrid environments.                                   |
-| Windows hardening | `scripts\windows-hardening\` | Kept, except Cortana-specific scripts. High-impact scripts should be run first with `-WhatIf` when supported.                           |
-| Utilities         | `scripts\utilities\`         | Kept; CSV comparison script was fixed and parameterized.                                                                                |
-| Pen testing setup | `scripts\pentesting\`        | Kept as workstation/lab bootstrap, not as production server automation.                                                                 |
+| Area              | Kept path                    | Notes                                                                                                                           |
+| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Azure             | `scripts\azure\`             | Updated toward `Az` cmdlets, parameters, explicit output paths, and `-WhatIf` where changes are made.                           |
+| IIS               | `scripts\iis\`               | Kept for Windows Server IIS administration; security header script was updated to avoid automatic rollback execution.           |
+| Microsoft 365     | `scripts\microsoft-365\`     | Kept for Exchange Online administration; message-trace usage now targets current Exchange Online `Get-MessageTraceV2` behavior. |
+| Active Directory  | `scripts\active-directory\`  | Kept for on-prem AD operations; several scripts are legacy but still relevant in hybrid environments.                           |
+| Windows hardening | `scripts\windows-hardening\` | Kept, except Cortana-specific scripts. High-impact scripts should be run first with `-WhatIf` when supported.                   |
+| Utilities         | `scripts\utilities\`         | Kept; CSV comparison script was fixed and parameterized.                                                                        |
+| Pen testing setup | `scripts\pentesting\`        | Kept as workstation/lab bootstrap, not as production server automation.                                                         |
 
 ## Legacy Keep / Replacement Recommended
 

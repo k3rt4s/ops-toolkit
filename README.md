@@ -102,25 +102,25 @@ pwsh -File .\scripts\iis\Set-IisCustomHeaderForSite.ps1 -SiteName "Default Web S
 
 ## Updated Scripts
 
-| Script                                                                    | Update                                                                                             |
-| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Replaced broken AzureRM-era snippets with an `Az`-based NSG and optional VM inventory exporter.    |
-| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Removed AzureRM uninstall behavior; now safely imports or optionally installs `Az.Accounts`.       |
-| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import. |
-| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                      |
-| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                     |
-| `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                       |
-| `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                        |
-| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.     |
-| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.        |
-| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.    |
-| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.        |
-| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries. |
-| `scripts\active-directory\Set-AdUserUpnSuffixForOu.ps1`                   | Replaced placeholder suffix, OU, and server values with command-line parameters and `-WhatIf`.     |
-| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`.  |
-| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.          |
-| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                       |
-| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                     |
+| Script                                                                    | Update                                                                                                   |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Replaced broken AzureRM-era snippets with an `Az`-based NSG and optional VM inventory exporter.          |
+| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Removed AzureRM uninstall behavior; now safely imports or optionally installs `Az.Accounts`.             |
+| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import.       |
+| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                            |
+| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                           |
+| `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                             |
+| `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                              |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.           |
+| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.              |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.          |
+| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.              |
+| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries.       |
+| `scripts\active-directory\Set-AdOuUserUpnSuffix.ps1`                      | Renamed and hardened OU-scoped AD user UPN suffix updates with explicit search scope and summary output. |
+| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Removed automatic rollback execution and added per-site targeting, custom headers, and `-WhatIf`.        |
+| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.                |
+| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                             |
+| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                           |
 
 ## Modernized Legacy Scripts
 

@@ -27,7 +27,6 @@ SecOps\
 ├── data\                    Package lists and non-secret script input data
 ├── docs\                    Labs, diagrams, review notes, and reference material
 ├── ITOps\                   Temporary staging area for IT operations scripts
-├── notes\                   CherryTree and other notebook exports
 ├── reports\                 Generated script output, ignored by git
 ├── scripts\                 Runnable automation grouped by platform/domain
 ├── .editorconfig
@@ -64,7 +63,6 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `data\windows-hardening\`             | Bloatware allow/remove package lists                   |
 | `docs\labs\`                          | Azure and ELK lab materials                            |
 | `docs\iis\`                           | IIS header notes                                       |
-| `notes\`                              | CherryTree notes database                              |
 | `archive\`                            | Retired material retained inside the SecOps repo       |
 | `ITOps\scripts\printers\`             | Temporary home for Windows printer connection helpers  |
 | `ITOps\scripts\utilities\`            | Temporary home for general endpoint/admin utilities    |

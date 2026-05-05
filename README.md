@@ -67,6 +67,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `notes\`                              | CherryTree notes database                              |
 | `archive\`                            | Retired material retained inside the SecOps repo       |
 | `ITOps\scripts\printers\`             | Temporary home for Windows printer connection helpers  |
+| `ITOps\scripts\utilities\`            | Temporary home for general endpoint/admin utilities    |
 | `ITOps\scripts\windows-file-cleanup\` | Temporary home for file and temp cleanup helpers       |
 
 ## Examples
@@ -133,7 +134,7 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
 | `ITOps\scripts\printers\Add-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
 | `ITOps\scripts\printers\Remove-WindowsPrinterConnections.ps1`       | `Remove-LegacyPrinterConnection.vbs`         |
-| `scripts\utilities\Get-CurrentUserContext.ps1`                      | `Show-CurrentUser.vbs`                       |
+| `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`                | `Show-CurrentUser.vbs`                       |
 | `ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1`          | `Clear-UserAndDriveTempFolders.vbs`          |
 | `ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1` | `Remove-OldFilesRecursively.vbs`             |
 

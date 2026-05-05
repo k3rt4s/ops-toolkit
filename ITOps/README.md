@@ -9,6 +9,7 @@ If this area grows enough to justify its own repository, move this folder into a
 | Path                            | Purpose                                 |
 | ------------------------------- | --------------------------------------- |
 | `scripts\printers\`             | Windows printer connection helpers.     |
+| `scripts\utilities\`            | General endpoint and admin utilities.   |
 | `scripts\windows-file-cleanup\` | File and temp-folder cleanup helpers.   |
 | `data\printers\`                | Example non-secret printer input files. |
 
@@ -36,4 +37,10 @@ Preview temp folder cleanup:
 
 ```powershell
 pwsh -File .\ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1 -TempPath $env:TEMP -WhatIf
+```
+
+Show current Windows user and network context:
+
+```powershell
+pwsh -File .\ITOps\scripts\utilities\Get-CurrentUserContext.ps1
 ```

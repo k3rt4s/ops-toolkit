@@ -17,6 +17,11 @@ $ErrorActionPreference = 'Stop'
 
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+$groupNames = [System.Collections.Generic.List[string]]::new()
+foreach ($group in $identity.Groups) {
+    [void]$groupNames.Add($group.Translate([System.Security.Principal.NTAccount]).Value)
+}
+$groups = $groupNames -join ';'
 $network = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = True' |
     Select-Object -Property Description, MACAddress, IPAddress, DefaultIPGateway, DNSServerSearchOrder
 
@@ -24,9 +29,9 @@ $network = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 
     UserName = $identity.Name
     Authentication = $identity.AuthenticationType
     IsAdministrator = $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-    Groups = ($identity.Groups | ForEach-Object { $_.Translate([System.Security.Principal.NTAccount]).Value }) -join ';'
+    Groups = $groups
     ComputerName = $env:COMPUTERNAME
     UserDomain = $env:USERDOMAIN
     LogonServer = $env:LOGONSERVER
-    NetworkAdapters = $network
+    NetworkAdapters = @($network)
 }

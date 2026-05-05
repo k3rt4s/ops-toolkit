@@ -1,3 +1,8 @@
+' Archive Notes:
+' - Retired on 2026-05-04 during the SecOps repo modernization.
+' - Kept for historical reference only; use ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1 instead.
+' - Deletes files from temp locations and should not be run as-is.
+'
 On Error Resume Next
 
 'Check if OK to run script

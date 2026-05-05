@@ -1,3 +1,8 @@
+' Archive Notes:
+' - Retired on 2026-05-04 during the SecOps repo modernization.
+' - Kept for historical reference only after the duplicate active utility was removed.
+' - Prefer current PowerShell or built-in networking tools for IP conversion work.
+'
 ' Mark's VNCSchool Script
 ' Read the commentary in this script to get a feel for how to write your own VBScripts
 

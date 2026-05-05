@@ -1,3 +1,8 @@
+' Archive Notes:
+' - Retired on 2026-05-04 during the SecOps repo modernization.
+' - Kept for historical reference only after the duplicate active utility was removed.
+' - Do not run in production; use supported Windows activation tooling instead.
+'
 ' 
 ' WMI Script - ChangeVLKey.vbs
 '

@@ -1,3 +1,8 @@
+' Archive Notes:
+' - Retired on 2026-05-04 during the SecOps repo modernization.
+' - Kept for historical reference only; use scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1 instead.
+' - Do not run in production without reviewing legacy LDAP and Excel automation behavior.
+'
 ' CreateUserList3.vbs
 ' VBScript program to create a Microsoft Excel spreadsheet documenting
 ' all users in the domain.

@@ -1,4 +1,8 @@
 @echo off
+REM Archive Notes:
+REM - Retired on 2026-05-04 during the SecOps repo modernization.
+REM - Kept for historical reference only after the duplicate active BGInfo utility was removed.
+REM - References legacy BGInfo paths and should not be run as-is.
 setlocal
 cls
 

@@ -1,3 +1,8 @@
+' Archive Notes:
+' - Retired on 2026-05-04 during the SecOps repo modernization.
+' - Kept for historical reference only; use ITOps\scripts\utilities\Get-CurrentUserContext.ps1 instead.
+' - Do not run in production without reviewing legacy logging paths.
+'
 '***********************************************************
 'Any line that says "if (DEBUG)" will display the status message
 'following that line.  Used when the script is called "whoami.js debug"

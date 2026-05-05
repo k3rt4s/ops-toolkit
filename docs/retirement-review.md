@@ -30,7 +30,7 @@ This review identifies what should be retired, what should stay active, and what
 | ---------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
 | `archive\legacy-scripts\retired-2026-05-04\**\*.vbs` | Archived reference | Replaced with PowerShell equivalents under `scripts\`; keep only for historical comparison. |
 | `archive\legacy-scripts\retired-2026-05-04\**\*.cmd` | Archived reference | Replaced with PowerShell equivalents under `scripts\`; keep only for historical comparison. |
-| `docs\labs\elk-lab\scripts\*.sh`                     | Lab reference      | Keep with lab docs; do not treat as production deployment automation.                       |
+| `docs\labs\elk-lab\scripts\*.sh`                     | Lab reference      | Keep with lab docs; scripts are named and maintained as lab-only class setup helpers.       |
 
 ## Sources Checked
 

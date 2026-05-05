@@ -28,3 +28,4 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
 - `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.
+- `docs\labs\elk-lab\scripts\*.sh` were renamed into explicit lab setup helpers for Elastic/Kibana, Filebeat, and DVWA.

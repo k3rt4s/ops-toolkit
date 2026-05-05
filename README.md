@@ -112,30 +112,37 @@ Preview replacing IIS custom headers with the recommended preset and write a bef
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "Default Web Site" -RemoveExisting -WhatIf
 ```
 
+Preview Windows Schannel/TLS hardening and write plan reports:
+
+```powershell
+pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
+```
+
 ## Updated Scripts
 
-| Script                                                                    | Update                                                                                                   |
-| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Replaced broken AzureRM-era snippets with an `Az`-based NSG and optional VM inventory exporter.          |
-| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Removed AzureRM uninstall behavior; now safely imports or optionally installs `Az.Accounts`.             |
-| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import.       |
-| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                            |
-| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                           |
-| `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                             |
-| `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                              |
-| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.           |
-| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.              |
-| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.          |
-| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.              |
-| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries.       |
-| `scripts\active-directory\Set-AdOuUserUpnSuffix.ps1`                      | Renamed and hardened OU-scoped AD user UPN suffix updates with explicit search scope and summary output. |
-| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.        |
-| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.           |
-| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.   |
-| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Hardened the IIS security header preset with validation, replacement review reports, and summary output. |
-| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.                |
-| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                             |
-| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                           |
+| Script                                                                    | Update                                                                                                    |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Replaced broken AzureRM-era snippets with an `Az`-based NSG and optional VM inventory exporter.           |
+| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Removed AzureRM uninstall behavior; now safely imports or optionally installs `Az.Accounts`.              |
+| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import.        |
+| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                             |
+| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                            |
+| `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                              |
+| `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                               |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.            |
+| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.               |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.           |
+| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.               |
+| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries.        |
+| `scripts\active-directory\Set-AdOuUserUpnSuffix.ps1`                      | Renamed and hardened OU-scoped AD user UPN suffix updates with explicit search scope and summary output.  |
+| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.         |
+| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.            |
+| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.    |
+| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Hardened the IIS security header preset with validation, replacement review reports, and summary output.  |
+| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.                 |
+| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                              |
+| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                            |
+| `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1`           | Renamed and rebuilt Schannel TLS hardening with `-WhatIf`, plan reports, registry backups, and summaries. |
 
 ## Modernized Legacy Scripts
 

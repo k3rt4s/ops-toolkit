@@ -15,6 +15,7 @@ This folder contains ELK/DVWA lab and class materials. The scripts are lab-only 
 Install the Elastic/Kibana lab host:
 
 ```bash
+sudo ./scripts/setup-elastic-stack-lab.sh --cluster-name secops-lab --node-name elk01 --dry-run
 sudo ./scripts/setup-elastic-stack-lab.sh --cluster-name secops-lab --node-name elk01
 ```
 
@@ -26,18 +27,20 @@ sudo ./scripts/setup-filebeat-lab-agent.sh \
   --kibana-host http://elk01:5601 \
   --elastic-username elastic \
   --elastic-password '<lab-password>' \
-  --elastic-ca-cert ./http_ca.crt
+  --elastic-ca-cert ./http_ca.crt \
+  --dry-run
 ```
 
 Install DVWA on a lab target:
 
 ```bash
-sudo ./scripts/setup-dvwa-lab-target.sh --db-password '<lab-password>'
+sudo ./scripts/setup-dvwa-lab-target.sh --db-password '<lab-password>' --dry-run
 ```
 
 ## Notes
 
 - Run these scripts only in isolated lab networks.
+- Run each script with `--dry-run` first, then rerun without `--dry-run` after reviewing the plan.
 - Review generated service and application configuration before reusing any pattern elsewhere.
 - Elastic packages are installed from Elastic's apt repository.
 - DVWA is intentionally vulnerable and must never be exposed to untrusted networks.

@@ -32,6 +32,8 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `ITOps\scripts\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
 - `scripts\active-directory\Export-AdUserInventory.ps1` combines the previous AD user attribute and distinguished-name export scripts into one inventory command.
 - `scripts\active-directory\Set-AdUserUpnSuffix.ps1` combines mailbox-enabled and OU-scoped UPN suffix updates into one report-first command.
+- `scripts\active-directory\Send-AdSecurityEmailReport.ps1` combines privileged group and password-never-expires reports into one AD security report command.
+- `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1` keeps the distinct user-notification workflow but adds email plan/state reporting and safer send behavior.
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
 - `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.

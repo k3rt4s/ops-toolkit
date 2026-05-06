@@ -76,10 +76,10 @@ Preview disabling and moving stale AD computer accounts:
 pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
 ```
 
-Generate an AD Domain Admins report without sending email:
+Generate an AD security report without sending email:
 
 ```powershell
-pwsh -File .\scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1 -OutputPath .\reports\active-directory\domain-admins.html
+pwsh -File .\scripts\active-directory\Send-AdSecurityEmailReport.ps1 -ReportType PrivilegedGroupMembership -GroupName "Domain Admins"
 ```
 
 Export AD user inventory reports:
@@ -160,9 +160,8 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 | `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                                                                                    |
 | `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                                                                                     |
 | `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.                                                                  |
-| `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.                                                                     |
-| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.                                                                 |
-| `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.                                                                     |
+| `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                 | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                          |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                   |
 | `scripts\active-directory\Export-AdUserInventory.ps1`                     | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                             |
 | `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                        | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                              |
 | `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                               |
@@ -180,15 +179,15 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 
 The remaining VBScript/CMD entry points were replaced with PowerShell equivalents and the originals were moved to `archive\legacy-scripts\retired-2026-05-04\`.
 
-| Replacement                                                         | Replaces                                     |
-| ------------------------------------------------------------------- | -------------------------------------------- |
-| `scripts\active-directory\Export-AdUserInventory.ps1`               | `Export-AdUserAttributesToExcel.vbs`         |
-| `scripts\active-directory\Export-AdUserInventory.ps1`               | `Export-AdUserDistinguishedNamesToExcel.vbs` |
-| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
-| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Remove-LegacyPrinterConnection.vbs`         |
-| `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`                | `Show-CurrentUser.vbs`                       |
-| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1`  | `Clear-UserAndDriveTempFolders.vbs`          |
-| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1`  | `Remove-OldFilesRecursively.vbs`             |
+| Replacement                                                        | Replaces                                     |
+| ------------------------------------------------------------------ | -------------------------------------------- |
+| `scripts\active-directory\Export-AdUserInventory.ps1`              | `Export-AdUserAttributesToExcel.vbs`         |
+| `scripts\active-directory\Export-AdUserInventory.ps1`              | `Export-AdUserDistinguishedNamesToExcel.vbs` |
+| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`         | `Add-LegacyPrinterConnections.vbs`           |
+| `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`         | `Remove-LegacyPrinterConnection.vbs`         |
+| `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`               | `Show-CurrentUser.vbs`                       |
+| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` | `Clear-UserAndDriveTempFolders.vbs`          |
+| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` | `Remove-OldFilesRecursively.vbs`             |
 
 ## Script Header Standard
 

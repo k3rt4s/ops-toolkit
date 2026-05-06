@@ -88,6 +88,24 @@ Export AD user inventory reports:
 pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType All -OutputDirectory .\reports\active-directory
 ```
 
+Initialize an Az PowerShell session and write a session report:
+
+```powershell
+pwsh -File .\scripts\azure\Initialize-AzPowerShellSession.ps1 -TenantId "<tenant-id>" -SubscriptionId "<subscription-id>" -UseDeviceAuthentication
+```
+
+Export Azure network inventory reports:
+
+```powershell
+pwsh -File .\scripts\azure\Export-AzNetworkInventory.ps1 -SubscriptionId "<subscription-id>" -IncludeVirtualMachines
+```
+
+Preview creating or reusing a Key Vault service principal:
+
+```powershell
+pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -EnvironmentName prod -ApplicationShortName app -KeyVaultName kv-prod-app -WhatIf
+```
+
 Preview AD user UPN suffix updates:
 
 ```powershell
@@ -152,11 +170,11 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 
 | Script                                                                    | Update                                                                                                                                                          |
 | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Replaced broken AzureRM-era snippets with an `Az`-based NSG and optional VM inventory exporter.                                                                 |
-| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Removed AzureRM uninstall behavior; now safely imports or optionally installs `Az.Accounts`.                                                                    |
+| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.           |
+| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.           |
 | `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import.                                                              |
 | `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                                                                                   |
-| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                                                                                  |
+| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.    |
 | `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                                                                                    |
 | `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                                                                                     |
 | `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.         |

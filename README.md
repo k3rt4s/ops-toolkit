@@ -73,7 +73,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 Preview disabling and moving stale AD computer accounts:
 
 ```powershell
-pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
+pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -SearchBase "OU=Workstations,DC=example,DC=com" -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
 ```
 
 Generate an AD security report without sending email:
@@ -159,7 +159,7 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 | `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Parameterized subscription, environment, app name, Key Vault, and permissions.                                                                                  |
 | `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                                                                                    |
 | `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                                                                                     |
-| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Removed hard-coded OU, SMTP, and email values; added usage output and safer report generation.                                                                  |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.         |
 | `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                 | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                          |
 | `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                   |
 | `scripts\active-directory\Export-AdUserInventory.ps1`                     | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                             |

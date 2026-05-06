@@ -108,7 +108,7 @@ function Invoke-CredentialManagerCommand {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet('Add', 'Delete')]
-        [string]$CredentialAction,
+        [string]$Mode,
 
         [Parameter(Mandatory = $true)]
         [string]$TargetName,
@@ -120,7 +120,7 @@ function Invoke-CredentialManagerCommand {
         [string]$Secret
     )
 
-    if ($CredentialAction -eq 'Add') {
+    if ($Mode -eq 'Add') {
         if ($PSCmdlet.ShouldProcess($TargetName, 'Store Azure Files credential in Windows Credential Manager')) {
             cmdkey.exe /add:$TargetName /user:$UserName /pass:$Secret | Out-Null
             return 'CredentialStored'
@@ -181,7 +181,7 @@ if ($existingDrive -and ($Action -eq 'Remove' -or $ReplaceExisting)) {
 }
 
 if ($Action -eq 'Map') {
-    $credentialResult = Invoke-CredentialManagerCommand -CredentialAction Add -TargetName $credentialTarget -UserName $userName -Secret $StorageAccountKey -WhatIf:$WhatIfPreference
+    $credentialResult = Invoke-CredentialManagerCommand -Mode Add -TargetName $credentialTarget -UserName $userName -Secret $StorageAccountKey -WhatIf:$WhatIfPreference
     $results.Add($credentialResult)
 
     if ($PSCmdlet.ShouldProcess($target, "Map Azure file share $root")) {
@@ -193,7 +193,7 @@ if ($Action -eq 'Map') {
 }
 
 if ($RemoveCredential -or $Action -eq 'Remove') {
-    $credentialResult = Invoke-CredentialManagerCommand -CredentialAction Delete -TargetName $credentialTarget -WhatIf:$WhatIfPreference
+    $credentialResult = Invoke-CredentialManagerCommand -Mode Delete -TargetName $credentialTarget -WhatIf:$WhatIfPreference
     $results.Add($credentialResult)
 }
 

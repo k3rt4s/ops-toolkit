@@ -106,6 +106,24 @@ Preview creating or reusing a Key Vault service principal:
 pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -EnvironmentName prod -ApplicationShortName app -KeyVaultName kv-prod-app -WhatIf
 ```
 
+Preview mapping an Azure Files share to a Windows drive:
+
+```powershell
+pwsh -File .\scripts\azure\New-AzFileShareMappedDrive.ps1 -DriveLetter Z -StorageAccountName examplestorage -ShareName data -StorageAccountKey "<key>" -WhatIf
+```
+
+Preview importing an Azure VPN Client XML profile on Windows 11:
+
+```powershell
+pwsh -File .\scripts\azure\Import-AzureVpnClientXmlProfile.ps1 -ProfileXmlPath .\azurevpnconfig.xml -WhatIf
+```
+
+Preview applying a hardened Application Gateway TLS policy:
+
+```powershell
+pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyMode CustomHardened -WhatIf
+```
+
 Preview AD user UPN suffix updates:
 
 ```powershell
@@ -172,11 +190,10 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scripts\azure\Export-AzNetworkInventory.ps1`                             | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.           |
 | `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.           |
-| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Replaced the embedded PBK profile script with a parameterized Azure VPN Client XML profile import.                                                              |
-| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Replaced invalid `.bat` content with a parameterized PowerShell drive mapper.                                                                                   |
+| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Hardened Windows 11 Azure VPN Client XML import with XML validation, optional profile backup, `-WhatIf`, and plan/state reports.                                |
+| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Hardened Azure Files mapped-drive workflow with map/remove modes, credential cleanup, `-WhatIf`, plan/state reports, and no storage-key report writes.          |
 | `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.    |
-| `scripts\azure\Set-AzAppGatewayHardenedTlsPolicy.ps1`                     | Replaced placeholders with parameters and `-WhatIf` support.                                                                                                    |
-| `scripts\azure\Restore-AzAppGatewayPredefinedTlsPolicy.ps1`               | Replaced placeholders with parameters for applying a predefined TLS policy.                                                                                     |
+| `scripts\azure\Set-AzAppGatewayTlsPolicy.ps1`                             | Combined hardened and predefined Application Gateway TLS policy updates with mode selection, `-WhatIf`, plan/state reports, and rollback guidance.              |
 | `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.         |
 | `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                 | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                          |
 | `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                   |

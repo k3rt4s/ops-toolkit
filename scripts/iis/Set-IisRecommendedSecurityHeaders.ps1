@@ -6,7 +6,7 @@ Apply a recommended HTTP security header preset to IIS sites.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -39,7 +39,7 @@ counts, restart state, optional backup report path, and per-site header results
 with old value, new value, action, and reason.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

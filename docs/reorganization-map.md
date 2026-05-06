@@ -13,9 +13,9 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 | `Misc\`                     | `scripts\utilities\`                                                                      |
 | `Office365\`                | `scripts\microsoft-365\` and `docs\`                                                      |
 | `PenTesting\`               | `scripts\pentesting\`                                                                     |
-| `Printers\`                 | `ITOps\scripts\printers\`                                                                 |
+| `Printers\`                 | `scripts\it-operations\printers\`                                                         |
 | `Windows Active Directory\` | `scripts\active-directory\`                                                               |
-| `Windows File Cleanup\`     | `ITOps\scripts\windows-file-cleanup\`                                                     |
+| `Windows File Cleanup\`     | `scripts\it-operations\windows-file-cleanup\`                                             |
 | `Windows Hardening\`        | `scripts\windows-hardening\`, `data\windows-hardening\`, and `archive\windows-hardening\` |
 | `File Check.ps1`            | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                                |
 
@@ -27,9 +27,9 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1` replaces the older one-way Schannel hardening script with a report-first `-WhatIf` workflow, registry backups, and summary output.
 - `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1` replaces the older one-way telemetry and consumer-feature script with a Windows 11 scoped privacy/AI report-first workflow, rollback, state reports, registry backups, and summary output.
 - `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` replaces legacy bloatware lists and one-way AppX removal with Windows 11 scoped remove/protect lists, inventory reports, state reports, and rollback guidance.
-- `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1` combines the previous add/remove printer helpers into one report-first command with `-Action Add` and `-Action Remove`.
-- `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` combines temp cleanup and stale-file cleanup into one guarded report-first command.
-- `ITOps\scripts\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
+- `scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1` combines the previous add/remove printer helpers into one report-first command with `-Action Add` and `-Action Remove`.
+- `scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` combines temp cleanup and stale-file cleanup into one guarded report-first command.
+- `scripts\it-operations\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
 - `scripts\active-directory\Export-AdUserInventory.ps1` combines the previous AD user attribute and distinguished-name export scripts into one inventory command.
 - `scripts\active-directory\Set-AdUserUpnSuffix.ps1` combines mailbox-enabled and OU-scoped UPN suffix updates into one report-first command.
 - `scripts\active-directory\Send-AdSecurityEmailReport.ps1` combines privileged group and password-never-expires reports into one AD security report command.

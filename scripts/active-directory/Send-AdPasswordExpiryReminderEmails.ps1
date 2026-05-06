@@ -6,7 +6,7 @@ Generate password-expiry reminder plans and optionally email users or administra
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -34,7 +34,7 @@ Writes HTML, CSV, JSON, plan, and state files under reports\active-directory by
 default. Returns a summary object with output paths and send counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ActiveDirectory
 [CmdletBinding(SupportsShouldProcess = $true)]

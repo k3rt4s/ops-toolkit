@@ -1,4 +1,4 @@
-# Example printer list for ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1
+# Example printer list for scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1
 # Replace these sample UNC paths with approved production printer shares.
 \\print01.example.com\Accounting
 \\print01.example.com\Warehouse

@@ -6,19 +6,19 @@ Plan and remove Windows temp items or stale files with guardrails and reports.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
-  C:\Code\projects\SecOps\ITOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
+  C:\Code\projects\ops-toolkit\scripts\it-operations\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
 
 .INSTRUCTIONS
-- Read the root README.md and ITOps README.md before running this script.
+- Read the root README.md and IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan/state reports.
 - Use -Mode Temp to remove immediate children of approved temp folders.
 - Use -Mode OlderThan to remove files older than -OlderThanDays under explicit paths.
 - Use -IncludeEmptyDirectories only after reviewing the plan because directory cleanup is recursive.
-- Generated reports are written under reports\itops\windows-file-cleanup by default.
+- Generated reports are written under reports\it-operations\windows-file-cleanup by default.
 
 .PURPOSE
 This script replaces the previous temp-folder cleanup and old-file recursive
@@ -27,11 +27,11 @@ paths such as drive roots, Windows, Program Files, user profile roots, and repo
 roots unless future maintainers deliberately change the guardrail logic.
 
 .REQUIRED SYNTAX
-pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -WhatIf
-pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
 
 .OUTPUTS
-Writes plan and state CSV/JSON files under reports\itops\windows-file-cleanup
+Writes plan and state CSV/JSON files under reports\it-operations\windows-file-cleanup
 by default. Returns a summary object with report paths and cleanup counts.
 
 .STATUS
@@ -60,7 +60,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\itops\windows-file-cleanup')
+    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\it-operations\windows-file-cleanup')
 )
 
 Set-StrictMode -Version 3.0
@@ -71,8 +71,8 @@ function Show-Usage {
 Windows file cleanup.
 
 Usage:
-  pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -WhatIf
-  pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
+  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -WhatIf
+  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
 
 Options:
   -Mode                    Temp or OlderThan.

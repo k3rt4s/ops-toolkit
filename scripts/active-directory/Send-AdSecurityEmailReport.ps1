@@ -6,7 +6,7 @@ Generate and optionally email Active Directory security reports.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -33,7 +33,7 @@ Writes HTML, CSV, and JSON reports under reports\active-directory by default.
 Returns a summary object with output paths and row counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo. Replaces
+Active script kept in the reorganized ops-toolkit repo. Replaces
 Send-AdDomainAdminsEmailReport.ps1 and Send-AdPasswordNeverExpiresEmailReport.ps1.
 #>
 #Requires -Modules ActiveDirectory

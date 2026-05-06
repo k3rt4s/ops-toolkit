@@ -6,7 +6,7 @@ Create or reuse a Microsoft Entra service principal and optionally grant Key Vau
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -37,7 +37,7 @@ default. Returns a summary object with service principal identifiers and report
 paths. Client secrets are not written to report files.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules Az.Accounts, Az.Resources, Az.KeyVault
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

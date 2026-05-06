@@ -6,7 +6,7 @@ Find stale Active Directory computer accounts, write review reports, and optiona
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -36,7 +36,7 @@ reports\active-directory by default. Returns a summary object with output paths
 and action counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ActiveDirectory
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

@@ -6,18 +6,18 @@ Plan, add, or remove Windows printer connections.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
-  C:\Code\projects\SecOps\ITOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
+  C:\Code\projects\ops-toolkit\scripts\it-operations\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
 
 .INSTRUCTIONS
-- Read the root README.md and ITOps README.md before running this script.
+- Read the root README.md and IT operations README.md before running this script.
 - Use -Action Add with -PrinterPath or -PrinterListPath to add network printer connections.
 - Use -Action Remove with -PrinterName, -PrinterListPath, or -AllConnectionPrinters to remove printer connections.
 - Run with -WhatIf first and review the generated plan/state reports.
-- Generated reports are written under reports\itops\printers by default.
+- Generated reports are written under reports\it-operations\printers by default.
 
 .PURPOSE
 This script replaces the separate add/remove printer connection helpers with a
@@ -26,11 +26,11 @@ avoids removing local printers unless -AllConnectionPrinters or explicit names
 select them.
 
 .REQUIRED SYNTAX
-pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
-pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
+pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\data\it-operations\printers\printers.example.txt -WhatIf
+pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
 
 .OUTPUTS
-Writes plan and state CSV/JSON files under reports\itops\printers by default.
+Writes plan and state CSV/JSON files under reports\it-operations\printers by default.
 Returns a summary object with report paths and action counts.
 
 .STATUS
@@ -59,7 +59,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\itops\printers')
+    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\it-operations\printers')
 )
 
 Set-StrictMode -Version 3.0
@@ -70,10 +70,10 @@ function Show-Usage {
 Windows printer connection management.
 
 Usage:
-  pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterPath "\\print01\Accounting" -WhatIf
-  pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\ITOps\data\printers\printers.example.txt -WhatIf
-  pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -PrinterName "\\print01\Accounting" -WhatIf
-  pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
+  pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterPath "\\print01\Accounting" -WhatIf
+  pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\data\it-operations\printers\printers.example.txt -WhatIf
+  pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -PrinterName "\\print01\Accounting" -WhatIf
+  pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
 
 Options:
   -Action                 Add or Remove.

@@ -6,7 +6,7 @@ Plan, remove, and partially roll back Windows 11 AppX bloatware packages.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -37,7 +37,7 @@ paths, changed/skipped counts, removed items, protected matches, and rollback
 guidance.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(

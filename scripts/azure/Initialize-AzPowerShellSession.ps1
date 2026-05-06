@@ -6,7 +6,7 @@ Prepare an Az PowerShell session, connect to Azure, select context, and write a 
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -34,7 +34,7 @@ Writes an Az session JSON report under reports\azure by default. Returns the
 selected Az context, module version, and report path.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

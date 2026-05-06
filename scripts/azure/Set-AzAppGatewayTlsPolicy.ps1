@@ -6,7 +6,7 @@ Apply a custom or predefined TLS policy to an Azure Application Gateway with pla
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -33,7 +33,7 @@ Writes plan, state, and rollback JSON reports under reports\azure by default.
 Returns a summary object with the requested policy and report paths.
 
 .STATUS
-Active script kept in the reorganized SecOps repo. Replaces
+Active script kept in the reorganized ops-toolkit repo. Replaces
 Set-AzAppGatewayHardenedTlsPolicy.ps1 and Restore-AzAppGatewayPredefinedTlsPolicy.ps1.
 #>
 #Requires -Modules Az.Accounts, Az.Network

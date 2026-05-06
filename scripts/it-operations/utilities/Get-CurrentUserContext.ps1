@@ -6,16 +6,16 @@ Report current Windows user, group, privilege, and network context.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
-  C:\Code\projects\SecOps\ITOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
+  C:\Code\projects\ops-toolkit\scripts\it-operations\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
 
 .INSTRUCTIONS
-- Read the root README.md and ITOps README.md before running this script.
+- Read the root README.md and IT operations README.md before running this script.
 - This script is read-only and does not require elevation.
-- Use -OutputDirectory to write JSON and CSV reports under reports\itops\user-context.
+- Use -OutputDirectory to write JSON and CSV reports under reports\it-operations\user-context.
 - Use -IncludeGroups only when group membership detail is needed; it can be noisy on domain-joined systems.
 
 .PURPOSE
@@ -24,8 +24,8 @@ is elevated, what network adapters are active, and optionally what groups are
 present in the current token.
 
 .REQUIRED SYNTAX
-pwsh -File .\ITOps\scripts\utilities\Get-CurrentUserContext.ps1
-pwsh -File .\ITOps\scripts\utilities\Get-CurrentUserContext.ps1 -IncludeGroups -OutputDirectory .\reports\itops\user-context
+pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1
+pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1 -IncludeGroups -OutputDirectory .\reports\it-operations\user-context
 
 .OUTPUTS
 Returns a summary object. When -OutputDirectory is supplied, writes JSON plus

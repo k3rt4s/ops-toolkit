@@ -6,7 +6,7 @@ Set one custom HTTP response header on one IIS site.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -30,7 +30,7 @@ Returns one summary object containing the site name, requested header, old value
 new value, action, changed state, and reason.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

@@ -6,7 +6,7 @@ Export Microsoft 365 distribution group usage from Exchange Online expanded-reci
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -34,7 +34,7 @@ Writes CSV, JSON, and summary JSON reports under reports\microsoft-365 by
 default. Returns a summary object with output paths and group counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ExchangeOnlineManagement
 [CmdletBinding()]

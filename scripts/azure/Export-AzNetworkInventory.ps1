@@ -6,7 +6,7 @@ Export Azure network inventory reports for NSGs, VNets, subnets, NICs, public IP
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -34,7 +34,7 @@ Writes CSV and JSON inventory files under reports\azure by default. Returns a
 summary object with output paths and record counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo.
+Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules Az.Accounts, Az.Network
 [CmdletBinding()]

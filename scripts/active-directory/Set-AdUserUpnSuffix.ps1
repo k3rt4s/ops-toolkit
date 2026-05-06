@@ -6,7 +6,7 @@ Plan and update Active Directory user UPN suffixes with scoped reporting.
 AI REVIEWER - READ BEFORE EDITING
 Before changing this file, read:
   C:\Code\README.md
-  C:\Code\projects\SecOps\README.md
+  C:\Code\projects\ops-toolkit\README.md
 
 Those files define the repo workflow, script standards, archive rules, and
 validation expectations. Do not guess path conventions or safety behavior.
@@ -33,7 +33,7 @@ Writes plan and state CSV/JSON files under reports\active-directory by default.
 Returns a summary object with report paths and update counts.
 
 .STATUS
-Active script kept in the reorganized SecOps repo. Replaces
+Active script kept in the reorganized ops-toolkit repo. Replaces
 Set-AdMailboxEnabledUserUpnSuffix.ps1 and Set-AdOuUserUpnSuffix.ps1.
 #>
 #Requires -Modules ActiveDirectory

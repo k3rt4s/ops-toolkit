@@ -30,6 +30,8 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1` combines the previous add/remove printer helpers into one report-first command with `-Action Add` and `-Action Remove`.
 - `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` combines temp cleanup and stale-file cleanup into one guarded report-first command.
 - `ITOps\scripts\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
+- `scripts\active-directory\Export-AdUserInventory.ps1` combines the previous AD user attribute and distinguished-name export scripts into one inventory command.
+- `scripts\active-directory\Set-AdUserUpnSuffix.ps1` combines mailbox-enabled and OU-scoped UPN suffix updates into one report-first command.
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
 - `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.

@@ -82,6 +82,18 @@ Generate an AD Domain Admins report without sending email:
 pwsh -File .\scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1 -OutputPath .\reports\active-directory\domain-admins.html
 ```
 
+Export AD user inventory reports:
+
+```powershell
+pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType All -OutputDirectory .\reports\active-directory
+```
+
+Preview AD user UPN suffix updates:
+
+```powershell
+pwsh -File .\scripts\active-directory\Set-AdUserUpnSuffix.ps1 -SearchBase "OU=Users,DC=example,DC=com" -OldSuffix old.example.com -NewSuffix example.com -WhatIf
+```
+
 Add printer connections from a text file after previewing the action:
 
 ```powershell
@@ -151,8 +163,8 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 | `scripts\active-directory\Send-AdDomainAdminsEmailReport.ps1`             | Removed hard-coded SMTP and email values; report output is available without sending email.                                                                     |
 | `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Replaced Quest snap-in dependency with ActiveDirectory cmdlets and parameterized email sending.                                                                 |
 | `scripts\active-directory\Send-AdPasswordNeverExpiresEmailReport.ps1`     | Removed hard-coded SMTP and email values; report output is available without sending email.                                                                     |
-| `scripts\active-directory\Set-AdMailboxEnabledUserUpnSuffix.ps1`          | Renamed and hardened mailbox-enabled AD user UPN suffix updates with scoped filters and summaries.                                                              |
-| `scripts\active-directory\Set-AdOuUserUpnSuffix.ps1`                      | Renamed and hardened OU-scoped AD user UPN suffix updates with explicit search scope and summary output.                                                        |
+| `scripts\active-directory\Export-AdUserInventory.ps1`                     | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                             |
+| `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                        | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                              |
 | `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                               |
 | `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.                                                                  |
 | `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.                                                          |
@@ -170,8 +182,8 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 
 | Replacement                                                         | Replaces                                     |
 | ------------------------------------------------------------------- | -------------------------------------------- |
-| `scripts\active-directory\Export-AdUserAttributesToCsv.ps1`         | `Export-AdUserAttributesToExcel.vbs`         |
-| `scripts\active-directory\Export-AdUserDistinguishedNamesToCsv.ps1` | `Export-AdUserDistinguishedNamesToExcel.vbs` |
+| `scripts\active-directory\Export-AdUserInventory.ps1`               | `Export-AdUserAttributesToExcel.vbs`         |
+| `scripts\active-directory\Export-AdUserInventory.ps1`               | `Export-AdUserDistinguishedNamesToExcel.vbs` |
 | `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
 | `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Remove-LegacyPrinterConnection.vbs`         |
 | `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`                | `Show-CurrentUser.vbs`                       |

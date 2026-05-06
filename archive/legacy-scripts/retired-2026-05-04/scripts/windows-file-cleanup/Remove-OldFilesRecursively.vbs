@@ -1,6 +1,6 @@
 ' Archive Notes:
 ' - Retired on 2026-05-04 during the SecOps repo modernization.
-' - Kept for historical reference only; use ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 instead.
+' - Kept for historical reference only; use ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 instead.
 ' - Deletes files recursively and should not be run as-is.
 '
 ' Objective: To delete old files from a given folder and all subfolders below

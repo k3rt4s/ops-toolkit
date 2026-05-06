@@ -91,7 +91,7 @@ pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Ad
 Preview recursive file cleanup:
 
 ```powershell
-pwsh -File .\ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
 ```
 
 Preview adding a custom IIS response header:
@@ -175,8 +175,8 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 | `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Add-LegacyPrinterConnections.vbs`           |
 | `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1`          | `Remove-LegacyPrinterConnection.vbs`         |
 | `ITOps\scripts\utilities\Get-CurrentUserContext.ps1`                | `Show-CurrentUser.vbs`                       |
-| `ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1`          | `Clear-UserAndDriveTempFolders.vbs`          |
-| `ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1` | `Remove-OldFilesRecursively.vbs`             |
+| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1`  | `Clear-UserAndDriveTempFolders.vbs`          |
+| `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1`  | `Remove-OldFilesRecursively.vbs`             |
 
 ## Script Header Standard
 

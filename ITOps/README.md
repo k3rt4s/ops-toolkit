@@ -30,17 +30,17 @@ pwsh -File .\ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1 -Action Re
 Preview recursive file cleanup:
 
 ```powershell
-pwsh -File .\ITOps\scripts\windows-file-cleanup\Remove-OldFilesRecursively.ps1 -Path C:\Logs -OlderThanDays 30 -WhatIf
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
 ```
 
 Preview temp folder cleanup:
 
 ```powershell
-pwsh -File .\ITOps\scripts\windows-file-cleanup\Clear-TempFolders.ps1 -TempPath $env:TEMP -WhatIf
+pwsh -File .\ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -Path $env:TEMP -WhatIf
 ```
 
 Show current Windows user and network context:
 
 ```powershell
-pwsh -File .\ITOps\scripts\utilities\Get-CurrentUserContext.ps1
+pwsh -File .\ITOps\scripts\utilities\Get-CurrentUserContext.ps1 -OutputDirectory .\reports\itops\user-context
 ```

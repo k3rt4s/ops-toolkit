@@ -28,6 +28,8 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1` replaces the older one-way telemetry and consumer-feature script with a Windows 11 scoped privacy/AI report-first workflow, rollback, state reports, registry backups, and summary output.
 - `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` replaces legacy bloatware lists and one-way AppX removal with Windows 11 scoped remove/protect lists, inventory reports, state reports, and rollback guidance.
 - `ITOps\scripts\printers\Set-WindowsPrinterConnections.ps1` combines the previous add/remove printer helpers into one report-first command with `-Action Add` and `-Action Remove`.
+- `ITOps\scripts\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` combines temp cleanup and stale-file cleanup into one guarded report-first command.
+- `ITOps\scripts\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
 - `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.

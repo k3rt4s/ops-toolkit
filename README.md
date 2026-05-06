@@ -3,7 +3,7 @@
 > **AI reviewer - read before editing.** Start at the master `Code/README.md` ("AI Session Rules" section) and `Code/Instructions_AI_Plugin.md`. Those files are the single source of truth for path conventions, archive/backup rules, markdown conventions, and repo-wide workflow rules.
 
 **Location:** `C:\Code\projects\SecOps\`
-**Owner:** k3rt4s
+**Owner:** SecOps maintainers
 **Purpose:** Security operations scripts for Azure, Active Directory, IIS, Microsoft 365, Windows hardening, and general IT administration.
 **Last Updated:** 2026-05-04
 
@@ -124,6 +124,24 @@ Preview applying a hardened Application Gateway TLS policy:
 pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyMode CustomHardened -WhatIf
 ```
 
+Export Microsoft 365 distribution group usage from message traces:
+
+```powershell
+pwsh -File .\scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1 -Connect -Organization "<tenant-domain>"
+```
+
+Join application inventory rows to endpoint site data:
+
+```powershell
+pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv -IncludeUnmatchedApplications
+```
+
+Preview installing AutoRecon dependencies on a lab workstation:
+
+```bash
+./scripts/pentesting/Install-AutoReconDependencies.sh --dry-run
+```
+
 Preview AD user UPN suffix updates:
 
 ```powershell
@@ -186,29 +204,29 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 
 ## Updated Scripts
 
-| Script                                                                    | Update                                                                                                                                                          |
-| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.           |
-| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.           |
-| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Hardened Windows 11 Azure VPN Client XML import with XML validation, optional profile backup, `-WhatIf`, and plan/state reports.                                |
-| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Hardened Azure Files mapped-drive workflow with map/remove modes, credential cleanup, `-WhatIf`, plan/state reports, and no storage-key report writes.          |
-| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.    |
-| `scripts\azure\Set-AzAppGatewayTlsPolicy.ps1`                             | Combined hardened and predefined Application Gateway TLS policy updates with mode selection, `-WhatIf`, plan/state reports, and rollback guidance.              |
-| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.         |
-| `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                 | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                          |
-| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                   |
-| `scripts\active-directory\Export-AdUserInventory.ps1`                     | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                             |
-| `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                        | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                              |
-| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                               |
-| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.                                                                  |
-| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.                                                          |
-| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Hardened the IIS security header preset with validation, replacement review reports, and summary output.                                                        |
-| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Updated to `Get-MessageTraceV2`, 10-day query windows, and current trace paging behavior.                                                                       |
-| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Fixed CSV join logic and made input/output paths parameters.                                                                                                    |
-| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Fixed shebang, apt continuation syntax, `pipx` flow, and shell safety options.                                                                                  |
-| `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1`           | Renamed and rebuilt Schannel TLS hardening with `-WhatIf`, plan reports, registry backups, and summaries.                                                       |
-| `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1`             | Renamed and rebuilt Windows 11 privacy/AI hardening with `-WhatIf`, rollback, plan/state reports, registry backups, and summaries.                              |
-| `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1`    | Rebuilt Windows 11 AppX bloatware removal with clean data lists, `-WhatIf`, rollback guidance, inventory/plan/state reports, and protected package enforcement. |
+| Script                                                                    | Update                                                                                                                                                           |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts\azure\Export-AzNetworkInventory.ps1`                             | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.            |
+| `scripts\azure\Initialize-AzPowerShellSession.ps1`                        | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.            |
+| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                       | Hardened Windows 11 Azure VPN Client XML import with XML validation, optional profile backup, `-WhatIf`, and plan/state reports.                                 |
+| `scripts\azure\New-AzFileShareMappedDrive.ps1`                            | Hardened Azure Files mapped-drive workflow with map/remove modes, credential cleanup, `-WhatIf`, plan/state reports, and no storage-key report writes.           |
+| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                        | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.     |
+| `scripts\azure\Set-AzAppGatewayTlsPolicy.ps1`                             | Combined hardened and predefined Application Gateway TLS policy updates with mode selection, `-WhatIf`, plan/state reports, and rollback guidance.               |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1` | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.          |
+| `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                 | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                           |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`        | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                    |
+| `scripts\active-directory\Export-AdUserInventory.ps1`                     | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                              |
+| `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                        | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                               |
+| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                 | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                                |
+| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                      | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.                                                                   |
+| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                       | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.                                                           |
+| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                       | Hardened the IIS security header preset with validation, replacement review reports, and summary output.                                                         |
+| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` | Hardened Exchange Online distribution group usage reporting with `Get-MessageTraceV2`, 10-day query windows, continuation keys, CSV/JSON outputs, and summaries. |
+| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                | Rebuilt CSV join utility with configurable join columns, case handling, matched/unmatched reports, duplicate-key summaries, and output paths under reports.      |
+| `scripts\pentesting\Install-AutoReconDependencies.sh`                     | Rebuilt AutoRecon lab installer with `--dry-run`, package-group switches, Debian-family guardrails, pipx install flow, and safer shell behavior.                 |
+| `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1`           | Renamed and rebuilt Schannel TLS hardening with `-WhatIf`, plan reports, registry backups, and summaries.                                                        |
+| `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1`             | Renamed and rebuilt Windows 11 privacy/AI hardening with `-WhatIf`, rollback, plan/state reports, registry backups, and summaries.                               |
+| `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1`    | Rebuilt Windows 11 AppX bloatware removal with clean data lists, `-WhatIf`, rollback guidance, inventory/plan/state reports, and protected package enforcement.  |
 
 ## Modernized Legacy Scripts
 

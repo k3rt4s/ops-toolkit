@@ -1,6 +1,6 @@
 # ops-toolkit
 
-> **AI reviewer - read before editing.** Start at the master `Code/README.md` ("AI Session Rules" section) and `Code/Instructions_AI_Plugin.md`. Those files are the single source of truth for path conventions, archive/backup rules, markdown conventions, and repo-wide workflow rules.
+> **AI reviewer - read before editing.** Start at the master `Code/README.md` ("AI Session Rules" section) and `Code/AGENTS.md`. Those files are the single source of truth for path conventions, archive/backup rules, markdown conventions, and repo-wide workflow rules.
 
 **Location:** `C:\Code\projects\ops-toolkit\`
 **Owner:** ops-toolkit maintainers

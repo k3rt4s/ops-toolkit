@@ -2,15 +2,6 @@
 .SYNOPSIS
 Export Azure network inventory reports for NSGs, VNets, subnets, NICs, public IPs, and optional VMs.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Requires Az.Accounts and Az.Network. VM inventory additionally requires Az.Compute.

@@ -2,15 +2,6 @@
 .SYNOPSIS
 Import an Azure VPN Client XML profile for a Windows 11 user and write review reports.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Download the Azure VPN Client profile XML from Azure, then pass it with -ProfileXmlPath.

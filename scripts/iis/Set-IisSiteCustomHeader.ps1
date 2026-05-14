@@ -2,15 +2,6 @@
 .SYNOPSIS
 Set one custom HTTP response header on one IIS site.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Confirm the target IIS site name before running.

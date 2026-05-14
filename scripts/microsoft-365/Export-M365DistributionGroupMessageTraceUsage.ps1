@@ -2,15 +2,6 @@
 .SYNOPSIS
 Export Microsoft 365 distribution group usage from Exchange Online expanded-recipient message traces.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Requires the ExchangeOnlineManagement PowerShell module and Exchange Online permissions.

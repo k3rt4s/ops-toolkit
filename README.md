@@ -1,11 +1,9 @@
 # ops-toolkit
 
-> **AI reviewer - read before editing.** Start at the master `Code/README.md` ("AI Session Rules" section) and `Code/AGENTS.md`. Those files are the single source of truth for path conventions, archive/backup rules, markdown conventions, and repo-wide workflow rules.
+Hardened operations and security administration scripts for Active Directory, Azure, IIS, Microsoft 365, Windows hardening, IT operations, and reporting. Every state-changing script supports `-WhatIf` and writes plan/state/rollback reports, parameters are validated explicitly, and no customer data, tenant IDs, subscription IDs, or storage keys are hard-coded.
 
-**Location:** `C:\Code\projects\ops-toolkit\`
-**Owner:** ops-toolkit maintainers
-**Purpose:** Operations and security administration scripts for Azure, Active Directory, IIS, Microsoft 365, Windows hardening, IT operations, labs, and reporting.
-**Last Updated:** 2026-05-06
+**Author:** Jon Bowker
+**Linting:** PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`)
 
 ## What Changed
 
@@ -270,10 +268,9 @@ The header should tell the operator to read this README, review parameters or va
 
 ## Validation
 
-Last local validation performed on 2026-05-06:
+Each kept script is validated locally with:
 
-- PowerShell parser check across all kept `.ps1` files.
-- Full PSScriptAnalyzer rule pass with `PSScriptAnalyzerSettings.psd1`.
-- Markdown cleanup with `Code\scripts\fix_md.py`.
-- Stale reference search for old repo-name and staging-folder active-path references.
-- Bash syntax check for lab and pentesting shell scripts with Git Bash.
+- PowerShell parser check across every `.ps1`.
+- Full PSScriptAnalyzer rule pass against `PSScriptAnalyzerSettings.psd1`.
+- Stale-reference search for renamed paths and retired script names.
+- Bash syntax check for the lab and pentesting shell scripts.

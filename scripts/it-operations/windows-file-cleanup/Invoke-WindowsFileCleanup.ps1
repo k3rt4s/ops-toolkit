@@ -2,16 +2,6 @@
 .SYNOPSIS
 Plan and remove Windows temp items or stale files with guardrails and reports.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-  C:\Code\projects\ops-toolkit\scripts\it-operations\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md and IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan/state reports.

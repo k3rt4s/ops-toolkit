@@ -2,15 +2,6 @@
 .SYNOPSIS
 Find stale Active Directory computer accounts, write review reports, and optionally disable or move them.
 
-.NOTES
-AI REVIEWER - READ BEFORE EDITING
-Before changing this file, read:
-  C:\Code\README.md
-  C:\Code\projects\ops-toolkit\README.md
-
-Those files define the repo workflow, script standards, archive rules, and
-validation expectations. Do not guess path conventions or safety behavior.
-
 .INSTRUCTIONS
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.

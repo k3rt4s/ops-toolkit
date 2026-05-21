@@ -1,8 +1,19 @@
 # compare_folders.py
 # General-purpose bidirectional folder comparison tool.
+# Windows-only: st_ctime is file creation time on Windows (not inode change time).
 #
 # BLAKE3-hashes every file in two folder trees using multiprocessing, then
-# produces three CSV reports (only_in_A, only_in_B, shared) plus a summary.
+# produces four output files:
+#   - index_files.csv    : all files from both folders
+#   - only_in_<A>.csv    : files whose hash exists in A but not B
+#   - only_in_<B>.csv    : files whose hash exists in B but not A
+#   - shared.csv         : files whose hash exists in both A and B
+#   - summary.txt        : counts and run metadata
+#
+# Comparison is by BLAKE3 content hash. Two files with identical bytes are
+# "shared" regardless of path or name — this is a content-deduplication view,
+# not a directory-tree diff.
+#
 # An optional second pass computes SHA-256 for additional verification.
 #
 # Output location: C:\Code_data\ops-toolkit\compare_folders\<label-a>_vs_<label-b>_<YYYYMMDD_HHMMSS>\
@@ -18,7 +29,7 @@ import argparse
 import csv
 import hashlib
 import multiprocessing
-import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -77,14 +88,26 @@ def _is_excluded(path_str: str, excluded_prefixes: list[str]) -> bool:
 
 
 def _walk(folder: Path, excluded_prefixes: list[str]) -> list[Path]:
-    """Yield all non-junk files under folder, silently skipping PermissionErrors."""
+    """Return all non-junk files under folder, silently skipping PermissionErrors.
+
+    Streams rglob to avoid materialising very large trees in memory all at once.
+    Individual PermissionError entries are skipped; a PermissionError on the
+    root itself returns an empty list.
+    """
     results: list[Path] = []
     try:
-        entries = list(folder.rglob("*"))
+        it = folder.rglob("*")
     except PermissionError:
         return results
 
-    for entry in entries:
+    while True:
+        try:
+            entry = next(it)
+        except StopIteration:
+            break
+        except PermissionError:
+            continue
+
         try:
             if not entry.is_file():
                 continue
@@ -263,8 +286,15 @@ def main() -> None:
     # Normalise excluded prefixes
     excluded_prefixes = [_normalise(Path(p)) for p in args.exclude]
 
-    label_a: str = args.label_a
-    label_b: str = args.label_b
+    # Sanitize labels: keep alphanumerics, hyphens, underscores only so they
+    # are safe to embed in directory and file names (prevents path traversal
+    # via label values containing "..", ":", "\", etc.)
+    def _safe_label(raw: str) -> str:
+        sanitized = re.sub(r"[^\w\-]", "_", raw)
+        return sanitized or "folder"
+
+    label_a: str = _safe_label(args.label_a)
+    label_b: str = _safe_label(args.label_b)
     workers: int = args.workers
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -311,23 +341,31 @@ def main() -> None:
     all_rows: list[dict] = []
     only_a_rows: list[dict] = []
     only_b_rows: list[dict] = []
+    shared_rows: list[dict] = []
 
     for path, meta in meta_a.items():
         row = _row(label_a, path, meta)
         all_rows.append(row)
-        if meta["blake3"] in only_a_hashes:
+        h = meta["blake3"]
+        if h in only_a_hashes:
             only_a_rows.append(row)
+        elif h in shared_hashes:
+            shared_rows.append(row)
 
     for path, meta in meta_b.items():
         row = _row(label_b, path, meta)
         all_rows.append(row)
-        if meta["blake3"] in only_b_hashes:
+        h = meta["blake3"]
+        if h in only_b_hashes:
             only_b_rows.append(row)
+        elif h in shared_hashes:
+            shared_rows.append(row)
 
     # Write CSVs
     write_csv(run_dir / "index_files.csv", all_rows)
     write_csv(run_dir / f"only_in_{label_a}.csv", only_a_rows)
     write_csv(run_dir / f"only_in_{label_b}.csv", only_b_rows)
+    write_csv(run_dir / "shared.csv", shared_rows)
 
     # Summary
     summary_lines = [
@@ -340,15 +378,16 @@ def main() -> None:
         f"Total files in {label_a} : {len(files_a):,}",
         f"Total files in {label_b} : {len(files_b):,}",
         "",
-        f"Shared hashes (in both)  : {len(shared_hashes):,}",
+        f"Shared hashes (in both)  : {len(shared_hashes):,}  ({len(shared_rows):,} files)",
         f"Only in {label_a:<20}: {len(only_a_hashes):,}  ({len(only_a_rows):,} files)",
         f"Only in {label_b:<20}: {len(only_b_hashes):,}  ({len(only_b_rows):,} files)",
         "",
         "Output files:",
-        f"  index_files.csv",
+        "  index_files.csv",
         f"  only_in_{label_a}.csv",
         f"  only_in_{label_b}.csv",
-        f"  summary.txt",
+        "  shared.csv",
+        "  summary.txt",
     ]
 
     summary_path = run_dir / "summary.txt"

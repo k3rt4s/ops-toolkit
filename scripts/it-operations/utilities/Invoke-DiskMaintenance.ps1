@@ -51,6 +51,13 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+# Preflight: chkdsk /f /r /x and defrag require an elevated process.
+$principal = [System.Security.Principal.WindowsPrincipal] [System.Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Error 'This script must be run as Administrator. Re-launch PowerShell with elevated privileges.'
+    exit 1
+}
+
 $driveLetter = $Drive.ToUpper()
 
 # Verify the drive exists and is a local fixed disk before touching it.

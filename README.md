@@ -222,13 +222,13 @@ python .\scripts\utilities\compare_folders.py --folder-a D:\Source --folder-b E:
 Split a single Thunderbird MBOX file into numbered .eml chunk folders:
 
 ```powershell
-python .\scripts\email\thunderbird\extract_mbox_chunks.py --mbox "C:\Users\Jon\AppData\Roaming\Thunderbird\Profiles\...\Inbox" --output-dir "C:\Code_data\ops-toolkit\thunderbird-extract\Inbox"
+python .\scripts\email\thunderbird\extract_mbox_chunks.py --mbox "$env:APPDATA\Thunderbird\Profiles\<profile>\Mail\Local Folders\Inbox" --output-dir "C:\Code_data\ops-toolkit\thunderbird-extract\Inbox"
 ```
 
 Batch-extract every MBOX in a Thunderbird profile directory:
 
 ```powershell
-python .\scripts\email\thunderbird\extract_all_mboxes.py --source-dir "C:\Users\Jon\AppData\Roaming\Thunderbird\Profiles\...\Mail\Local Folders" --output-root "C:\Code_data\ops-toolkit\thunderbird-extract"
+python .\scripts\email\thunderbird\extract_all_mboxes.py --source-dir "$env:APPDATA\Thunderbird\Profiles\<profile>\Mail\Local Folders" --output-root "C:\Code_data\ops-toolkit\thunderbird-extract"
 ```
 
 Parse .eml files from a thunderbird-extract directory and write structured Parquet files:

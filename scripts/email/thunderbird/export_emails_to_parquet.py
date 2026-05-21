@@ -181,9 +181,8 @@ def export_to_parquet(
         print(f"No .eml files found under: {source_dir}")
         return
 
-    print(f"Found {len(eml_files):,} .eml files — parsing with {workers} workers...")
-
     n_workers = workers if workers else min(16, cpu_count())
+    print(f"Found {len(eml_files):,} .eml files — parsing with {n_workers} workers...")
     batch: list[dict] = []
     part_index = 0
     processed = 0

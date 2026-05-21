@@ -26,8 +26,13 @@ Calls: extract_mbox_chunks.extract_mbox_in_chunks
 
 import argparse
 import os
+import sys
 import traceback
 from pathlib import Path
+
+# Ensure the package directory is on sys.path so the import works regardless
+# of the working directory the caller uses.
+sys.path.insert(0, str(Path(__file__).parent))
 
 from extract_mbox_chunks import extract_mbox_in_chunks
 

@@ -90,7 +90,9 @@ def _is_excluded(path_str: str, excluded_prefixes: list[str]) -> bool:
 def _walk(folder: Path, excluded_prefixes: list[str]) -> list[Path]:
     """Return all non-junk files under folder, silently skipping PermissionErrors.
 
-    Streams rglob to avoid materialising very large trees in memory all at once.
+    Iterates rglob one entry at a time so PermissionError on individual entries
+    can be caught mid-walk. The full list is still materialised so callers can
+    use len() for progress bars before hashing begins.
     Individual PermissionError entries are skipped; a PermissionError on the
     root itself returns an empty list.
     """
@@ -295,7 +297,7 @@ def main() -> None:
 
     label_a: str = _safe_label(args.label_a)
     label_b: str = _safe_label(args.label_b)
-    workers: int = args.workers
+    workers: int = max(1, args.workers)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = OUTPUT_BASE / f"{label_a}_vs_{label_b}_{timestamp}"
@@ -328,6 +330,12 @@ def main() -> None:
             meta_a[path]["sha256"] = digest
         for path, digest in sha_b.items():
             meta_b[path]["sha256"] = digest
+
+    # Count and report hash failures (PermissionError / OSError during hashing)
+    failures_a = sum(1 for meta in meta_a.values() if not meta["blake3"])
+    failures_b = sum(1 for meta in meta_b.values() if not meta["blake3"])
+    if failures_a or failures_b:
+        print(f"Warning: {failures_a} file(s) in {label_a} and {failures_b} file(s) in {label_b} could not be hashed (permission/IO error) — excluded from comparison.")
 
     # Build hash sets for set operations (exclude files that failed to hash)
     hashes_a = {meta["blake3"] for meta in meta_a.values() if meta["blake3"]}
@@ -377,6 +385,8 @@ def main() -> None:
         "",
         f"Total files in {label_a} : {len(files_a):,}",
         f"Total files in {label_b} : {len(files_b):,}",
+        f"Hash failures in {label_a} : {failures_a:,}",
+        f"Hash failures in {label_b} : {failures_b:,}",
         "",
         f"Shared hashes (in both)  : {len(shared_hashes):,}  ({len(shared_rows):,} files)",
         f"Only in {label_a:<20}: {len(only_a_hashes):,}  ({len(only_a_rows):,} files)",

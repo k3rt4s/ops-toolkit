@@ -54,13 +54,15 @@ $ErrorActionPreference = 'Stop'
 $driveLetter = $Drive.ToUpper()
 
 # Verify the drive exists and is a local fixed disk before touching it.
-$volume = Get-Volume -DriveLetter $driveLetter -ErrorAction SilentlyContinue
-if (-not $volume) {
+# Win32_LogicalDisk DriveType 3 = Local Disk. Avoids the Get-Volume DriveType
+# enum inconsistency across PowerShell/OS versions.
+$logicalDisk = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$driveLetter`:'" -ErrorAction SilentlyContinue
+if (-not $logicalDisk) {
     Write-Error "Drive $driveLetter`: not found. Confirm the drive letter is correct and the volume is mounted."
     exit 1
 }
-if ($volume.DriveType -notin @('Fixed')) {
-    Write-Error "Drive $driveLetter`: is type '$($volume.DriveType)'. This script only supports local fixed disks."
+if ($logicalDisk.DriveType -ne 3) {
+    Write-Error "Drive $driveLetter`: has DriveType $($logicalDisk.DriveType) (3 = local fixed). This script only supports local fixed disks."
     exit 1
 }
 

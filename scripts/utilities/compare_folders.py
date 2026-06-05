@@ -11,7 +11,7 @@
 #   - summary.txt        : counts and run metadata
 #
 # Comparison is by BLAKE3 content hash. Two files with identical bytes are
-# "shared" regardless of path or name — this is a content-deduplication view,
+# "shared" regardless of path or name, this is a content-deduplication view,
 # not a directory-tree diff.
 #
 # An optional second pass computes SHA-256 for additional verification.
@@ -127,7 +127,7 @@ def _walk(folder: Path, excluded_prefixes: list[str]) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Hashing — top-level functions so they are picklable for multiprocessing
+# Hashing, top-level functions so they are picklable for multiprocessing
 # ---------------------------------------------------------------------------
 
 

@@ -38,5 +38,5 @@ Example: no-cache
 
 Optional Only
 
-Access-Control-Allow-Origin – CORS is blocked by default
+Access-Control-Allow-Origin, CORS is blocked by default
 Response header indicates whether the response can be shared with requesting code from the given origin.

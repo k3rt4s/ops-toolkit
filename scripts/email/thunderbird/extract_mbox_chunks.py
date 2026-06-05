@@ -1,5 +1,5 @@
 """
-extract_mbox_chunks.py — Stage 1 of the Thunderbird MBOX extraction pipeline.
+extract_mbox_chunks.py, Stage 1 of the Thunderbird MBOX extraction pipeline.
 
 Splits a single MBOX file into individual .eml files stored in numbered chunk
 folders. Designed to handle large archives (10 GB+) without loading everything
@@ -16,8 +16,8 @@ Output layout:
         chunk_0001/msg_001001.eml
         ...
         logs/
-            chunk_log.txt      — progress + timestamps
-            chunk_errors.txt   — tracebacks for individual write failures
+            chunk_log.txt, progress + timestamps
+            chunk_errors.txt, tracebacks for individual write failures
 
 Default output root: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\
     (pass a mailbox-specific subdirectory as --output-dir, e.g.

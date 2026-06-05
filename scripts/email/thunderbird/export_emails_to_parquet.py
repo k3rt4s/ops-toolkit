@@ -1,5 +1,5 @@
 """
-export_emails_to_parquet.py — Stage 3 of the Thunderbird MBOX extraction pipeline.
+export_emails_to_parquet.py, Stage 3 of the Thunderbird MBOX extraction pipeline.
 
 Recursively scans a directory of .eml files (output of Stage 1 or Stage 2),
 parses each message with multiprocessing, and streams structured data to
@@ -18,7 +18,7 @@ Output layout:
         emails_part_0001.parquet
         ...
         logs/
-            parse_errors.txt   — per-file tracebacks for failed messages
+            parse_errors.txt, per-file tracebacks for failed messages
 
 Default output root: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\parquet\\
     (pass as --output-dir)
@@ -46,7 +46,7 @@ from tqdm import tqdm
 
 
 # ---------------------------------------------------------------------------
-# Module-level error log path — set once by main() before spawning workers
+# Module-level error log path, set once by main() before spawning workers
 # ---------------------------------------------------------------------------
 _ERROR_LOG: Path = Path(os.devnull)
 
@@ -116,7 +116,7 @@ def _extract_body(msg: email.message.Message) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Worker function (runs in subprocess — must be module-level for pickling)
+# Worker function (runs in subprocess, must be module-level for pickling)
 # ---------------------------------------------------------------------------
 
 def _parse_eml(file_path: str) -> dict | None:

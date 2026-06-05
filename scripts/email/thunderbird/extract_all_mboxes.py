@@ -1,5 +1,5 @@
 """
-extract_all_mboxes.py — Stage 2 of the Thunderbird MBOX extraction pipeline.
+extract_all_mboxes.py, Stage 2 of the Thunderbird MBOX extraction pipeline.
 
 Recursively walks a Thunderbird profile directory, finds every MBOX file, and
 calls the Stage 1 chunker on each one.  Per-mailbox failures are caught and

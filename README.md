@@ -202,7 +202,7 @@ Preview Windows 11 AppX bloatware removal and write inventory/plan/state reports
 pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
 ```
 
-Preview reclaiming developer and Windows caches (pip cache, Docker build cache, Recycle Bin, WinSxS):
+Preview reclaiming developer and Windows caches (pip cache, Docker build cache and dangling images, Recycle Bin, WinSxS):
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf

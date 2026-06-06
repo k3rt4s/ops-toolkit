@@ -31,8 +31,8 @@ Status: shipped 2026-06-06 (`scripts/it-operations/windows-file-cleanup/Invoke-D
 
 Acceptance criteria:
 
-- Given the script is run with `-WhatIf`, When it executes, Then it writes a plan
-  CSV/JSON and previews every target without deleting anything.
+- Given the script is run with `-WhatIf`, When it executes, Then it writes plan and
+  state CSV/JSON and previews every target without deleting anything.
 - Given a target requires elevation (ComponentStore, WindowsUpdateCache) and the
   shell is not elevated, When the script runs, Then that target is skipped with a
   "requires elevation" result and other targets still run.

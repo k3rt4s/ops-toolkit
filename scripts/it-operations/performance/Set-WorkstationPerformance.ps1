@@ -219,7 +219,7 @@ function Get-RollbackPlan {
                     Category = 'DefenderProcessExclusion'; Setting = $proc; CurrentValue = 'present'
                     DesiredValue = 'absent'; RequiresAdmin = $true; Action = "Remove Defender process exclusion: $proc" }) }
     }
-    , $items
+    $items
 }
 
 # ---------------------------------------------------------------------------
@@ -251,6 +251,7 @@ function Invoke-PlanItem {
             }
             'DefenderProcessExclusion' {
                 if ($Rollback) { Remove-MpPreference -ExclusionProcess $Item.Setting -ErrorAction Stop }
+                elseif ($Item.Setting -match '[\\/:]') { throw "Process exclusion must be a bare process name (e.g. ffmpeg.exe), not a path: $($Item.Setting)" }
                 else { Add-MpPreference -ExclusionProcess $Item.Setting -ErrorAction Stop; [void]$script:AddedProcs.Add($Item.Setting) }
             }
         }

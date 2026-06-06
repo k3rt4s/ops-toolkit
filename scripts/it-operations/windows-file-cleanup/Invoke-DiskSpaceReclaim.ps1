@@ -92,8 +92,13 @@ function Get-FolderSize {
 }
 
 function Get-FreeBytesSystemDrive {
+    # Prefer the Storage module; fall back to CIM on SKUs where Get-Volume is unavailable.
     $sys = ($env:SystemDrive).TrimEnd(':')
-    (Get-Volume -DriveLetter $sys).SizeRemaining
+    try {
+        (Get-Volume -DriveLetter $sys -ErrorAction Stop).SizeRemaining
+    } catch {
+        (Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$env:SystemDrive'").FreeSpace
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -163,7 +168,7 @@ function Get-ReclaimPlanItem {
             $dl = Join-Path $env:windir 'SoftwareDistribution\Download'
             [pscustomobject]@{
                 Target = 'WindowsUpdateCache'; Available = (Test-Path -LiteralPath $dl); RequiresAdmin = $true
-                EstimatedBytes = (Get-FolderSize -Path $dl); Action = 'Stop wuauserv, clear SoftwareDistribution\Download, start wuauserv'
+                EstimatedBytes = (Get-FolderSize -Path $dl); Action = 'Stop wuauserv + bits, clear SoftwareDistribution\Download, restart services'
                 Note = 'Clears cached update downloads. Windows re-downloads pending updates as needed. Requires elevation.'
             }
         }
@@ -212,10 +217,16 @@ function Invoke-ReclaimTarget {
             }
             'ComponentStore' { Dism.exe /Online /Cleanup-Image /StartComponentCleanup | Out-Null }
             'WindowsUpdateCache' {
-                Stop-Service -Name wuauserv -Force -ErrorAction Stop
-                Get-ChildItem -LiteralPath (Join-Path $env:windir 'SoftwareDistribution\Download') -Force -ErrorAction SilentlyContinue |
-                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                Start-Service -Name wuauserv -ErrorAction Stop
+                # Stop both the update and BITS services, clear the cache, and
+                # guarantee the services restart even if deletion throws midway.
+                $updateServices = @('wuauserv', 'bits')
+                try {
+                    foreach ($svc in $updateServices) { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue }
+                    Get-ChildItem -LiteralPath (Join-Path $env:windir 'SoftwareDistribution\Download') -Force -ErrorAction SilentlyContinue |
+                        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                } finally {
+                    foreach ($svc in $updateServices) { Start-Service -Name $svc -ErrorAction SilentlyContinue }
+                }
             }
             'HuggingFaceCache' {
                 $hf = if ($env:HF_HOME) { $env:HF_HOME } else { Join-Path $env:USERPROFILE '.cache\huggingface' }

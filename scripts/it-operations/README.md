@@ -4,12 +4,13 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 ## Contents
 
-| Path                            | Purpose                                 |
-| ------------------------------- | --------------------------------------- |
-| `printers\`                     | Windows printer connection helpers.     |
-| `utilities\`                    | General endpoint and admin utilities.   |
-| `windows-file-cleanup\`         | File and temp-folder cleanup helpers.   |
-| `..\..\data\it-operations\`     | Example non-secret input data.          |
+| Path                            | Purpose                                          |
+| ------------------------------- | ------------------------------------------------ |
+| `performance\`                  | Workstation performance posture helpers.         |
+| `printers\`                     | Windows printer connection helpers.              |
+| `utilities\`                    | General endpoint and admin utilities.            |
+| `windows-file-cleanup\`         | File, temp-folder, and cache reclaim helpers.    |
+| `..\..\data\it-operations\`     | Example non-secret input data.                   |
 
 ## Examples
 
@@ -41,4 +42,22 @@ Show current Windows user and network context:
 
 ```powershell
 pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1 -OutputDirectory .\reports\it-operations\user-context
+```
+
+Preview reclaiming developer and Windows caches (pip, Docker, Recycle Bin, WinSxS):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
+```
+
+Preview setting the workstation performance posture (power plan plus Defender exclusions):
+
+```powershell
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
+```
+
+Roll back the performance posture (restore previous power plan and remove added exclusions):
+
+```powershell
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
 ```

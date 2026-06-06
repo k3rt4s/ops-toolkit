@@ -53,9 +53,10 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\active-directory\`                   | AD reports, exports, and password notification scripts   |
 | `scripts\azure\`                              | Azure PowerShell and Azure CLI automation                |
 | `scripts\iis\`                                | IIS setup and HTTP security header configuration         |
+| `scripts\it-operations\performance\`          | Workstation performance posture (power plan, exclusions) |
 | `scripts\it-operations\printers\`             | Windows printer connection helpers                       |
 | `scripts\it-operations\utilities\`            | General endpoint and admin utilities                     |
-| `scripts\it-operations\windows-file-cleanup\` | File and temp-folder cleanup helpers                     |
+| `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers             |
 | `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline  |
 | `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration         |
 | `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                   |
@@ -201,6 +202,19 @@ Preview Windows 11 AppX bloatware removal and write inventory/plan/state reports
 pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
 ```
 
+Preview reclaiming developer and Windows caches (pip cache, Docker build cache, Recycle Bin, WinSxS):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
+```
+
+Preview setting the workstation performance posture, then roll it back:
+
+```powershell
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+```
+
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
 
 ```powershell
@@ -239,37 +253,39 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 
 ## Updated Scripts
 
-| Script                                                                     | Update                                                                                                                                                                   |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `scripts\azure\Export-AzNetworkInventory.ps1`                              | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.                    |
-| `scripts\azure\Initialize-AzPowerShellSession.ps1`                         | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.                    |
-| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                        | Hardened Windows 11 Azure VPN Client XML import with XML validation, optional profile backup, `-WhatIf`, and plan/state reports.                                         |
-| `scripts\azure\New-AzFileShareMappedDrive.ps1`                             | Hardened Azure Files mapped-drive workflow with map/remove modes, credential cleanup, `-WhatIf`, plan/state reports, and no storage-key report writes.                   |
-| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                         | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.             |
-| `scripts\azure\Set-AzAppGatewayTlsPolicy.ps1`                              | Combined hardened and predefined Application Gateway TLS policy updates with mode selection, `-WhatIf`, plan/state reports, and rollback guidance.                       |
-| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1`  | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.                  |
-| `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                  | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                                   |
-| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`         | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                            |
-| `scripts\active-directory\Export-AdUserInventory.ps1`                      | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                                      |
-| `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                         | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                                       |
-| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                  | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                                        |
-| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                       | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.                                                                           |
-| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                        | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.                                                                   |
-| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                        | Hardened the IIS security header preset with validation, replacement review reports, and summary output.                                                                 |
-| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1`  | Hardened Exchange Online distribution group usage reporting with `Get-MessageTraceV2`, 10-day query windows, continuation keys, CSV/JSON outputs, and summaries.         |
-| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                 | Rebuilt CSV join utility with configurable join columns, case handling, matched/unmatched reports, duplicate-key summaries, and output paths under reports.              |
-| `scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1`         | Combined Windows printer add/remove helpers into one report-first command with data-file input and `-WhatIf`.                                                            |
-| `scripts\it-operations\utilities\Get-CurrentUserContext.ps1`               | Rebuilt current-user context reporting with optional group expansion and JSON/CSV outputs.                                                                               |
-| `scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` | Combined temp cleanup and stale-file cleanup with guarded paths, plan/state reports, and `-WhatIf`.                                                                      |
-| `scripts\pentesting\Install-AutoReconDependencies.sh`                      | Rebuilt AutoRecon lab installer with `--dry-run`, package-group switches, Debian-family guardrails, pipx install flow, and safer shell behavior.                         |
-| `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1`            | Renamed and rebuilt Schannel TLS hardening with `-WhatIf`, plan reports, registry backups, and summaries.                                                                |
-| `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1`              | Renamed and rebuilt Windows 11 privacy/AI hardening with `-WhatIf`, rollback, plan/state reports, registry backups, and summaries.                                       |
-| `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1`     | Rebuilt Windows 11 AppX bloatware removal with clean data lists, `-WhatIf`, rollback guidance, inventory/plan/state reports, and protected package enforcement.          |
-| `scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1`               | New script consolidating chkdsk, cipher free-space wipe, defrag/optimize, and a 10 MB write/read benchmark into one parameterised command with individual skip switches. |
-| `scripts\utilities\compare_folders.py`                                     | New bidirectional BLAKE3 folder comparison with multiprocessing, four CSV/text output sets, and an optional SHA-256 verification pass.                                   |
-| `scripts\email\thunderbird\extract_mbox_chunks.py`                         | New Stage 1 of the Thunderbird pipeline: splits a single MBOX into numbered .eml chunk folders with per-run progress and error logs.                                     |
-| `scripts\email\thunderbird\extract_all_mboxes.py`                          | New Stage 2 of the Thunderbird pipeline: batch wrapper that walks a Thunderbird profile directory and calls the Stage 1 chunker on every MBOX found.                     |
-| `scripts\email\thunderbird\export_emails_to_parquet.py`                    | New Stage 3 of the Thunderbird pipeline: parses .eml files with multiprocessing and streams structured data to batched Parquet files.                                    |
+| Script                                                                     | Update                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts\azure\Export-AzNetworkInventory.ps1`                              | Expanded reporting-only Azure network inventory for NSGs, rules, VNets, subnets, NICs, public IPs, optional VMs, CSV/JSON exports, and run summaries.                                                                    |
+| `scripts\azure\Initialize-AzPowerShellSession.ps1`                         | Hardened Az session bootstrap with explicit tenant/subscription/environment options, optional module install, context selection, and session reports.                                                                    |
+| `scripts\azure\Import-AzureVpnClientXmlProfile.ps1`                        | Hardened Windows 11 Azure VPN Client XML import with XML validation, optional profile backup, `-WhatIf`, and plan/state reports.                                                                                         |
+| `scripts\azure\New-AzFileShareMappedDrive.ps1`                             | Hardened Azure Files mapped-drive workflow with map/remove modes, credential cleanup, `-WhatIf`, plan/state reports, and no storage-key report writes.                                                                   |
+| `scripts\azure\New-AzKeyVaultServicePrincipal.ps1`                         | Rebuilt Key Vault service-principal creation with Az cmdlets, reuse mode, `-WhatIf`, plan/state reports, rollback guidance, and no secret writes to reports.                                                             |
+| `scripts\azure\Set-AzAppGatewayTlsPolicy.ps1`                              | Combined hardened and predefined Application Gateway TLS policy updates with mode selection, `-WhatIf`, plan/state reports, and rollback guidance.                                                                       |
+| `scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1`  | Rebuilt stale-computer disable/move workflow with explicit action modes, plan/state/rollback reports, scoped AD filters, optional email, and `-WhatIf`.                                                                  |
+| `scripts\active-directory\Send-AdSecurityEmailReport.ps1`                  | Combined privileged-group and password-never-expires AD security reports with HTML/CSV/JSON output and optional email.                                                                                                   |
+| `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1`         | Rebuilt password-expiry reminders with HTML/CSV/JSON output, email plan/state reports, `-WhatIf`, and explicit send switches.                                                                                            |
+| `scripts\active-directory\Export-AdUserInventory.ps1`                      | Combined AD user attribute and distinguished-name exports into one report-driven inventory command.                                                                                                                      |
+| `scripts\active-directory\Set-AdUserUpnSuffix.ps1`                         | Combined mailbox-enabled and OU-scoped AD user UPN suffix updates with `-WhatIf`, plan/state reports, and explicit scope controls.                                                                                       |
+| `scripts\iis\Set-IisSiteCustomHeader.ps1`                                  | Renamed and hardened single-site IIS custom header updates with safer preview and summary output.                                                                                                                        |
+| `scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1`                       | Renamed and hardened all-site IIS custom header updates with safer preview and summary output.                                                                                                                           |
+| `scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1`                        | Renamed and hardened IIS site-default custom log field updates with duplicate detection and summaries.                                                                                                                   |
+| `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1`                        | Hardened the IIS security header preset with validation, replacement review reports, and summary output.                                                                                                                 |
+| `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1`  | Hardened Exchange Online distribution group usage reporting with `Get-MessageTraceV2`, 10-day query windows, continuation keys, CSV/JSON outputs, and summaries.                                                         |
+| `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                 | Rebuilt CSV join utility with configurable join columns, case handling, matched/unmatched reports, duplicate-key summaries, and output paths under reports.                                                              |
+| `scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1`         | Combined Windows printer add/remove helpers into one report-first command with data-file input and `-WhatIf`.                                                                                                            |
+| `scripts\it-operations\utilities\Get-CurrentUserContext.ps1`               | Rebuilt current-user context reporting with optional group expansion and JSON/CSV outputs.                                                                                                                               |
+| `scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` | Combined temp cleanup and stale-file cleanup with guarded paths, plan/state reports, and `-WhatIf`.                                                                                                                      |
+| `scripts\pentesting\Install-AutoReconDependencies.sh`                      | Rebuilt AutoRecon lab installer with `--dry-run`, package-group switches, Debian-family guardrails, pipx install flow, and safer shell behavior.                                                                         |
+| `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1`            | Renamed and rebuilt Schannel TLS hardening with `-WhatIf`, plan reports, registry backups, and summaries.                                                                                                                |
+| `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1`              | Renamed and rebuilt Windows 11 privacy/AI hardening with `-WhatIf`, rollback, plan/state reports, registry backups, and summaries.                                                                                       |
+| `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1`     | Rebuilt Windows 11 AppX bloatware removal with clean data lists, `-WhatIf`, rollback guidance, inventory/plan/state reports, and protected package enforcement.                                                          |
+| `scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1`               | New script consolidating chkdsk, cipher free-space wipe, defrag/optimize, and a 10 MB write/read benchmark into one parameterised command with individual skip switches.                                                 |
+| `scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1`   | New script reclaiming pip cache, Docker build cache and dangling images, Recycle Bin, WinSxS component store, and optional Windows Update cache, with `-WhatIf`, target selection, admin gating, and plan/state reports. |
+| `scripts\it-operations\performance\Set-WorkstationPerformance.ps1`         | New script setting workstation performance posture (Ultimate/High Performance power plan plus opt-in Defender path/process exclusions) with `-WhatIf`, `-Rollback`, admin gating, and plan/state/rollback reports.       |
+| `scripts\utilities\compare_folders.py`                                     | New bidirectional BLAKE3 folder comparison with multiprocessing, four CSV/text output sets, and an optional SHA-256 verification pass.                                                                                   |
+| `scripts\email\thunderbird\extract_mbox_chunks.py`                         | New Stage 1 of the Thunderbird pipeline: splits a single MBOX into numbered .eml chunk folders with per-run progress and error logs.                                                                                     |
+| `scripts\email\thunderbird\extract_all_mboxes.py`                          | New Stage 2 of the Thunderbird pipeline: batch wrapper that walks a Thunderbird profile directory and calls the Stage 1 chunker on every MBOX found.                                                                     |
+| `scripts\email\thunderbird\export_emails_to_parquet.py`                    | New Stage 3 of the Thunderbird pipeline: parses .eml files with multiprocessing and streams structured data to batched Parquet files.                                                                                    |
 
 ## Modernized Legacy Scripts
 

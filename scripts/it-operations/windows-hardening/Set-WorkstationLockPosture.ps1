@@ -172,11 +172,12 @@ function Get-ForwardPlan {
                 DesiredValue = "$timeoutSecs"
                 Action = if ($curTimeout -eq "$timeoutSecs") { "No change (timeout already $IdleTimeoutMinutes min)" } else { "Set screensaver timeout to $IdleTimeoutMinutes minutes ($timeoutSecs seconds)" }
             })
+        $ssExe = Join-Path $env:SystemRoot 'System32\scrnsave.scr'
         $items.Add([pscustomobject]@{
                 Category = 'ScreensaverExe'; Setting = 'SCRNSAVE.EXE'; RequiresAdmin = $false
                 CurrentValue = if ($null -ne $curExe) { $curExe } else { 'absent' }
-                DesiredValue = 'scrnsave.scr'
-                Action = if ($curExe -eq 'scrnsave.scr') { 'No change (blank screensaver already set)' } else { 'Set screensaver to blank (scrnsave.scr)' }
+                DesiredValue = $ssExe
+                Action = if ($curExe -eq $ssExe) { 'No change (blank screensaver already set)' } else { "Set screensaver to blank ($ssExe)" }
             })
     }
 
@@ -256,6 +257,9 @@ function Invoke-PlanItem {
                 if ("$($Item.DesiredValue)" -eq 'absent') {
                     Remove-ItemProperty -Path $script:PolicyRegPath -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue
                 } else {
+                    if (-not (Test-Path -LiteralPath $script:PolicyRegPath)) {
+                        New-Item -Path $script:PolicyRegPath -Force | Out-Null
+                    }
                     Set-ItemProperty -Path $script:PolicyRegPath -Name InactivityTimeoutSecs -Value ([int]$Item.DesiredValue) -Type DWord -Force
                 }
             }

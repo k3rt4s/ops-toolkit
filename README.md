@@ -57,6 +57,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\it-operations\printers\`             | Windows printer connection helpers                       |
 | `scripts\it-operations\utilities\`            | General endpoint and admin utilities                     |
 | `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers             |
+| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock and sleep posture helpers          |
 | `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline  |
 | `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration         |
 | `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                   |
@@ -215,6 +216,19 @@ pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -W
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
 ```
 
+Preview the workstation idle-lock and sleep posture (10-minute screensaver lock, never sleep on AC):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
+```
+
+Apply the lock posture and roll it back:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+```
+
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
 
 ```powershell
@@ -282,6 +296,7 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 | `scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1`               | New script consolidating chkdsk, cipher free-space wipe, defrag/optimize, and a 10 MB write/read benchmark into one parameterised command with individual skip switches.                                                 |
 | `scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1`   | New script reclaiming pip cache, Docker build cache and dangling images, Recycle Bin, WinSxS component store, and optional Windows Update cache, with `-WhatIf`, target selection, admin gating, and plan/state reports. |
 | `scripts\it-operations\performance\Set-WorkstationPerformance.ps1`         | New script setting workstation performance posture (Ultimate/High Performance power plan plus opt-in Defender path/process exclusions) with `-WhatIf`, `-Rollback`, admin gating, and plan/state/rollback reports.       |
+| `scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1`   | New script setting workstation idle-lock and sleep posture (never sleep/hibernate on AC, screensaver lock) with `-WhatIf`, `-Rollback`, optional elevated ConsoleLock and machine-wide inactivity lock.                  |
 | `scripts\utilities\compare_folders.py`                                     | New bidirectional BLAKE3 folder comparison with multiprocessing, four CSV/text output sets, and an optional SHA-256 verification pass.                                                                                   |
 | `scripts\email\thunderbird\extract_mbox_chunks.py`                         | New Stage 1 of the Thunderbird pipeline: splits a single MBOX into numbered .eml chunk folders with per-run progress and error logs.                                                                                     |
 | `scripts\email\thunderbird\extract_all_mboxes.py`                          | New Stage 2 of the Thunderbird pipeline: batch wrapper that walks a Thunderbird profile directory and calls the Stage 1 chunker on every MBOX found.                                                                     |

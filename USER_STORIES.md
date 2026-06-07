@@ -60,6 +60,29 @@ Acceptance criteria:
 - Given a later `-Rollback`, When it runs, Then it restores the previous power scheme
   and removes only the exclusions this script added, leaving pre-existing exclusions intact.
 
+## Epic: Workstation security posture
+
+### Story: Lock the workstation on idle without disabling overnight jobs
+
+As a security-conscious operator, I want the workstation to lock after a configurable idle
+timeout while staying awake to run overnight pipelines, so that the screen locks if I step away
+without interrupting builds, encodes, or transcription runs.
+
+Status: shipped 2026-06-07 (`scripts/it-operations/windows-hardening/Set-WorkstationLockPosture.ps1`)
+
+Acceptance criteria:
+
+- Given the script is run with `-WhatIf`, When it executes, Then it writes plan and state
+  CSV/JSON and previews every change without modifying any setting.
+- Given a live forward run, When it completes, Then AC sleep and hibernate are set to Never,
+  the screensaver is enabled with a password-protected timeout at the requested interval, and
+  a rollback JSON is written capturing every prior value.
+- Given a later `-Rollback`, When it runs, Then every changed setting is restored to its
+  captured prior value and no other settings are touched.
+- Given elevation-only settings (-EnableConsoleLock, -EnableMachineWideLock), When the shell is
+  not elevated, Then those settings are skipped with a "requires elevation" result and all
+  non-elevated settings still apply.
+
 ### Story: Keep antivirus changes safe and reversible
 
 As a security-conscious operator, I want any Defender exclusion to be explicit,

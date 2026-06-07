@@ -10,6 +10,7 @@ This folder contains active endpoint and general IT operations scripts for the o
 | `printers\`                     | Windows printer connection helpers.              |
 | `utilities\`                    | General endpoint and admin utilities.            |
 | `windows-file-cleanup\`         | File, temp-folder, and cache reclaim helpers.    |
+| `windows-hardening\`            | Workstation idle-lock and sleep posture helpers. |
 | `..\..\data\it-operations\`     | Example non-secret input data.                   |
 
 ## Examples
@@ -60,4 +61,22 @@ Roll back the performance posture (restore previous power plan and remove added 
 
 ```powershell
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+```
+
+Preview applying the workstation idle-lock and sleep posture (10-minute screensaver lock, never sleep on AC):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
+```
+
+Apply the lock posture with the optional power-scheme password-on-wake flag (elevated):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock
+```
+
+Roll back the lock posture:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
 ```

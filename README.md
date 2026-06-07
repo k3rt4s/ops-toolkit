@@ -229,6 +229,27 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
 ```
 
+The above (no elevation) sets AC sleep to Never, enables a 10-minute password-protected screensaver,
+and records a rollback JSON. Two optional belt-and-suspenders controls require an elevated shell:
+
+- `-EnableConsoleLock` sets the power-scheme "require password on wake" flag (AC + DC) via `powercfg`.
+- `-EnableMachineWideLock` writes `InactivityTimeoutSecs` to `HKLM:\...\Policies\System`, enforcing
+  the lock machine-wide via Group Policy registry regardless of per-user screensaver settings.
+
+Apply both elevated controls and the Defender exclusion from an elevated shell:
+
+```powershell
+# Elevated shell — right-click > Run as Administrator
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock -EnableMachineWideLock
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
+```
+
+> **Folder note:** this repo has two `windows-hardening` folders that cover different scopes.
+> `scripts\windows-hardening\` contains system-level hardening (TLS cipher policy, Windows 11
+> privacy/telemetry, AppX bloatware removal) and is typically run once at build or provisioning time.
+> `scripts\it-operations\windows-hardening\` contains operator posture scripts (idle-lock, sleep)
+> that are run and rolled back as workload needs change.
+
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
 
 ```powershell

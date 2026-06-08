@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-Plan, apply, and roll back workstation idle-lock and sleep posture for security.
+Plan, apply, and roll back workstation idle-lock and sleep posture for security and performance.
 
 .INSTRUCTIONS
 - Run with -WhatIf first and review the generated plan CSV/JSON.
@@ -13,11 +13,18 @@ Plan, apply, and roll back workstation idle-lock and sleep posture for security.
 .PURPOSE
 Puts a workstation into a secure idle posture: never sleep or hibernate on AC power, require a
 password after a configurable screensaver timeout, and optionally enforce a power-scheme
-password-on-wake flag and a machine-wide inactivity lock via Group Policy registry. Designed for
-a workstation left running overnight (builds, encodes, pipelines) that must lock if the operator
-steps away. Every change is recorded in a rollback JSON so the posture can be precisely reversed
-with -Rollback. The screensaver lock and AC sleep settings require no elevation; the optional
-ConsoleLock and machine-wide policy settings require an elevated shell.
+password-on-wake flag and a machine-wide inactivity lock via Group Policy registry.
+
+MODERN STANDBY NOTE: This laptop uses S0 Low Power Idle (Connected Standby), not traditional S3
+sleep. On S0 systems the standby-timeout-ac setting has no effect because S3 is unavailable.
+S0 is triggered instead by the display powering off (monitor-timeout-ac). This script therefore
+sets monitor-timeout-ac to Never (0) on AC so the power manager does not signal "display off"
+and S0 is never triggered while on AC power. The screensaver still blanks and locks the screen
+visually because it is driven by HKCU registry settings, not the power plan.
+
+Every change is recorded in a rollback JSON so the posture can be precisely reversed with
+-Rollback. Non-elevated settings (sleep, monitor, screensaver) apply without admin rights.
+The optional ConsoleLock and machine-wide policy settings require an elevated shell.
 
 .REQUIRED SYNTAX
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
@@ -45,6 +52,11 @@ param(
     [Parameter()]
     [switch]$SkipSleepHibernate,
 
+    # On Modern Standby (S0) systems, setting monitor-timeout-ac to 0 prevents
+    # S0 from triggering while on AC. Pass this switch to leave it unchanged.
+    [Parameter()]
+    [switch]$SkipMonitorTimeout,
+
     [Parameter()]
     [switch]$EnableConsoleLock,
 
@@ -68,7 +80,7 @@ $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new
 
 function Show-Usage {
     Write-Output @'
-Set workstation idle-lock and sleep posture for security.
+Set workstation idle-lock and sleep posture for security and performance.
 
 Usage:
   pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
@@ -81,6 +93,8 @@ Options:
   -IdleTimeoutMinutes      Screensaver timeout in minutes (1-120). Default: 10.
   -SkipScreensaverLock     Do not change screensaver lock settings.
   -SkipSleepHibernate      Do not change AC sleep/hibernate settings.
+  -SkipMonitorTimeout      Do not set monitor-timeout-ac to Never. By default this script sets it
+                           to 0 (Never) on AC to prevent S0 Low Power Idle on Modern Standby laptops.
   -EnableConsoleLock       Set the power-scheme password-on-wake flag for AC+DC (requires elevation).
   -EnableMachineWideLock   Set machine-wide inactivity lock via HKLM policy (requires elevation).
   -ReportDirectory         Plan, state, and rollback output directory.
@@ -100,7 +114,10 @@ function Get-DesktopRegValue {
     (Get-ItemProperty -Path $script:DesktopRegPath -Name $Name -ErrorAction SilentlyContinue).$Name
 }
 
-function Get-PowercfgAcValue {
+# Query a power setting for the active AC scheme and return the value in minutes.
+# powercfg /query returns seconds; powercfg /change accepts minutes. Storing in minutes
+# throughout means rollback can pass the value straight back to powercfg /change.
+function Get-PowercfgAcMinute {
     param(
         [Parameter(Mandatory = $true)][string]$SubGroup,
         [Parameter(Mandatory = $true)][string]$Setting
@@ -108,7 +125,8 @@ function Get-PowercfgAcValue {
     $lines = (powercfg /query SCHEME_CURRENT $SubGroup $Setting) 2>$null
     foreach ($l in $lines) {
         if ($l -match 'Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)') {
-            return [Convert]::ToInt64($matches[1], 16)
+            $seconds = [Convert]::ToInt64($matches[1], 16)
+            return [int][math]::Round($seconds / 60)
         }
     }
     $null
@@ -123,6 +141,7 @@ function Get-ForwardPlan {
         [Parameter(Mandatory = $true)][int]$IdleTimeoutMinutes,
         [switch]$SkipScreensaverLock,
         [switch]$SkipSleepHibernate,
+        [switch]$SkipMonitorTimeout,
         [switch]$EnableConsoleLock,
         [switch]$EnableMachineWideLock
     )
@@ -131,20 +150,30 @@ function Get-ForwardPlan {
     $timeoutSecs = $IdleTimeoutMinutes * 60
 
     if (-not $SkipSleepHibernate) {
-        $curSleep = Get-PowercfgAcValue -SubGroup 'SUB_SLEEP' -Setting 'STANDBYIDLE'
-        $curHibernate = Get-PowercfgAcValue -SubGroup 'SUB_SLEEP' -Setting 'HIBERNATEIDLE'
+        $curSleepMin = Get-PowercfgAcMinute -SubGroup 'SUB_SLEEP' -Setting 'STANDBYIDLE'
+        $curHibMin = Get-PowercfgAcMinute -SubGroup 'SUB_SLEEP' -Setting 'HIBERNATEIDLE'
 
         $items.Add([pscustomobject]@{
-                Category = 'AcSleep'; Setting = 'STANDBYIDLE'; RequiresAdmin = $false
-                CurrentValue = if ($null -ne $curSleep) { $curSleep } else { 'unknown' }
+                Category = 'AcSleep'; Setting = 'standby-timeout-ac'; RequiresAdmin = $false
+                CurrentValue = if ($null -ne $curSleepMin) { $curSleepMin } else { 'unknown' }
                 DesiredValue = 0
-                Action = if ($curSleep -eq 0) { 'No change (already 0 — never sleep on AC)' } else { 'Set AC sleep to Never (0 seconds)' }
+                Action = if ($curSleepMin -eq 0) { 'No change (standby-timeout-ac already 0 — Never)' } else { 'Set standby-timeout-ac to Never (0 min) on AC' }
             })
         $items.Add([pscustomobject]@{
-                Category = 'AcHibernate'; Setting = 'HIBERNATEIDLE'; RequiresAdmin = $false
-                CurrentValue = if ($null -ne $curHibernate) { $curHibernate } else { 'unknown' }
+                Category = 'AcHibernate'; Setting = 'hibernate-timeout-ac'; RequiresAdmin = $false
+                CurrentValue = if ($null -ne $curHibMin) { $curHibMin } else { 'unknown' }
                 DesiredValue = 0
-                Action = if ($curHibernate -eq 0) { 'No change (already 0 — never hibernate on AC)' } else { 'Set AC hibernate to Never (0 seconds)' }
+                Action = if ($curHibMin -eq 0) { 'No change (hibernate-timeout-ac already 0 — Never)' } else { 'Set hibernate-timeout-ac to Never (0 min) on AC' }
+            })
+    }
+
+    if (-not $SkipMonitorTimeout) {
+        $curMonMin = Get-PowercfgAcMinute -SubGroup 'SUB_VIDEO' -Setting 'VIDEOIDLE'
+        $items.Add([pscustomobject]@{
+                Category = 'AcMonitor'; Setting = 'monitor-timeout-ac'; RequiresAdmin = $false
+                CurrentValue = if ($null -ne $curMonMin) { $curMonMin } else { 'unknown' }
+                DesiredValue = 0
+                Action = if ($curMonMin -eq 0) { 'No change (monitor-timeout-ac already 0 — Never)' } else { 'Set monitor-timeout-ac to Never (0 min) on AC — prevents S0 Low Power Idle on Modern Standby' }
             })
     }
 
@@ -241,12 +270,15 @@ function Invoke-PlanItem {
     try {
         switch ($Item.Category) {
             'AcSleep' {
-                powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP STANDBYIDLE $Item.DesiredValue | Out-Null
-                powercfg /setactive SCHEME_CURRENT | Out-Null
+                # /change takes minutes; DesiredValue is stored in minutes throughout.
+                powercfg /change standby-timeout-ac $Item.DesiredValue | Out-Null
             }
             'AcHibernate' {
-                powercfg /setacvalueindex SCHEME_CURRENT SUB_SLEEP HIBERNATEIDLE $Item.DesiredValue | Out-Null
-                powercfg /setactive SCHEME_CURRENT | Out-Null
+                powercfg /change hibernate-timeout-ac $Item.DesiredValue | Out-Null
+            }
+            'AcMonitor' {
+                # Setting to 0 (Never) prevents S0 Low Power Idle on Modern Standby.
+                powercfg /change monitor-timeout-ac $Item.DesiredValue | Out-Null
             }
             'ConsoleLock' {
                 powercfg /setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK $Item.DesiredValue | Out-Null
@@ -298,6 +330,7 @@ $plan = @(if ($Rollback) {
     } else {
         Get-ForwardPlan -IdleTimeoutMinutes $IdleTimeoutMinutes `
             -SkipScreensaverLock:$SkipScreensaverLock -SkipSleepHibernate:$SkipSleepHibernate `
+            -SkipMonitorTimeout:$SkipMonitorTimeout `
             -EnableConsoleLock:$EnableConsoleLock -EnableMachineWideLock:$EnableMachineWideLock
     })
 

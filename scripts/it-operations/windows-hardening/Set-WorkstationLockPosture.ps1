@@ -126,7 +126,7 @@ function Get-PowercfgAcMinute {
     foreach ($l in $lines) {
         if ($l -match 'Current AC Power Setting Index:\s*0x([0-9a-fA-F]+)') {
             $seconds = [Convert]::ToInt64($matches[1], 16)
-            return [int][math]::Round($seconds / 60)
+            return [int][math]::Floor($seconds / 60)
         }
     }
     $null

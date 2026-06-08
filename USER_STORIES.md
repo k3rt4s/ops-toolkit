@@ -74,9 +74,12 @@ Acceptance criteria:
 
 - Given the script is run with `-WhatIf`, When it executes, Then it writes plan and state
   CSV/JSON and previews every change without modifying any setting.
-- Given a live forward run, When it completes, Then AC sleep and hibernate are set to Never,
-  the screensaver is enabled with a password-protected timeout at the requested interval, and
-  a rollback JSON is written capturing every prior value.
+- Given a live forward run, When it completes, Then AC sleep, hibernate, and display
+  power-off (monitor-timeout-ac) are set to Never, the screensaver is enabled with a
+  password-protected timeout at the requested interval, and a rollback JSON is written
+  capturing every prior value. Setting monitor-timeout-ac to Never prevents S0 Low Power
+  Idle on Modern Standby systems where S0 is triggered by the display powering off, not
+  by the standby timer. The screensaver still blanks and locks the screen visually.
 - Given a later `-Rollback`, When it runs, Then every changed setting is restored to its
   captured prior value and no other settings are touched.
 - Given elevation-only settings (-EnableConsoleLock, -EnableMachineWideLock), When the shell is

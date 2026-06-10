@@ -92,7 +92,7 @@ def scan_drive(root_path, out_file):
                         total_files += 1
                         
                         try:
-                            file_stat = entry.stat()
+                            file_stat = entry.stat(follow_symlinks=False)
                             size = file_stat.st_size
                             total_size += size
                             

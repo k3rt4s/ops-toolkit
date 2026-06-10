@@ -64,7 +64,9 @@ python .\scripts\it-operations\windows-file-cleanup\Analyze-C.py --root C:\
 
 This is a high-impact administrator operation. It is dry-run-only unless
 `-Execute` is supplied, supports `-WhatIf`/`-Confirm`, snapshots every page-file
-setting, restores them in `finally`, and validates the restored names.
+setting, restores them in `finally`, and validates the restored names and sizes.
+Run from an elevated PowerShell session. Windows may require a reboot before
+page-file configuration changes fully take effect.
 
 ```powershell
 pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1

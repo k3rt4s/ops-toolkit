@@ -21,7 +21,7 @@ $CurrentAutomatic = $ComputerSystem.AutomaticManagedPagefile
 # Snapshot every configured page file before changing anything.
 $PageSettings = @(Get-CimInstance Win32_PageFileSetting)
 if ($PageSettings.Count -eq 0) {
-    Write-Warning "No active page file detected or already managed dynamically by OS."
+    Write-Warning "No Win32_PageFileSetting rows exist. AutomaticManagedPagefile=$CurrentAutomatic. No changes made."
     Exit 0
 }
 
@@ -48,13 +48,19 @@ try {
 }
 finally {
     Write-Host "Restoring original page-file configuration..." -ForegroundColor Green
-    $ExistingNames = @(
-        Get-CimInstance Win32_PageFileSetting | ForEach-Object { $_.Name }
-    )
     foreach ($Setting in $OriginalSettings) {
-        if ($Setting.Name -notin $ExistingNames) {
+        $Existing = Get-CimInstance Win32_PageFileSetting | Where-Object { $_.Name -eq $Setting.Name }
+        if ($null -eq $Existing) {
             New-CimInstance -ClassName Win32_PageFileSetting -Property @{
                 Name = $Setting.Name
+                InitialSize = $Setting.InitialSize
+                MaximumSize = $Setting.MaximumSize
+            }
+        } elseif (
+            $Existing.InitialSize -ne $Setting.InitialSize -or
+            $Existing.MaximumSize -ne $Setting.MaximumSize
+        ) {
+            Set-CimInstance -InputObject $Existing -Property @{
                 InitialSize = $Setting.InitialSize
                 MaximumSize = $Setting.MaximumSize
             }

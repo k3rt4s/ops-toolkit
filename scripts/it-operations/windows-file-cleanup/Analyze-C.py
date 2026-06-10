@@ -7,6 +7,7 @@ Streams C: drive metrics directly to a file to prevent memory exhaustion.
 
 import os
 import argparse
+import ctypes
 import stat
 import subprocess
 import sys
@@ -44,7 +45,10 @@ def _is_reparse(entry):
     try:
         attrs = entry.stat(follow_symlinks=False).st_file_attributes
     except (AttributeError, OSError):
-        return entry.is_symlink()
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(entry.path))
+        if attrs == 0xFFFFFFFF:
+            return True
+        return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
     return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
@@ -139,6 +143,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         parser.error("Analyze-C.py is Windows-only")
+    if len(str(args.root)) == 2 and str(args.root).endswith(":"):
+        parser.error("drive roots must include a trailing slash, for example C:\\")
     target_drive = str(args.root.resolve())
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     

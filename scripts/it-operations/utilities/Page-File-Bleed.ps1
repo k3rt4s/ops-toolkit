@@ -79,11 +79,11 @@ finally {
             }
         }
     )
-    if ($RestoreProblems.Count -gt 0) {
-        throw "Page-file restore validation failed for: $($RestoreProblems -join ', ')"
-    }
     Set-CimInstance -Query "Select * from Win32_ComputerSystem" -Property @{
         AutomaticManagedPagefile = $CurrentAutomatic
+    }
+    if ($RestoreProblems.Count -gt 0) {
+        throw "Page-file restore validation failed for: $($RestoreProblems -join ', ')"
     }
 }
 

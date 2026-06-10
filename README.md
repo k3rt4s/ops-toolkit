@@ -5,6 +5,19 @@ Hardened operations and security administration scripts for Active Directory, Az
 **Author:** Jon Bowker
 **Linting:** PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`)
 
+## Contents
+
+<!-- BEGIN CONTENTS (auto-generated, do not edit by hand) -->
+
+- [archive/](archive/README.md): Retired scripts and supporting files kept for historical reference inside the ops-toolkit repo.
+- [data/](data/README.md): Non-secret, version-controlled input files used by ops-toolkit scripts as reference data.
+- [docs/](docs/README.md): Reference material, lab guides, diagrams, and review notes for the ops-toolkit.
+- [scripts/](scripts/README.md): Runnable automation lives under this folder, grouped by platform or operational domain.
+- [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)
+- [USER_STORIES.md](USER_STORIES.md): User-value master for the ops-toolkit scripts.
+
+<!-- END CONTENTS -->
+
 ## What Changed
 
 This repo was reviewed and reorganized in place. Files remain inside the ops-toolkit repo; retired material is kept under `archive\` with a documented reason instead of being deleted.
@@ -46,7 +59,7 @@ The current retire-now items are:
 
 See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/retire rationale and sources.
 
-## Contents
+## Script and Data Inventory
 
 | Path                                          | Purpose                                                  |
 | --------------------------------------------- | -------------------------------------------------------- |

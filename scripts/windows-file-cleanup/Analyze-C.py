@@ -1,0 +1,164 @@
+r"""
+Analyze-C.py
+
+An optimized, memory-safe, and crash-resistant storage inventory scanner.
+Streams C: drive metrics directly to a file to prevent memory exhaustion.
+"""
+
+import os
+import argparse
+from pathlib import Path
+from datetime import datetime
+from collections import Counter
+
+# Aggressive System & Environment Exclusions
+EXCLUDE_DIRS = {
+    "$recycle.bin", "system volume information", "windows", "programdata",
+    "appdata", ".git", ".venv", "venv", "__pycache__", ".pytest_cache",
+    ".mypy_cache", "node_modules", ".vscode", ".idea"
+}
+
+EXCLUDE_FILES = {
+    "pagefile.sys", "hiberfil.sys", "swapfile.sys", ".ds_store", "thumbs.db"
+}
+
+def _fmt_size(bytes_val):
+    if bytes_val < 1024: return f"{bytes_val}B"
+    if bytes_val < 1048576: return f"{bytes_val / 1024:.1f}KB"
+    if bytes_val < 1073741824: return f"{bytes_val / 1048576:.1f}MB"
+    return f"{bytes_val / 1073741824:.1f}GB"
+
+def _fmt_time(timestamp):
+    try: return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+    except Exception: return "Unknown"
+
+def scan_drive(root_path, out_file):
+    total_files = 0
+    total_dirs = 0
+    total_size = 0
+    file_types = Counter()
+    largest_files = []
+
+    print(f"[INFO] Scanning {root_path}. Streaming data directly to file...")
+    
+    # Write the ledger header immediately
+    out_file.write("\n## Detailed Inventory Ledger\n")
+    out_file.write("| Type | Path | Size | Created | Modified | Last Accessed |\n")
+    out_file.write("| --- | --- | --- | --- | --- | --- |\n")
+
+    # Manual iterative stack instead of rglob to handle permissions & symlinks safely
+    stack = [root_path]
+
+    while stack:
+        current_dir = stack.pop()
+        try:
+            with os.scandir(current_dir) as it:
+                for entry in it:
+                    # Skip Windows Symlinks / Junction points to prevent infinite loops
+                    try:
+                        if entry.is_symlink() or (hasattr(entry, 'is_junction') and entry.is_junction()):
+                            continue
+                    except Exception:
+                        continue
+
+                    name_lower = entry.name.lower()
+                    
+                    if entry.is_dir(follow_symlinks=False):
+                        if name_lower in EXCLUDE_DIRS:
+                            continue
+                        total_dirs += 1
+                        out_file.write(f"| DIR | `{entry.path}` | - | - | - | - |\n")
+                        stack.append(entry.path)
+                        
+                    elif entry.is_file(follow_symlinks=False):
+                        if name_lower in EXCLUDE_FILES or name_lower.startswith("~$"):
+                            continue
+                        total_files += 1
+                        
+                        try:
+                            stat = entry.stat()
+                            size = stat.st_size
+                            total_size += size
+                            
+                            # File extension tracking
+                            ext = os.path.splitext(name_lower)[1]
+                            ext = ext if ext else "no_ext"
+                            file_types[ext] += 1
+                            
+                            # Track potential large files for the summary header
+                            if len(largest_files) < 20 or size > largest_files[0][0]:
+                                largest_files.append((size, entry.path))
+                                largest_files.sort(key=lambda x: x[0])
+                                if len(largest_files) > 20:
+                                    largest_files.pop(0)
+
+                            # Stream row immediately to disk
+                            out_file.write(
+                                f"| FILE | `{entry.path}` | {_fmt_size(size)} | "
+                                f"{_fmt_time(stat.st_ctime)} | {_fmt_time(stat.st_mtime)} | "
+                                f"{_fmt_time(stat.st_atime)} |\n"
+                            )
+                        except (PermissionError, FileNotFoundError):
+                            continue
+        except (PermissionError, FileNotFoundError):
+            continue
+
+    return total_files, total_dirs, total_size, file_types, reversed(largest_files)
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Stream a junction-safe drive inventory to Code_data."
+    )
+    parser.add_argument("--root", type=Path, default=Path("C:/"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(r"C:\Code_data\ops-toolkit\windows-file-cleanup\reports"),
+    )
+    args = parser.parse_args(argv)
+    target_drive = str(args.root)
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Setup safe output structure
+    output_dir = os.path.abspath(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    temp_ledger_path = os.path.join(output_dir, f"temp_ledger_{run_stamp}.md")
+    final_report_path = os.path.join(output_dir, f"c_drive_inventory_{run_stamp}.md")
+
+    # Phase 1: Stream detailed ledger rows to a temp file
+    with open(temp_ledger_path, "w", encoding="utf-8") as temp_file:
+        t_files, t_dirs, t_size, types, heavy_files = scan_drive(target_drive, temp_file)
+
+    # Phase 2: Compile front-matter metadata summary
+    print("[INFO] Writing summary report...")
+    with open(final_report_path, "w", encoding="utf-8") as final_file:
+        final_file.write(f"# Drive Analytics & Storage Inventory: {target_drive}\n")
+        final_file.write(f"- **Run Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        final_file.write("## Summary Metrics\n")
+        final_file.write(f"- **Scanned Directories:** {t_dirs:,}\n")
+        final_file.write(f"- **Scanned Files:** {t_files:,}\n")
+        final_file.write(f"- **Total Non-System Footprint:** {_fmt_size(t_size)}\n\n")
+        
+        final_file.write("## Top 15 File Extensions By Count\n")
+        final_file.write("| Extension | Count |\n| --- | --- |\n")
+        for ext, count in types.most_common(15):
+            final_file.write(f"| `{ext}` | {count:,} |\n")
+            
+        final_file.write("\n## Top 20 Largest Files (Candidates for immediate Cleanup)\n")
+        final_file.write("| Size | Path |\n| --- | --- |\n")
+        for size, path in heavy_files:
+            final_file.write(f"| {_fmt_size(size)} | `{path}` |\n")
+
+        # Phase 3: Stitch the ledger rows underneath the summaries
+        with open(temp_ledger_path, "r", encoding="utf-8") as temp_file:
+            for line in temp_file:
+                final_file.write(line)
+
+    # Clean up temporary streaming file
+    os.remove(temp_ledger_path)
+    print(f"\n[DONE] Successfully generated: {final_report_path}")
+
+if __name__ == "__main__":
+    main()

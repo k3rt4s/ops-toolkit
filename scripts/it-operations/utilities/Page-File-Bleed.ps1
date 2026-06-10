@@ -60,15 +60,30 @@ finally {
             }
         }
     }
+    $RestoredBeforeAutomatic = @(Get-CimInstance Win32_PageFileSetting)
+    $RestoreProblems = @(
+        foreach ($Setting in $OriginalSettings) {
+            $Actual = $RestoredBeforeAutomatic | Where-Object { $_.Name -eq $Setting.Name }
+            if (
+                $null -eq $Actual -or
+                $Actual.InitialSize -ne $Setting.InitialSize -or
+                $Actual.MaximumSize -ne $Setting.MaximumSize
+            ) {
+                $Setting.Name
+            }
+        }
+    )
+    if ($RestoreProblems.Count -gt 0) {
+        throw "Page-file restore validation failed for: $($RestoreProblems -join ', ')"
+    }
     Set-CimInstance -Query "Select * from Win32_ComputerSystem" -Property @{
         AutomaticManagedPagefile = $CurrentAutomatic
     }
 }
 
-$Restored = @(Get-CimInstance Win32_PageFileSetting)
-$Missing = @($OriginalSettings | Where-Object { $_.Name -notin $Restored.Name })
-if ($Missing.Count -gt 0) {
-    Write-Error "Page-file restore validation failed. Missing: $($Missing.Name -join ', ')."
+$RestoredAutomatic = (Get-CimInstance Win32_ComputerSystem).AutomaticManagedPagefile
+if ($RestoredAutomatic -ne $CurrentAutomatic) {
+    Write-Error "AutomaticManagedPagefile restore validation failed."
     Exit 1
 }
 Write-Host "Operation complete. Page-file configuration restored and validated." -ForegroundColor Cyan

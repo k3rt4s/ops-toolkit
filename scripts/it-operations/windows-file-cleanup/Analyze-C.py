@@ -8,6 +8,7 @@ Streams C: drive metrics directly to a file to prevent memory exhaustion.
 import os
 import argparse
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -91,8 +92,8 @@ def scan_drive(root_path, out_file):
                         total_files += 1
                         
                         try:
-                            stat = entry.stat()
-                            size = stat.st_size
+                            file_stat = entry.stat()
+                            size = file_stat.st_size
                             total_size += size
                             
                             # File extension tracking
@@ -110,8 +111,8 @@ def scan_drive(root_path, out_file):
                             # Stream row immediately to disk
                             out_file.write(
                                 f"| FILE | `{_md(entry.path)}` | {_fmt_size(size)} | "
-                                f"{_fmt_time(stat.st_ctime)} | {_fmt_time(stat.st_mtime)} | "
-                                f"{_fmt_time(stat.st_atime)} |\n"
+                                f"{_fmt_time(file_stat.st_ctime)} | {_fmt_time(file_stat.st_mtime)} | "
+                                f"{_fmt_time(file_stat.st_atime)} |\n"
                             )
                         except (PermissionError, FileNotFoundError):
                             continue
@@ -138,11 +139,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if sys.platform != "win32":
         parser.error("Analyze-C.py is Windows-only")
-    target_drive = str(args.root)
+    target_drive = str(args.root.resolve())
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Setup safe output structure
     output_dir = os.path.abspath(args.output_dir)
+    code_root = os.path.normcase(os.path.abspath(r"C:\Code"))
+    try:
+        under_code = os.path.commonpath((os.path.normcase(output_dir), code_root)) == code_root
+    except ValueError:
+        under_code = False
+    if under_code:
+        parser.error(f"refusing generated inventory under source tree: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     
     temp_ledger_path = os.path.join(output_dir, f"temp_ledger_{run_stamp}.md")
@@ -180,6 +188,17 @@ def main(argv=None):
 
     # Clean up temporary streaming file
     os.remove(temp_ledger_path)
+    notindexed = Path(r"C:\Code\scripts\set_notindexed.ps1")
+    if notindexed.exists():
+        subprocess.run(
+            [
+                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(notindexed), "-Path", final_report_path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     print(f"\n[DONE] Successfully generated: {final_report_path}")
 
 if __name__ == "__main__":

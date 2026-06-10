@@ -51,6 +51,26 @@ Preview reclaiming developer and Windows caches (pip, Docker, Recycle Bin, WinSx
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
 ```
 
+## Inventory a Windows drive
+
+Writes a junction-safe, detailed path inventory under `C:\Code_data` by
+default. The report contains sensitive full paths, so `--root` is required.
+
+```powershell
+python .\scripts\it-operations\windows-file-cleanup\Analyze-C.py --root C:\
+```
+
+## Temporarily cycle page-file configuration
+
+This is a high-impact administrator operation. It is dry-run-only unless
+`-Execute` is supplied, supports `-WhatIf`/`-Confirm`, snapshots every page-file
+setting, restores them in `finally`, and validates the restored names.
+
+```powershell
+pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1
+pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1 -Execute -WhatIf
+```
+
 Preview setting the workstation performance posture (power plan plus Defender exclusions):
 
 ```powershell

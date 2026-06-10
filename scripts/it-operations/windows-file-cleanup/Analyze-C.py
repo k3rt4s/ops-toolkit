@@ -7,6 +7,8 @@ Streams C: drive metrics directly to a file to prevent memory exhaustion.
 
 import os
 import argparse
+import stat
+import sys
 from pathlib import Path
 from datetime import datetime
 from collections import Counter
@@ -32,6 +34,19 @@ def _fmt_time(timestamp):
     try: return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
     except Exception: return "Unknown"
 
+
+def _md(value):
+    return str(value).replace("|", "\\|").replace("`", "\\`")
+
+
+def _is_reparse(entry):
+    try:
+        attrs = entry.stat(follow_symlinks=False).st_file_attributes
+    except (AttributeError, OSError):
+        return entry.is_symlink()
+    return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def scan_drive(root_path, out_file):
     total_files = 0
     total_dirs = 0
@@ -56,7 +71,7 @@ def scan_drive(root_path, out_file):
                 for entry in it:
                     # Skip Windows Symlinks / Junction points to prevent infinite loops
                     try:
-                        if entry.is_symlink() or (hasattr(entry, 'is_junction') and entry.is_junction()):
+                        if _is_reparse(entry):
                             continue
                     except Exception:
                         continue
@@ -67,7 +82,7 @@ def scan_drive(root_path, out_file):
                         if name_lower in EXCLUDE_DIRS:
                             continue
                         total_dirs += 1
-                        out_file.write(f"| DIR | `{entry.path}` | - | - | - | - |\n")
+                        out_file.write(f"| DIR | `{_md(entry.path)}` | - | - | - | - |\n")
                         stack.append(entry.path)
                         
                     elif entry.is_file(follow_symlinks=False):
@@ -94,7 +109,7 @@ def scan_drive(root_path, out_file):
 
                             # Stream row immediately to disk
                             out_file.write(
-                                f"| FILE | `{entry.path}` | {_fmt_size(size)} | "
+                                f"| FILE | `{_md(entry.path)}` | {_fmt_size(size)} | "
                                 f"{_fmt_time(stat.st_ctime)} | {_fmt_time(stat.st_mtime)} | "
                                 f"{_fmt_time(stat.st_atime)} |\n"
                             )
@@ -109,13 +124,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Stream a junction-safe drive inventory to Code_data."
     )
-    parser.add_argument("--root", type=Path, default=Path("C:/"))
+    parser.add_argument(
+        "--root",
+        type=Path,
+        required=True,
+        help="Root to inventory. The report contains sensitive full paths.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path(r"C:\Code_data\ops-toolkit\windows-file-cleanup\reports"),
     )
     args = parser.parse_args(argv)
+    if sys.platform != "win32":
+        parser.error("Analyze-C.py is Windows-only")
     target_drive = str(args.root)
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -149,7 +171,7 @@ def main(argv=None):
         final_file.write("\n## Top 20 Largest Files (Candidates for immediate Cleanup)\n")
         final_file.write("| Size | Path |\n| --- | --- |\n")
         for size, path in heavy_files:
-            final_file.write(f"| {_fmt_size(size)} | `{path}` |\n")
+            final_file.write(f"| {_fmt_size(size)} | `{_md(path)}` |\n")
 
         # Phase 3: Stitch the ledger rows underneath the summaries
         with open(temp_ledger_path, "r", encoding="utf-8") as temp_file:

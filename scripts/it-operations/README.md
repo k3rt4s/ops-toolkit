@@ -6,6 +6,7 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 | Path                            | Purpose                                          |
 | ------------------------------- | ------------------------------------------------ |
+| `networking\`                   | Network adapter MAC address helpers.             |
 | `performance\`                  | Workstation performance posture helpers.         |
 | `printers\`                     | Windows printer connection helpers.              |
 | `utilities\`                    | General endpoint and admin utilities.            |
@@ -14,6 +15,18 @@ This folder contains active endpoint and general IT operations scripts for the o
 | `..\..\data\it-operations\`     | Example non-secret input data.                   |
 
 ## Examples
+
+Preview randomizing the MAC address of every physical adapter:
+
+```powershell
+pwsh -File .\scripts\it-operations\networking\Set-NetworkAdapterRandomMac.ps1 -WhatIf
+```
+
+Restore the hardware MAC on a single adapter:
+
+```powershell
+pwsh -File .\scripts\it-operations\networking\Set-NetworkAdapterRandomMac.ps1 -Name "Wi-Fi" -Rollback
+```
 
 Preview adding printer connections from a text file:
 

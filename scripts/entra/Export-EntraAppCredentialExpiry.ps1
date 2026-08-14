@@ -4,11 +4,17 @@ Export Microsoft Entra ID app registration and service principal credential expi
 
 .INSTRUCTIONS
 - Read the root README.md before running this script.
-- Requires Microsoft.Graph.Authentication and Microsoft.Graph.Applications.
-  -IncludeSignInUsage additionally requires Microsoft.Graph.Reports.
+- Requires Microsoft.Graph.Authentication and Microsoft.Graph.Applications. No
+  extra module is needed for -IncludeSignInUsage: it calls the beta signIns
+  endpoint directly through Invoke-MgGraphRequest, because the credential key ID
+  and the app-only sign-in filter it depends on do not exist on the v1.0 signIn
+  resource.
 - Use -Connect when the shell is not already connected to Microsoft Graph.
-  Delegated scopes needed: Application.Read.All, plus Directory.Read.All for
-  -IncludeOwners and AuditLog.Read.All for -IncludeSignInUsage.
+  Delegated scopes requested: Application.Read.All, plus Directory.Read.All for
+  -IncludeOwners and AuditLog.Read.All for -IncludeSignInUsage. Owners can be
+  users, groups, or other service principals, which is why owner resolution asks
+  for directory read rather than something narrower. Override the whole set with
+  -GraphScope when your tenant grants something tighter.
 - Sign-in log access through Graph requires Microsoft Entra ID P1 or P2. Without it
   the usage columns report Unavailable and the rest of the report still completes.
 - This script never changes anything and never writes a secret value to a report.
@@ -58,6 +64,14 @@ param(
     [Parameter()]
     [ValidateRange(1, 30)]
     [int]$SignInLookbackDays = 30,
+
+    [Parameter()]
+    [ValidateRange(100, 500000)]
+    [int]$MaxSignInRecord = 50000,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$GraphScope,
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -231,11 +245,51 @@ function Get-OwnerSummary {
     Join-ReportValue (@($names) | Where-Object { $_ })
 }
 
+function Get-HashtableValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [object]$InputObject,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Key
+    )
+
+    if ($InputObject -is [System.Collections.IDictionary] -and $InputObject.Contains($Key)) {
+        return $InputObject[$Key]
+    }
+
+    Get-PropertyValue -InputObject $InputObject -Name $Key
+}
+
+function Add-LatestSignIn {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Map,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Key,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]$Occurred
+    )
+
+    if (-not $Map.ContainsKey($Key) -or $Map[$Key] -lt $Occurred) {
+        $Map[$Key] = $Occurred
+    }
+}
+
 function Get-ServicePrincipalSignInUsage {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateRange(1, 30)]
-        [int]$LookbackDays
+        [int]$LookbackDays,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateRange(100, 500000)]
+        [int]$MaxSignInRecord
     )
 
     $result = [pscustomobject]@{
@@ -243,42 +297,60 @@ function Get-ServicePrincipalSignInUsage {
         Error = ''
         LookbackStart = (Get-Date).ToUniversalTime().AddDays(-$LookbackDays)
         SignInCount = 0
+        Truncated = $false
         ByCredential = @{}
         ByApplication = @{}
     }
 
     try {
-        Import-Module Microsoft.Graph.Reports -ErrorAction Stop
-        Assert-GraphCommand -CommandName 'Get-MgAuditLogSignIn'
+        Assert-GraphCommand -CommandName 'Invoke-MgGraphRequest'
 
+        # The credential-to-sign-in match needs servicePrincipalCredentialKeyId, and the
+        # signInEventTypes filter that isolates app-only sign-ins. Neither exists on the
+        # v1.0 signIn resource, so this goes straight at the beta endpoint rather than
+        # through Get-MgAuditLogSignIn, which would silently return no key IDs at all
+        # and report every live credential as unused.
         $filterStart = $result.LookbackStart.ToString('yyyy-MM-ddTHH:mm:ssZ')
         $filter = "signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge $filterStart"
-        $signIns = @(Get-MgAuditLogSignIn -Filter $filter -All -ErrorAction Stop)
+        $select = 'id,createdDateTime,appId,appDisplayName,servicePrincipalId,servicePrincipalCredentialKeyId'
+        $encodedFilter = [uri]::EscapeDataString($filter)
+        $encodedSelect = [uri]::EscapeDataString($select)
+        $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=$encodedFilter&`$select=$encodedSelect&`$top=1000"
 
-        foreach ($signIn in $signIns) {
-            $createdAt = Get-PropertyValue -InputObject $signIn -Name 'CreatedDateTime'
-            if ($null -eq $createdAt) {
-                continue
-            }
+        while ($uri) {
+            $response = Invoke-MgGraphRequest -Method GET -Uri $uri -OutputType Hashtable -ErrorAction Stop
+            $page = @(Get-HashtableValue -InputObject $response -Key 'value')
 
-            $appId = Join-ReportValue (Get-PropertyValue -InputObject $signIn -Name 'AppId')
-            $keyId = Join-ReportValue (Get-PropertyValue -InputObject $signIn -Name 'ServicePrincipalCredentialKeyId')
+            foreach ($signIn in $page) {
+                $rawCreated = Get-HashtableValue -InputObject $signIn -Key 'createdDateTime'
+                if ($null -eq $rawCreated) {
+                    continue
+                }
 
-            if ($appId) {
-                if (-not $result.ByApplication.ContainsKey($appId) -or $result.ByApplication[$appId] -lt $createdAt) {
-                    $result.ByApplication[$appId] = $createdAt
+                $occurred = ([datetime]$rawCreated).ToUniversalTime()
+                $appId = Join-ReportValue (Get-HashtableValue -InputObject $signIn -Key 'appId')
+                $keyId = Join-ReportValue (Get-HashtableValue -InputObject $signIn -Key 'servicePrincipalCredentialKeyId')
+
+                if ($appId) {
+                    Add-LatestSignIn -Map $result.ByApplication -Key $appId -Occurred $occurred
+                }
+
+                if ($appId -and $keyId) {
+                    Add-LatestSignIn -Map $result.ByCredential -Key "$appId|$keyId" -Occurred $occurred
                 }
             }
 
-            if ($appId -and $keyId) {
-                $credentialKey = "$appId|$keyId"
-                if (-not $result.ByCredential.ContainsKey($credentialKey) -or $result.ByCredential[$credentialKey] -lt $createdAt) {
-                    $result.ByCredential[$credentialKey] = $createdAt
-                }
+            $result.SignInCount += $page.Count
+
+            if ($result.SignInCount -ge $MaxSignInRecord) {
+                $result.Truncated = $true
+                Write-Warning "Stopped reading sign-ins at the $MaxSignInRecord record cap. Usage columns may understate activity. Raise -MaxSignInRecord or shorten -SignInLookbackDays."
+                break
             }
+
+            $uri = Join-ReportValue (Get-HashtableValue -InputObject $response -Key '@odata.nextLink')
         }
 
-        $result.SignInCount = @($signIns).Count
         $result.Available = $true
     } catch {
         $result.Error = $_.Exception.Message
@@ -432,12 +504,18 @@ if ($Connect) {
     Assert-GraphCommand -CommandName 'Connect-MgGraph'
 
     $scopes = [System.Collections.Generic.List[string]]::new()
-    $scopes.Add('Application.Read.All')
-    if ($IncludeOwners) {
-        $scopes.Add('Directory.Read.All')
-    }
-    if ($IncludeSignInUsage) {
-        $scopes.Add('AuditLog.Read.All')
+    if ($GraphScope) {
+        foreach ($scope in $GraphScope) {
+            $scopes.Add($scope)
+        }
+    } else {
+        $scopes.Add('Application.Read.All')
+        if ($IncludeOwners) {
+            $scopes.Add('Directory.Read.All')
+        }
+        if ($IncludeSignInUsage) {
+            $scopes.Add('AuditLog.Read.All')
+        }
     }
 
     $connectParameters = @{ Scopes = $scopes.ToArray() }
@@ -449,8 +527,8 @@ if ($Connect) {
     }
 
     Connect-MgGraph @connectParameters | Out-Null
-} elseif ($TenantId -or $UseDeviceCode) {
-    throw 'TenantId and UseDeviceCode apply only to a new connection. Add -Connect, or drop them and reuse the current Microsoft Graph session.'
+} elseif ($TenantId -or $UseDeviceCode -or $GraphScope) {
+    throw 'TenantId, UseDeviceCode, and GraphScope apply only to a new connection. Add -Connect, or drop them and reuse the current Microsoft Graph session.'
 }
 
 Assert-GraphCommand -CommandName 'Get-MgApplication'
@@ -467,7 +545,7 @@ $asOfUtc = (Get-Date).ToUniversalTime()
 $usage = $null
 if ($IncludeSignInUsage) {
     Write-Verbose "Reading service principal sign-ins for the last $SignInLookbackDays days."
-    $usage = Get-ServicePrincipalSignInUsage -LookbackDays $SignInLookbackDays
+    $usage = Get-ServicePrincipalSignInUsage -LookbackDays $SignInLookbackDays -MaxSignInRecord $MaxSignInRecord
 }
 
 $credentialRecords = [System.Collections.Generic.List[object]]::new()
@@ -475,6 +553,9 @@ $objectsWithoutCredentials = [System.Collections.Generic.List[object]]::new()
 
 if ($IncludeOwners) {
     Assert-GraphCommand -CommandName 'Get-MgApplicationOwner'
+    if ($IncludeServicePrincipals) {
+        Assert-GraphCommand -CommandName 'Get-MgServicePrincipalOwner'
+    }
 }
 
 Write-Verbose 'Reading Entra ID app registrations.'
@@ -522,12 +603,21 @@ if ($IncludeServicePrincipals) {
         $passwordCredentials = @(Get-PropertyValue -InputObject $servicePrincipal -Name 'PasswordCredentials' | Where-Object { $null -ne $_ })
         $keyCredentials = @(Get-PropertyValue -InputObject $servicePrincipal -Name 'KeyCredentials' | Where-Object { $null -ne $_ })
 
+        if ($passwordCredentials.Count -eq 0 -and $keyCredentials.Count -eq 0) {
+            continue
+        }
+
+        $ownerSummary = ''
+        if ($IncludeOwners) {
+            $ownerSummary = Get-OwnerSummary -Owner @(Get-MgServicePrincipalOwner -ServicePrincipalId $servicePrincipal.Id -All)
+        }
+
         foreach ($credential in $passwordCredentials) {
-            $credentialRecords.Add((Get-CredentialRecord -ObjectType 'ServicePrincipal' -DirectoryObject $servicePrincipal -KeyEntry $credential -KeyEntryType 'ClientSecret' -AsOfUtc $asOfUtc -ExpiringWithinDays $ExpiringWithinDays -RecommendedSecretLifetimeDays $RecommendedSecretLifetimeDays -Usage $usage))
+            $credentialRecords.Add((Get-CredentialRecord -ObjectType 'ServicePrincipal' -DirectoryObject $servicePrincipal -KeyEntry $credential -KeyEntryType 'ClientSecret' -AsOfUtc $asOfUtc -ExpiringWithinDays $ExpiringWithinDays -RecommendedSecretLifetimeDays $RecommendedSecretLifetimeDays -Usage $usage -OwnerSummary $ownerSummary))
         }
 
         foreach ($credential in $keyCredentials) {
-            $credentialRecords.Add((Get-CredentialRecord -ObjectType 'ServicePrincipal' -DirectoryObject $servicePrincipal -KeyEntry $credential -KeyEntryType 'Certificate' -AsOfUtc $asOfUtc -ExpiringWithinDays $ExpiringWithinDays -RecommendedSecretLifetimeDays $RecommendedSecretLifetimeDays -Usage $usage))
+            $credentialRecords.Add((Get-CredentialRecord -ObjectType 'ServicePrincipal' -DirectoryObject $servicePrincipal -KeyEntry $credential -KeyEntryType 'Certificate' -AsOfUtc $asOfUtc -ExpiringWithinDays $ExpiringWithinDays -RecommendedSecretLifetimeDays $RecommendedSecretLifetimeDays -Usage $usage -OwnerSummary $ownerSummary))
         }
     }
 }
@@ -562,6 +652,7 @@ $summary = [pscustomobject]@{
     SignInUsageAvailable = if ($null -eq $usage) { $false } else { [bool]$usage.Available }
     SignInLookbackDays = if ($IncludeSignInUsage) { $SignInLookbackDays } else { $null }
     SignInRecordsRead = if ($null -eq $usage) { 0 } else { $usage.SignInCount }
+    SignInRecordsTruncated = if ($null -eq $usage) { $false } else { [bool]$usage.Truncated }
     SignInUsageError = if ($null -eq $usage) { '' } else { $usage.Error }
     ExpiringAndInUseCount = @($needsAttention | Where-Object { $_.SignInStatus -eq 'InUse' }).Count
     ExpiringAndUnusedCount = @($needsAttention | Where-Object { $_.SignInStatus -eq 'NoRecentSignIn' }).Count

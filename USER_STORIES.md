@@ -103,6 +103,51 @@ Acceptance criteria:
 - Given exclusions were added by a forward run, When `-Rollback` runs, Then exactly
   those exclusions are removed.
 
+## Epic: Identity credential hygiene
+
+### Story: Find expiring Entra ID credentials before they cause an outage
+
+As an IT administrator, I want a dated report of every Entra ID app registration and
+service principal secret and certificate with its days to expiry, so that a credential
+is renewed on a schedule instead of being discovered when the integration it
+authenticates stops working.
+
+Status: shipped 2026-08-14 (`scripts/entra/Export-EntraAppCredentialExpiry.ps1`)
+
+Acceptance criteria:
+
+- Given a connected Graph session, When the script runs, Then it writes a full
+  credential CSV/JSON, an attention-only subset, a per-application rollup, and a
+  summary, and changes nothing in the tenant.
+- Given a credential with no end date, When it is exported, Then its status is
+  Unknown and its days to expiry is empty rather than a misleading number.
+- Given any credential, When it is exported, Then no secret value appears in any
+  output file. Only key IDs, certificate thumbprints, dates, and display names do.
+- Given `-RecommendedSecretLifetimeDays`, When credentials are classified, Then only
+  client secrets are flagged for over-long lifetime, because certificates
+  legitimately run one to two years.
+
+### Story: Know whether an expiring credential is actually still used
+
+As a security-conscious operator, I want each expiring credential matched against
+recent service principal sign-ins, so that I renew what is live and remove what is
+dead instead of rotating every credential defensively.
+
+Status: shipped 2026-08-14 (`scripts/entra/Export-EntraAppCredentialExpiry.ps1 -IncludeSignInUsage`)
+
+Acceptance criteria:
+
+- Given `-IncludeSignInUsage`, When a credential key ID appears in the sign-in
+  window, Then it is reported InUse with its last sign-in time.
+- Given the application signed in on a different credential, When the report is
+  written, Then the credential is reported AppActiveOnOtherCredential rather than
+  unused, so a live app is never mistaken for a dead one.
+- Given the tenant lacks the licence or the scope for sign-in log access, When the
+  lookup fails, Then the usage columns report Unavailable, a warning names the
+  reason, and the expiry report still completes.
+- Given `-IncludeSignInUsage` is not passed, When the report is written, Then usage
+  columns read NotChecked rather than implying the credential is unused.
+
 ## Cross-references
 
 - Per-script usage: comment-based help in each `.ps1` (`Get-Help <script> -Full`).

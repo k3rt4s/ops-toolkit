@@ -37,10 +37,12 @@ ops-toolkit\
 ├── archive\                 Retired legacy scripts and supporting files
 ├── data\                    Package lists and non-secret script input data
 ├── docs\                    Labs, diagrams, review notes, and reference material
+├── modules\                 Shared PowerShell modules imported by relative path
 ├── reports\                 Generated script output, ignored by git
 ├── scripts\                 Runnable automation grouped by platform/domain
 ├── .editorconfig
 ├── .gitignore
+├── Invoke-RepoValidation.ps1  Repository validation suite
 ├── PSScriptAnalyzerSettings.psd1
 └── README.md
 ```
@@ -81,6 +83,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `data\windows-hardening\`                     | Bloatware allow/remove package lists                     |
 | `docs\labs\`                                  | Azure and ELK lab materials                              |
 | `docs\iis\`                                   | IIS header notes                                         |
+| `modules\OpsToolkit.Reporting\`               | Shared report-writing helpers imported by scripts        |
 | `archive\`                                    | Retired material retained inside the ops-toolkit repo    |
 
 ## Examples
@@ -420,9 +423,22 @@ Any script whose synopsis comes back as its own filename followed by a parameter
 
 ## Validation
 
-Each kept script is validated locally with:
+Run the suite before every commit that touches a script, and before any push:
 
-- PowerShell parser check across every `.ps1`.
+```powershell
+pwsh -File .\Invoke-RepoValidation.ps1
+pwsh -File .\Invoke-RepoValidation.ps1 -Strict -OutputDirectory .\reports\validation
+```
+
+It runs six gates:
+
+- Parser check across every `.ps1` and `.psm1`.
 - Full PSScriptAnalyzer rule pass against `PSScriptAnalyzerSettings.psd1`.
-- Stale-reference search for renamed paths and retired script names.
+- Comment-based help check, because a non-standard keyword silently disables
+  `Get-Help` and nothing else catches it.
 - Bash syntax check for the lab and pentesting shell scripts.
+- Stale-reference search: every script path named in a Markdown file must exist.
+- Module manifest check: every manifest loads and exports what it declares.
+
+Exit code 0 means the gates passed, 1 means a gate failed, 2 means a required tool
+is missing. Analyzer warnings do not fail the run unless `-Strict` is used.

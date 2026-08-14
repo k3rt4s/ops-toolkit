@@ -79,6 +79,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline           |
 | `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration                  |
 | `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                            |
+| `scripts\reporting\`                          | Evidence packs assembled from the read-only collectors            |
 | `scripts\utilities\`                          | General utilities, CSV comparison, and folder diff tools          |
 | `scripts\windows-hardening\`                  | Windows telemetry, bloatware, and cipher hardening                |
 | `data\it-operations\printers\`                | Example non-secret printer input files                            |
@@ -100,6 +101,18 @@ Audit AD for privilege and delegation misconfigurations (read-only, no changes):
 
 ```powershell
 pwsh -File .\scripts\active-directory\Export-AdPrivilegedAccessAudit.ps1 -Server dc01.example.com
+```
+
+Report who can take over a privileged object or replicate the directory:
+
+```powershell
+pwsh -File .\scripts\active-directory\Export-AdAclRiskReport.ps1 -Server dc01.example.com
+```
+
+Find clients that still bind without LDAP signing before enforcement breaks them:
+
+```powershell
+pwsh -File .\scripts\active-directory\Test-LdapSigningReadiness.ps1 -ComputerName dc01,dc02 -LookbackDays 14
 ```
 
 Generate an AD security report without sending email:
@@ -148,6 +161,24 @@ Preview applying a hardened Application Gateway TLS policy:
 
 ```powershell
 pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyMode CustomHardened -WhatIf
+```
+
+Assemble a dated evidence pack answering the control questions insurers and assessors ask:
+
+```powershell
+pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -Organization "Example Ltd" -IncludeEntra -IncludeActiveDirectory
+```
+
+Find users who still depend on SMS or voice before Microsoft stops delivering them:
+
+```powershell
+pwsh -File .\scripts\entra\Export-EntraAuthMethodReadiness.ps1 -Connect
+```
+
+Export Conditional Access policies and compare them against a saved baseline:
+
+```powershell
+pwsh -File .\scripts\entra\Export-EntraConditionalAccessBaseline.ps1 -Connect -BaselinePath .\ca-baseline.json
 ```
 
 Report Entra ID app registration secrets and certificates that have expired or expire soon:

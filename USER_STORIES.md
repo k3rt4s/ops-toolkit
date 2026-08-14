@@ -148,6 +148,31 @@ Acceptance criteria:
 - Given `-IncludeSignInUsage` is not passed, When the report is written, Then usage
   columns read NotChecked rather than implying the credential is unused.
 
+## Epic: Deprecation readiness
+
+### Story: Find retired Microsoft APIs before their cutoff arrives
+
+As an IT administrator, I want one pass over a script share that lists every call to
+a Microsoft module or API with a published retirement date, ordered by how soon it
+bites, so that I work the nearest cutoff first instead of finding out when an
+overnight job stops authenticating.
+
+Status: shipped 2026-08-14 (`scripts/utilities/Find-LegacyApiUsage.ps1`)
+
+Acceptance criteria:
+
+- Given a folder tree, When the scan runs, Then each finding carries the file, line
+  number, matched text, deadline, why the deadline exists, and the replacement.
+- Given a finding sits on a commented line, When it is reported, Then it is flagged
+  as a comment rather than silently dropped or silently counted as live code.
+- Given a modern replacement in the same file family (`Get-MessageTraceV2`,
+  `Connect-ExchangeOnline -CertificateThumbprint`, `Get-AzVM`, `Connect-MgGraph`),
+  When the scan runs, Then it produces no finding for that line.
+- Given the scanner is inside the tree being scanned, When it runs, Then its own
+  rule table is not reported as findings unless `-IncludeSelf` is passed.
+- Given `-Path` is not supplied, When the script runs, Then it prints usage and exits
+  with code 2 rather than prompting.
+
 ## Cross-references
 
 - Per-script usage: comment-based help in each `.ps1` (`Get-Help <script> -Full`).

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan and update Active Directory user UPN suffixes with scoped reporting.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.
 - Always run with -WhatIf first and review the generated plan/state reports.
@@ -10,12 +11,12 @@ Plan and update Active Directory user UPN suffixes with scoped reporting.
 - Use -MailboxEnabledOnly to limit updates to users with homeMDB populated.
 - Generated reports are written under reports\active-directory by default.
 
-.PURPOSE
+Purpose:
 This script replaces the separate mailbox-enabled and OU-scoped UPN suffix
 update helpers with one report-first command. It can preserve the existing UPN
 local part or rebuild the UPN from SamAccountName.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\active-directory\Set-AdUserUpnSuffix.ps1 -SearchBase "OU=Users,DC=example,DC=com" -OldSuffix old.example.com -NewSuffix example.com -WhatIf
 pwsh -File .\scripts\active-directory\Set-AdUserUpnSuffix.ps1 -SearchBase "OU=Users,DC=example,DC=com" -NewSuffix example.com -MailboxEnabledOnly -LocalPartSource SamAccountName -WhatIf
 
@@ -23,7 +24,8 @@ pwsh -File .\scripts\active-directory\Set-AdUserUpnSuffix.ps1 -SearchBase "OU=Us
 Writes plan and state CSV/JSON files under reports\active-directory by default.
 Returns a summary object with report paths and update counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo. Replaces
 Set-AdMailboxEnabledUserUpnSuffix.ps1 and Set-AdOuUserUpnSuffix.ps1.
 #>

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Export Microsoft Entra ID app registration and service principal credential expiry with optional sign-in usage.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires Microsoft.Graph.Authentication and Microsoft.Graph.Applications. No
   extra module is needed for -IncludeSignInUsage: it calls the beta signIns
@@ -23,7 +24,7 @@ Export Microsoft Entra ID app registration and service principal credential expi
   legitimately run one to two years and are never flagged on lifetime.
 - Generated reports are written under reports\entra by default.
 
-.PURPOSE
+Purpose:
 Use this report-only script to find Entra ID client secrets and certificates that
 have expired or are about to, and to say whether each one is actually still in use.
 The portal has no native expiry alerting, so the usual discovery path is an
@@ -33,7 +34,7 @@ question is not only what expires but whether anything still authenticates with 
 -IncludeSignInUsage answers that by matching each credential key ID against
 service principal sign-ins in the retained log window.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\entra\Export-EntraAppCredentialExpiry.ps1 -Connect
 pwsh -File .\scripts\entra\Export-EntraAppCredentialExpiry.ps1 -Connect -IncludeServicePrincipals -ExpiringWithinDays 90
 pwsh -File .\scripts\entra\Export-EntraAppCredentialExpiry.ps1 -Connect -IncludeSignInUsage -IncludeOwners -TenantId "<tenant-id>"
@@ -43,7 +44,8 @@ Writes CSV and JSON files under reports\entra by default: every credential, the
 subset needing attention, an application rollup, and a run summary. Returns a
 summary object with output paths and counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules Microsoft.Graph.Authentication, Microsoft.Graph.Applications

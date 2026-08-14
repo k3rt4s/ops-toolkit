@@ -381,12 +381,23 @@ The remaining VBScript/CMD entry points were replaced with PowerShell equivalent
 
 Every kept script should start with instructions in the native comment format for its language:
 
-- PowerShell: comment-based help with `.SYNOPSIS`, `.INSTRUCTIONS`, and `.STATUS`.
+- PowerShell: comment-based help using only keywords PowerShell recognizes, so
+  `Get-Help <script> -Full` works. Use `.SYNOPSIS`, then `.DESCRIPTION` carrying the
+  `Instructions:`, `Purpose:`, and `Required syntax:` sections as plain labelled
+  text, then `.OUTPUTS`, then `.NOTES` carrying `Status:`.
 - Bash: shebang first, then an `# Instructions` block.
 - Batch/CMD: `REM Instructions` block.
 - VBScript: `' Instructions` block.
 
 The header should tell the operator to read this README, review parameters or variables, run with admin rights only when needed, use `-WhatIf` when supported, and note whether the script is active, lab-only, or legacy keep.
+
+Do not invent new dotted keywords. PowerShell accepts only a fixed set, and a single unrecognized keyword such as `.INSTRUCTIONS` silently invalidates the entire help block, leaving `Get-Help` with nothing but auto-generated syntax. Custom sections belong inside `.DESCRIPTION` or `.NOTES` as labelled text. Verify with:
+
+```powershell
+Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { (Get-Help $_.FullName).Synopsis }
+```
+
+Any script whose synopsis comes back as its own filename followed by a parameter list has a broken help block.
 
 ## Script Standards
 

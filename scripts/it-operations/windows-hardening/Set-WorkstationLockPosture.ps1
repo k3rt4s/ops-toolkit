@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan, apply, and roll back workstation idle-lock and sleep posture for security and performance.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run elevated to enable the power-scheme password-on-wake flag (-EnableConsoleLock) or the
   machine-wide inactivity lock (-EnableMachineWideLock).
@@ -10,7 +11,7 @@ Plan, apply, and roll back workstation idle-lock and sleep posture for security 
 - Generated reports are written under C:\Code_data\ops-toolkit\windows-hardening by default,
   per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
 
-.PURPOSE
+Purpose:
 Puts a workstation into a secure idle posture: never sleep or hibernate on AC power, require a
 password after a configurable screensaver timeout, and optionally enforce a power-scheme
 password-on-wake flag and a machine-wide inactivity lock via Group Policy registry.
@@ -26,7 +27,7 @@ Every change is recorded in a rollback JSON so the posture can be precisely reve
 -Rollback. Non-elevated settings (sleep, monitor, screensaver) apply without admin rights.
 The optional ConsoleLock and machine-wide policy settings require an elevated shell.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock      # elevated
@@ -37,7 +38,8 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.
 Writes plan and state CSV/JSON under the report directory, plus a rollback JSON capturing the
 prior value of every setting changed so a later -Rollback can revert precisely.
 
-.STATUS
+.NOTES
+Status:
 Active script in the ops-toolkit repo. Companion to Set-WorkstationPerformance.ps1.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

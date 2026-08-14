@@ -2,25 +2,27 @@
 .SYNOPSIS
 Set one custom HTTP response header on all IIS sites.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Review the target server first; this script applies one header value to every IIS site returned by IIS:\Sites.
 - Run from an elevated shell on the IIS server.
 - Run with -WhatIf first before making live changes.
 - Review the summary output before rerunning without -WhatIf.
 
-.PURPOSE
+Purpose:
 Use this only when one response header should be added or updated for every IIS
 site on the local server. For one site, use Set-IisSiteCustomHeader.ps1.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\iis\Set-IisSiteCustomHeaderForAllSites.ps1 -HeaderName "X-Content-Type-Options" -HeaderValue "nosniff" -WhatIf
 
 .OUTPUTS
 Returns one summary object containing the requested header, changed/skipped
 counts, and per-site results with old value, new value, action, and reason.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]

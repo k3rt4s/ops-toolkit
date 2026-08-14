@@ -2,20 +2,21 @@
 .SYNOPSIS
 Plan, add, or remove Windows printer connections.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md and IT operations README.md before running this script.
 - Use -Action Add with -PrinterPath or -PrinterListPath to add network printer connections.
 - Use -Action Remove with -PrinterName, -PrinterListPath, or -AllConnectionPrinters to remove printer connections.
 - Run with -WhatIf first and review the generated plan/state reports.
 - Generated reports are written under reports\it-operations\printers by default.
 
-.PURPOSE
+Purpose:
 This script replaces the separate add/remove printer connection helpers with a
 single command-driven entry point. It keeps printer operations report-first and
 avoids removing local printers unless -AllConnectionPrinters or explicit names
 select them.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Add -PrinterListPath .\data\it-operations\printers\printers.example.txt -WhatIf
 pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -Action Remove -AllConnectionPrinters -WhatIf
 
@@ -23,7 +24,8 @@ pwsh -File .\scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1 -A
 Writes plan and state CSV/JSON files under reports\it-operations\printers by default.
 Returns a summary object with report paths and action counts.
 
-.STATUS
+.NOTES
+Status:
 Active PowerShell replacement for the legacy printer VBScript helpers and the
 previous split add/remove PowerShell scripts.
 #>

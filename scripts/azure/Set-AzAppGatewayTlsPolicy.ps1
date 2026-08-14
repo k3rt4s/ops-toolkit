@@ -2,20 +2,21 @@
 .SYNOPSIS
 Apply a custom or predefined TLS policy to an Azure Application Gateway with plan/state reports.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires Az.Accounts and Az.Network.
 - Connect first with Initialize-AzPowerShellSession.ps1 when working in a known tenant.
 - Always run with -WhatIf first and review the generated plan/state reports.
 - Generated reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 This script replaces the separate hardened and predefined Application Gateway
 TLS policy helpers with one command. It records the current policy, prepares the
 requested custom or predefined policy, persists it with Set-AzApplicationGateway,
 and writes rollback guidance that captures the previous policy values.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyMode CustomHardened -WhatIf
 pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-network -ApplicationGatewayName appgw-prod -PolicyMode Predefined -PolicyName AppGwSslPolicy20220101S -WhatIf
 
@@ -23,7 +24,8 @@ pwsh -File .\scripts\azure\Set-AzAppGatewayTlsPolicy.ps1 -ResourceGroupName rg-n
 Writes plan, state, and rollback JSON reports under reports\azure by default.
 Returns a summary object with the requested policy and report paths.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo. Replaces
 Set-AzAppGatewayHardenedTlsPolicy.ps1 and Restore-AzAppGatewayPredefinedTlsPolicy.ps1.
 #>

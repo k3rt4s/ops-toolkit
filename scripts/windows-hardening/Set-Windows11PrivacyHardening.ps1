@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan, apply, and roll back Windows 11 privacy, telemetry, and consumer-feature hardening.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell before applying live HKLM, service, or task changes.
@@ -10,7 +11,7 @@ Plan, apply, and roll back Windows 11 privacy, telemetry, and consumer-feature h
 - Use -Rollback to restore policy values to default/not-configured or re-enable user settings.
 - This script is scoped to Windows 11. It exits on older Windows builds unless -SkipWindows11Check is used.
 
-.PURPOSE
+Purpose:
 Use this to reduce optional Windows 11 diagnostic data, tailored experiences,
 advertising identifiers, consumer suggestions, Windows Search web suggestions,
 activity history, feedback prompts, selected app privacy surfaces, and related
@@ -22,7 +23,7 @@ Windows hardening baselines, and community-maintained privacy hardening guidance
 It intentionally does not disable security-sensitive Microsoft connections such
 as Defender, SmartScreen, Windows Update, licensing, or root certificate updates.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
 pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1
 pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
@@ -34,7 +35,8 @@ changes unless -SkipRegistryBackup is used. Returns a summary object with
 report and backup paths, changed/skipped counts, restart-required status, and
 the items disabled after hardening or enabled/default-restored after rollback.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

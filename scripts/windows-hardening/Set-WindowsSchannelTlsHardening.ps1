@@ -2,19 +2,20 @@
 .SYNOPSIS
 Plan and apply a Windows Schannel TLS hardening baseline.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell before applying live registry changes.
 - Backups are written before live registry changes unless -SkipRegistryBackup is used.
 - Reboot after applying changes so Schannel consumers reacquire TLS settings.
 
-.PURPOSE
+Purpose:
 Use this to apply a TLS 1.2-only Windows Schannel baseline that disables legacy
 SSL/TLS protocol versions, sets a hardened cipher suite order, and enables
 strong .NET and WinHTTP TLS defaults.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
 pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
 
@@ -24,7 +25,8 @@ also export relevant registry branches to .reg files before changes unless
 -SkipRegistryBackup is used. Returns a summary object with report and backup
 paths, changed/skipped counts, and restart-required status.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

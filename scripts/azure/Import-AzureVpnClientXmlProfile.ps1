@@ -2,20 +2,21 @@
 .SYNOPSIS
 Import an Azure VPN Client XML profile for a Windows 11 user and write review reports.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Download the Azure VPN Client profile XML from Azure, then pass it with -ProfileXmlPath.
 - Run in the target Windows 11 user's context so the profile is imported into that user's Azure VPN Client state.
 - Always run with -WhatIf first and review the generated plan/state reports.
 - Generated reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 Use this script to stage and import an Azure VPN Client XML profile on Windows
 11. It validates the XML, copies it into the Azure VPN Client LocalState folder,
 optionally backs up an existing profile file, invokes azurevpn, and writes
 plan/state reports.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\Import-AzureVpnClientXmlProfile.ps1 -ProfileXmlPath .\azurevpnconfig.xml -WhatIf
 pwsh -File .\scripts\azure\Import-AzureVpnClientXmlProfile.ps1 -ProfileXmlPath .\azurevpnconfig_aad.xml -ForceImport -BackupExisting
 
@@ -23,7 +24,8 @@ pwsh -File .\scripts\azure\Import-AzureVpnClientXmlProfile.ps1 -ProfileXmlPath .
 Writes plan/state JSON reports under reports\azure by default. Returns a
 summary object with source, staged profile, backup path, command, and result.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo. Windows 11 target.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]

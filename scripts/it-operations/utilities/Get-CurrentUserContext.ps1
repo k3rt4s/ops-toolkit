@@ -2,18 +2,19 @@
 .SYNOPSIS
 Report current Windows user, group, privilege, and network context.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md and IT operations README.md before running this script.
 - This script is read-only and does not require elevation.
 - Use -OutputDirectory to write JSON and CSV reports under reports\it-operations\user-context.
 - Use -IncludeGroups only when group membership detail is needed; it can be noisy on domain-joined systems.
 
-.PURPOSE
+Purpose:
 Use this during endpoint triage to capture who is logged on, whether the session
 is elevated, what network adapters are active, and optionally what groups are
 present in the current token.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1
 pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1 -IncludeGroups -OutputDirectory .\reports\it-operations\user-context
 
@@ -21,7 +22,8 @@ pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1 -Include
 Returns a summary object. When -OutputDirectory is supplied, writes JSON plus
 separate CSV files for adapters and groups.
 
-.STATUS
+.NOTES
+Status:
 Active PowerShell replacement for Show-CurrentUser.vbs.
 #>
 [CmdletBinding()]

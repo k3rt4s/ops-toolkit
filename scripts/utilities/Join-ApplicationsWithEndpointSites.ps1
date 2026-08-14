@@ -2,18 +2,19 @@
 .SYNOPSIS
 Join application inventory rows with endpoint site data and write matched/unmatched reports.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Confirm the input CSV column names before running.
 - Use -IncludeUnmatchedApplications when review needs to show missing endpoint-site matches.
 - Generated reports are written under reports\utilities by default.
 
-.PURPOSE
+Purpose:
 Use this report-only utility to join application inventory rows to endpoint
 site data. By default it joins application "Agent Name" to endpoint "Endpoint
 Name" and writes matched rows, optional unmatched rows, and a summary JSON file.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv
 pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv -IncludeUnmatchedApplications
 
@@ -21,7 +22,8 @@ pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -Applicati
 Writes matched CSV and summary JSON reports under reports\utilities by default.
 Optionally writes unmatched application rows. Returns a summary object.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding()]

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Create or reuse a Microsoft Entra service principal and optionally grant Key Vault access-policy permissions.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires Az.Accounts, Az.Resources, and Az.KeyVault.
 - Always run with -WhatIf first and review the generated plan/state reports.
@@ -10,14 +11,14 @@ Create or reuse a Microsoft Entra service principal and optionally grant Key Vau
 - Do not store generated client secrets in reports or source control.
 - Generated reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 Use this script when an automation workload needs a service principal with
 explicit Key Vault access-policy permissions. It creates or reuses the service
 principal, optionally grants certificate/secret/key permissions, and writes plan
 and state artifacts for review. The rollback report describes the commands to
 remove the access policy and service principal if the change needs to be undone.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -SubscriptionId "<subscription-id>" -EnvironmentName prod -ApplicationShortName app -KeyVaultName kv-prod-app -WhatIf
 pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -DisplayName prod-app-serviceprincipal -KeyVaultName kv-prod-app -CertificatePermissions Get,List -SecretPermissions Get -WhatIf
 pwsh -File .\scripts\azure\New-AzKeyVaultServicePrincipal.ps1 -DisplayName prod-app-serviceprincipal -KeyVaultName kv-prod-app -ReuseExisting -SkipKeyVaultPolicy
@@ -27,7 +28,8 @@ Writes plan, state, rollback guidance, and summary files under reports\azure by
 default. Returns a summary object with service principal identifiers and report
 paths. Client secrets are not written to report files.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules Az.Accounts, Az.Resources, Az.KeyVault

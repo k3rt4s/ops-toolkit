@@ -2,20 +2,21 @@
 .SYNOPSIS
 Map or remove a persistent Windows drive connection to an Azure Files share.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Run in the Windows user context that should receive the mapped drive.
 - Always run with -WhatIf first and review the generated plan/state reports.
 - Pass storage account keys at runtime only; they are never written to reports.
 - Generated reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 Use this script to create or remove a persistent mapped drive for Azure Files.
 It stores the Azure Files credential in Windows Credential Manager when mapping,
 optionally removes an existing mapping first, and writes plan/state reports that
 do not include the storage account key.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\New-AzFileShareMappedDrive.ps1 -DriveLetter Z -StorageAccountName examplestorage -ShareName data -StorageAccountKey "<key>" -WhatIf
 pwsh -File .\scripts\azure\New-AzFileShareMappedDrive.ps1 -Action Remove -DriveLetter Z -StorageAccountName examplestorage -RemoveCredential -WhatIf
 
@@ -23,7 +24,8 @@ pwsh -File .\scripts\azure\New-AzFileShareMappedDrive.ps1 -Action Remove -DriveL
 Writes plan/state JSON reports under reports\azure by default. Returns a
 summary object with the target UNC path, report paths, and result.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]

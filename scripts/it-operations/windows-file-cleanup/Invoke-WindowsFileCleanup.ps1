@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan and remove Windows temp items or stale files with guardrails and reports.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md and IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan/state reports.
 - Use -Mode Temp to remove immediate children of approved temp folders.
@@ -10,13 +11,13 @@ Plan and remove Windows temp items or stale files with guardrails and reports.
 - Use -IncludeEmptyDirectories only after reviewing the plan because directory cleanup is recursive.
 - Generated reports are written under reports\it-operations\windows-file-cleanup by default.
 
-.PURPOSE
+Purpose:
 This script replaces the previous temp-folder cleanup and old-file recursive
 cleanup helpers with one report-first command. It refuses broad or protected
 paths such as drive roots, Windows, Program Files, user profile roots, and repo
 roots unless future maintainers deliberately change the guardrail logic.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode Temp -WhatIf
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1 -Mode OlderThan -Path C:\Logs -OlderThanDays 30 -WhatIf
 
@@ -24,7 +25,8 @@ pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanu
 Writes plan and state CSV/JSON files under reports\it-operations\windows-file-cleanup
 by default. Returns a summary object with report paths and cleanup counts.
 
-.STATUS
+.NOTES
+Status:
 Active PowerShell replacement for Clear-UserAndDriveTempFolders.vbs,
 Remove-OldFilesRecursively.vbs, and the previous split PowerShell helpers.
 #>

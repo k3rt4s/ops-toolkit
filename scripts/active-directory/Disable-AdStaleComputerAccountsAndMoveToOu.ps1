@@ -2,7 +2,8 @@
 .SYNOPSIS
 Find stale Active Directory computer accounts, write review reports, and optionally disable or move them.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.
 - Always run with -WhatIf first and review the generated plan/state reports.
@@ -10,13 +11,13 @@ Find stale Active Directory computer accounts, write review reports, and optiona
 - Use -Rollback with a prior state CSV only after reviewing the generated state report.
 - Generated reports are written under reports\active-directory by default.
 
-.PURPOSE
+Purpose:
 Use this script to identify stale AD computer accounts, preserve before-state
 data, and then optionally disable accounts, move them to a disabled-computers
 OU, or both. Each run writes CSV, JSON, and HTML artifacts so the operator can
 review planned changes, completed actions, and rollback inputs.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -SearchBase "OU=Workstations,DC=example,DC=com" -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
 pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 120 -SearchBase "OU=Workstations,DC=example,DC=com" -TargetOu "OU=DisabledComputers,DC=example,DC=com" -Action DisableAndMove -WhatIf
 pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -Rollback -RollbackStatePath .\reports\active-directory\ad-stale-computers-state-20260506_120000.csv -WhatIf
@@ -26,7 +27,8 @@ Writes plan, state, rollback, and HTML report files under
 reports\active-directory by default. Returns a summary object with output paths
 and action counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ActiveDirectory

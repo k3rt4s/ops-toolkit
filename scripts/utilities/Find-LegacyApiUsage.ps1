@@ -2,7 +2,8 @@
 .SYNOPSIS
 Scan a folder tree for Microsoft modules, cmdlets, and APIs that have a published retirement or cutoff date.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Read-only. It never changes a scanned file and needs no elevation or credentials.
 - Point -Path at a script share, a repo, or any folder tree. Multiple paths are allowed.
@@ -12,7 +13,7 @@ Scan a folder tree for Microsoft modules, cmdlets, and APIs that have a publishe
   date against Microsoft's own announcement before you plan work around it.
 - Generated reports are written under reports\utilities by default.
 
-.PURPOSE
+Purpose:
 Use this script to find, in one pass, every place that still calls something
 Microsoft has retired or scheduled for retirement, so the nearest cutoff can be
 worked first instead of being discovered when an integration stops authenticating.
@@ -21,7 +22,7 @@ Exchange Online cutoffs (EWS for non-Microsoft apps, the -Credential parameter,
 Application Impersonation, the original Get-MessageTrace), and Send-MailMessage.
 Each finding carries the deadline, the reason, and the replacement.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts
 pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts,D:\Share -Severity Broken
 pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path . -OutputDirectory .\reports\utilities
@@ -31,7 +32,8 @@ Writes findings, a per-rule rollup, a per-deadline rollup, and a summary as CSV 
 JSON under reports\utilities by default. Returns a summary object with output paths
 and counts. Exits 2 when -Path is missing.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding()]

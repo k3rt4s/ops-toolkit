@@ -2,18 +2,19 @@
 .SYNOPSIS
 Export Active Directory user inventory reports to CSV.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.
 - Use -SearchBase and -Server to scope large domains.
 - Use -ReportType Attributes for full user attributes, DistinguishedNames for a compact DN report, or All for both.
 - Generated reports are written under reports\active-directory by default.
 
-.PURPOSE
+Purpose:
 This script replaces the separate AD user attribute and distinguished-name CSV
 exports with one report-driven inventory command.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType Attributes
 pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType DistinguishedNames -SearchBase "OU=Users,DC=example,DC=com"
 pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType All -OutputDirectory .\reports\active-directory
@@ -22,7 +23,8 @@ pwsh -File .\scripts\active-directory\Export-AdUserInventory.ps1 -ReportType All
 Writes one or more CSV reports and returns a summary object with output paths
 and row counts.
 
-.STATUS
+.NOTES
+Status:
 Active PowerShell replacement for Export-AdUserAttributesToExcel.vbs,
 Export-AdUserDistinguishedNamesToExcel.vbs, and the previous split PowerShell
 export scripts.

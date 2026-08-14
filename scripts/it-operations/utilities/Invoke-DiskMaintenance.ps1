@@ -2,7 +2,8 @@
 .SYNOPSIS
 Run a sequence of disk maintenance operations on a specified drive.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Run as Administrator. chkdsk /f /r /x requires elevation and may schedule
   a reboot if the target volume is in use by Windows.
 - Use -SkipChkdsk, -SkipCipherWipe, -SkipDefrag, or -SkipBenchmark to
@@ -10,13 +11,13 @@ Run a sequence of disk maintenance operations on a specified drive.
 - The cipher free-space wipe (-SkipCipherWipe is NOT set) can take several
   hours on large or nearly-full drives.
 
-.PURPOSE
+Purpose:
 Consolidates four common disk-maintenance steps into one parameterised script:
 chkdsk error and bad-sector scan, cipher free-space wipe, defrag/optimise,
 and a 10 MB write/read speed benchmark. Each step is individually toggleable
 via a skip switch.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1
 pwsh -File .\scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1 -Drive C -SkipCipherWipe
 pwsh -File .\scripts\it-operations\utilities\Invoke-DiskMaintenance.ps1 -Drive D -SkipChkdsk -SkipDefrag
@@ -26,7 +27,8 @@ Writes progress to the console. The benchmark writes and deletes a temporary
 file at <Drive>:\speedtest.tmp; the file is removed in a finally block so it
 is always cleaned up, even if the benchmark fails mid-run.
 
-.STATUS
+.NOTES
+Status:
 Active PowerShell replacement for InsightVault\scripts\original_project\DiskMaintenance.ps1.
 #>
 [CmdletBinding()]

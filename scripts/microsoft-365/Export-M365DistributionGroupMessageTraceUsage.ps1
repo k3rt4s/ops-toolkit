@@ -2,21 +2,22 @@
 .SYNOPSIS
 Export Microsoft 365 distribution group usage from Exchange Online expanded-recipient message traces.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ExchangeOnlineManagement PowerShell module and Exchange Online permissions.
 - Use -Connect when the shell is not already connected to Exchange Online.
 - Get-MessageTraceV2 can search the last 90 days, but each query window can cover only 10 days.
 - Generated reports are written under reports\microsoft-365 by default.
 
-.PURPOSE
+Purpose:
 Use this report-only script to find distribution groups with expanded-recipient
 message trace activity. It chunks the requested lookback period into compliant
 10-day-or-smaller windows, handles Get-MessageTraceV2 continuation keys, joins
 the trace counts to distribution group inventory, and writes CSV/JSON/summary
 artifacts for review.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1 -Connect -Organization "<tenant-domain>"
 pwsh -File .\scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1 -DaysBack 30 -ChunkDays 5 -OutputDirectory .\reports\microsoft-365
 
@@ -24,7 +25,8 @@ pwsh -File .\scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage
 Writes CSV, JSON, and summary JSON reports under reports\microsoft-365 by
 default. Returns a summary object with output paths and group counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ExchangeOnlineManagement

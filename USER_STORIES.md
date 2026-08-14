@@ -148,6 +148,39 @@ Acceptance criteria:
 - Given `-IncludeSignInUsage` is not passed, When the report is written, Then usage
   columns read NotChecked rather than implying the credential is unused.
 
+## Epic: Directory attack surface
+
+### Story: See the standing privilege and delegation exposure in a domain
+
+As a security-conscious operator, I want one read-only pass that lists the AD
+misconfigurations attackers actually use, with a severity and a recommendation on
+each, so that a domain review produces a work list instead of a raw attribute dump.
+
+Status: shipped 2026-08-14 (`scripts/active-directory/Export-AdPrivilegedAccessAudit.ps1`)
+
+Acceptance criteria:
+
+- Given a domain, When the audit runs, Then it reports AS-REP roastable accounts,
+  Kerberoastable accounts, unconstrained, constrained, protocol-transition and
+  resource-based delegation, PASSWD_NOTREQD, reversible encryption, orphaned
+  adminCount, krbtgt password age, and tier-0 membership, each with a severity and a
+  recommendation, sorted worst first.
+- Given a Group Managed Service Account with a service principal name, When the
+  audit runs, Then it is not reported as Kerberoastable, because its password is
+  domain-managed and not crackable offline.
+- Given a domain controller trusted for unconstrained delegation, When the audit
+  runs, Then it is reported as Informational, not Critical, so the member server
+  that should not be unconstrained is not buried.
+- Given a renamed or non-English privileged group, When tier-0 membership is
+  resolved, Then it still resolves, because groups are found by well-known SID
+  rather than by name.
+- Given nested group membership, When tier-0 membership is expanded, Then indirect
+  members are included, via the LDAP in-chain matching rule.
+- Given a child domain, When the audit runs, Then forest-root-only groups
+  (Enterprise Admins, Schema Admins, Enterprise Key Admins) are skipped rather than
+  reported as unreadable.
+- Given the audit runs, Then it makes no directory writes and needs no `-WhatIf`.
+
 ## Epic: Deprecation readiness
 
 ### Story: Find retired Microsoft APIs before their cutoff arrives

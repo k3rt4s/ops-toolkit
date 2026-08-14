@@ -91,6 +91,12 @@ Preview disabling and moving stale AD computer accounts:
 pwsh -File .\scripts\active-directory\Disable-AdStaleComputerAccountsAndMoveToOu.ps1 -InactiveDays 90 -SearchBase "OU=Workstations,DC=example,DC=com" -TargetOu "OU=DisabledComputers,DC=example,DC=com" -WhatIf
 ```
 
+Audit AD for privilege and delegation misconfigurations (read-only, no changes):
+
+```powershell
+pwsh -File .\scripts\active-directory\Export-AdPrivilegedAccessAudit.ps1 -Server dc01.example.com
+```
+
 Generate an AD security report without sending email:
 
 ```powershell
@@ -358,6 +364,7 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 | `scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1`   | New script setting workstation idle-lock and sleep posture (never sleep/hibernate on AC, screensaver lock) with `-WhatIf`, `-Rollback`, optional elevated ConsoleLock and machine-wide inactivity lock.                                                                              |
 | `scripts\entra\Export-EntraAppCredentialExpiry.ps1`                        | New report-only Entra ID credential expiry export covering app registration and service principal secrets and certificates, with optional owner lookup and a sign-in match that says whether an expiring credential is still in use.                                                 |
 | `scripts\utilities\Find-LegacyApiUsage.ps1`                                | New read-only scanner for retired and soon-to-be-retired Microsoft APIs (MSOnline, AzureAD, AzureRM, ADAL, EWS, Exchange Online `-Credential`, Application Impersonation, Get-MessageTrace, Send-MailMessage), reporting deadline, replacement, and whether the hit is in a comment. |
+| `scripts\active-directory\Export-AdPrivilegedAccessAudit.ps1`              | New read-only AD audit covering AS-REP roastable and Kerberoastable accounts, all four delegation types, PASSWD_NOTREQD, reversible encryption, orphaned adminCount, krbtgt password age, and nested tier-0 membership resolved by well-known SID.                                   |
 | `scripts\utilities\compare_folders.py`                                     | New bidirectional BLAKE3 folder comparison with multiprocessing, four CSV/text output sets, and an optional SHA-256 verification pass.                                                                                                                                               |
 | `scripts\email\thunderbird\extract_mbox_chunks.py`                         | New Stage 1 of the Thunderbird pipeline: splits a single MBOX into numbered .eml chunk folders with per-run progress and error logs.                                                                                                                                                 |
 | `scripts\email\thunderbird\extract_all_mboxes.py`                          | New Stage 2 of the Thunderbird pipeline: batch wrapper that walks a Thunderbird profile directory and calls the Stage 1 chunker on every MBOX found.                                                                                                                                 |

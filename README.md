@@ -63,28 +63,30 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 
 ## Script and Data Inventory
 
-| Path                                          | Purpose                                                  |
-| --------------------------------------------- | -------------------------------------------------------- |
-| `scripts\active-directory\`                   | AD reports, exports, and password notification scripts   |
-| `scripts\azure\`                              | Azure PowerShell and Azure CLI automation                |
-| `scripts\entra\`                              | Entra ID identity reporting through Microsoft Graph      |
-| `scripts\iis\`                                | IIS setup and HTTP security header configuration         |
-| `scripts\it-operations\performance\`          | Workstation performance posture (power plan, exclusions) |
-| `scripts\it-operations\printers\`             | Windows printer connection helpers                       |
-| `scripts\it-operations\utilities\`            | General endpoint and admin utilities                     |
-| `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers             |
-| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock and sleep posture helpers          |
-| `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline  |
-| `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration         |
-| `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                   |
-| `scripts\utilities\`                          | General utilities, CSV comparison, and folder diff tools |
-| `scripts\windows-hardening\`                  | Windows telemetry, bloatware, and cipher hardening       |
-| `data\it-operations\printers\`                | Example non-secret printer input files                   |
-| `data\windows-hardening\`                     | Bloatware allow/remove package lists                     |
-| `docs\labs\`                                  | Azure and ELK lab materials                              |
-| `docs\iis\`                                   | IIS header notes                                         |
-| `modules\OpsToolkit.Reporting\`               | Shared report-writing helpers imported by scripts        |
-| `archive\`                                    | Retired material retained inside the ops-toolkit repo    |
+| Path                                          | Purpose                                                           |
+| --------------------------------------------- | ----------------------------------------------------------------- |
+| `scripts\active-directory\`                   | AD reports, exports, and password notification scripts            |
+| `scripts\azure\`                              | Azure PowerShell and Azure CLI automation                         |
+| `scripts\entra\`                              | Entra ID identity reporting through Microsoft Graph               |
+| `scripts\iis\`                                | IIS setup and HTTP security header configuration                  |
+| `scripts\it-operations\performance\`          | Workstation performance posture (power plan, exclusions)          |
+| `scripts\it-operations\printers\`             | Windows printer connection helpers                                |
+| `scripts\it-operations\utilities\`            | General endpoint and admin utilities                              |
+| `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers                      |
+| `scripts\it-operations\lifecycle\`            | OS support lifecycle, upgrade readiness, and update health        |
+| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock, sleep, BitLocker, and local admin posture  |
+| `scripts\certificates\`                       | Certificate expiry across stores, IIS bindings, and TLS endpoints |
+| `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline           |
+| `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration                  |
+| `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                            |
+| `scripts\utilities\`                          | General utilities, CSV comparison, and folder diff tools          |
+| `scripts\windows-hardening\`                  | Windows telemetry, bloatware, and cipher hardening                |
+| `data\it-operations\printers\`                | Example non-secret printer input files                            |
+| `data\windows-hardening\`                     | Bloatware allow/remove package lists                              |
+| `docs\labs\`                                  | Azure and ELK lab materials                                       |
+| `docs\iis\`                                   | IIS header notes                                                  |
+| `modules\OpsToolkit.Reporting\`               | Shared report-writing helpers imported by scripts                 |
+| `archive\`                                    | Retired material retained inside the ops-toolkit repo             |
 
 ## Examples
 
@@ -296,6 +298,42 @@ pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
 > privacy/telemetry, AppX bloatware removal) and is typically run once at build or provisioning time.
 > `scripts\it-operations\windows-hardening\` contains operator posture scripts (idle-lock, sleep)
 > that are run and rolled back as workload needs change.
+
+Report OS support lifecycle and how long each machine has left:
+
+```powershell
+pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsLifecycleInventory.ps1 -WarnWithinDays 365
+```
+
+Check Windows 11 hardware eligibility and name the blocker on each machine:
+
+```powershell
+pwsh -File .\scripts\it-operations\lifecycle\Test-Windows11UpgradeReadiness.ps1
+```
+
+Find out why a machine is not patching (services, pending reboot, policy, history):
+
+```powershell
+pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1
+```
+
+Report BitLocker protection and whether the recovery key is escrowed anywhere:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Export-BitLockerEscrowStatus.ps1 -VerifyAdEscrow
+```
+
+Report local administrator membership and whether LAPS manages the password:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1
+```
+
+Inventory certificate expiry across machine stores, IIS bindings, and live endpoints:
+
+```powershell
+pwsh -File .\scripts\certificates\Export-CertificateExpiryInventory.ps1 -IncludeIisBindings -Endpoint 'www.example.com:443'
+```
 
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
 

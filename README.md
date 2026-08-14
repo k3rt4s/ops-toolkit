@@ -228,6 +228,12 @@ Preview replacing IIS custom headers with the recommended preset and write a bef
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "Default Web Site" -RemoveExisting -WhatIf
 ```
 
+Verify applied hardening is still in place, and prove the TLS client policy with real handshakes:
+
+```powershell
+pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
+```
+
 Preview Windows Schannel/TLS hardening and write plan reports:
 
 ```powershell

@@ -9,6 +9,13 @@ Instructions:
   control is remediated, enabled, or altered by this script.
 - Run elevated for complete results. Several collectors report Undetermined without
   elevation, and Undetermined is reported as such rather than folded into a pass.
+- Without -ComputerName or -TargetListPath the pack covers this machine only, and
+  says so on every endpoint control. Estate scope needs WinRM and local
+  administrator rights on each target.
+- Not every collector can reach a remote machine. The pack detects which ones accept
+  -ComputerName by reading their parameter blocks, passes the target list only to
+  those, and records the rest as local-only in the collector run log, so a
+  machine-scoped claim is never made from a single-machine reading.
 - -IncludeEntra and -IncludeActiveDirectory are off by default because they need
   credentials and modules that a workstation may not have. Controls whose collector
   did not run are reported NotAssessed, never Met.
@@ -50,6 +57,14 @@ param(
     [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$Organization = $env:USERDOMAIN,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$ComputerName,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$TargetListPath,
 
     [Parameter()]
     [switch]$IncludeEntra,
@@ -95,6 +110,73 @@ if (-not $isElevated) {
 
 $collectorRuns = [System.Collections.Generic.List[object]]::new()
 $controls = [System.Collections.Generic.List[object]]::new()
+
+# Resolve the target list. A file wins nothing over -ComputerName; the two combine,
+# because an operator will keep a standing list and add a machine for one run.
+$targets = [System.Collections.Generic.List[string]]::new()
+foreach ($name in @($ComputerName)) {
+    if ($name) { $targets.Add($name) }
+}
+
+if ($TargetListPath) {
+    if (-not (Test-Path -LiteralPath $TargetListPath)) {
+        throw "Target list not found: $TargetListPath. One computer name per line; blank lines and lines starting with # are ignored."
+    }
+
+    foreach ($line in [System.IO.File]::ReadAllLines($TargetListPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -and -not $trimmed.StartsWith('#')) {
+            $targets.Add($trimmed)
+        }
+    }
+}
+
+$resolvedTargets = @($targets | Sort-Object -Unique)
+$isEstateScope = $resolvedTargets.Count -gt 0
+$scopeText = if ($isEstateScope) { "$($resolvedTargets.Count) machine(s)" } else { 'this machine only' }
+Write-Verbose "Endpoint scope: $scopeText."
+
+function Test-CollectorSupportsComputerName {
+    <#
+    .SYNOPSIS
+    Return true when a collector script declares a ComputerName parameter.
+
+    .DESCRIPTION
+    Read from the script's own parameter block rather than from a maintained list, so
+    a collector that gains remote support starts being fanned out without anyone
+    remembering to update this script.
+
+    .PARAMETER Path
+    Path to the collector script.
+
+    .OUTPUTS
+    Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+    if (-not $ast.ParamBlock) {
+        return $false
+    }
+
+    foreach ($parameter in $ast.ParamBlock.Parameters) {
+        if ($parameter.Name.VariablePath.UserPath -eq 'ComputerName') {
+            return $true
+        }
+    }
+
+    $false
+}
 
 function Invoke-Collector {
     <#
@@ -147,6 +229,7 @@ function Invoke-Collector {
         ExitCode = $null
         OutputPath = $outputPath
         DurationSeconds = 0
+        Scope = 'LocalMachine'
         Note = ''
     }
 
@@ -162,8 +245,22 @@ function Invoke-Collector {
     $stderr = Join-Path $outputPath 'run.err.log'
     $started = Get-Date
 
+    # Fan out only to collectors that can actually reach a remote machine. A
+    # collector that cannot is recorded as local-only so no estate-wide claim is
+    # made from a reading of one machine.
+    $targetArgument = @()
+    if ($isEstateScope) {
+        if (Test-CollectorSupportsComputerName -Path $scriptPath) {
+            $targetArgument = @('-ComputerName') + $resolvedTargets
+            $result.Scope = "$($resolvedTargets.Count) machine(s)"
+        } else {
+            $result.Scope = 'LocalMachineOnly'
+            $result.Note = 'This collector has no -ComputerName parameter, so it covers only the machine the pack ran on.'
+        }
+    }
+
     try {
-        $arguments = @('-NoProfile', '-NonInteractive', '-File', $scriptPath, '-OutputDirectory', $outputPath) + $Argument
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $scriptPath, '-OutputDirectory', $outputPath) + $targetArgument + $Argument
         $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -NoNewWindow -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
@@ -276,7 +373,7 @@ if ($null -eq $defenderStatus) {
     $edrStatus = if ($realTime -and $null -ne $signatureAge -and [int]$signatureAge -le 7) { 'Met' } elseif ($realTime) { 'Partial' } else { 'NotMet' }
     Add-Control -Id 'EDR-01' -Question 'Is endpoint protection deployed and running on all endpoints?' `
         -Status $edrStatus `
-        -Finding "Real-time protection: $realTime. Signature age: $signatureAge days. Tamper protection: $tamper. Scope: this machine only." `
+        -Finding "Real-time protection: $realTime. Signature age: $signatureAge days. Tamper protection: $tamper. Scope: this machine only, Defender is read locally." `
         -Collector 'inline:Get-MpComputerStatus'
 
     Add-Control -Id 'EDR-02' -Question 'Is tamper protection enabled so malware cannot disable endpoint protection?' `
@@ -547,6 +644,7 @@ $markdown.Add("Organization: $Organization")
 $markdown.Add("Generated: $($asOf.ToString('yyyy-MM-dd HH:mm:ss'))")
 $markdown.Add("Machine: $env:COMPUTERNAME")
 $markdown.Add("Elevated: $isElevated")
+$markdown.Add("Endpoint scope: $scopeText")
 $markdown.Add('')
 $markdown.Add('This pack reports the state of this environment as read by automated collectors on the date above. Every control is answered from collector output or is marked NotAssessed. Nothing is inferred.')
 $markdown.Add('')
@@ -572,11 +670,11 @@ foreach ($control in $assessment) {
 $markdown.Add('')
 $markdown.Add("## Collector runs")
 $markdown.Add('')
-$markdown.Add("| Collector | Status | Seconds | Note |")
-$markdown.Add("| --------- | ------ | ------- | ---- |")
+$markdown.Add("| Collector | Status | Scope | Seconds | Note |")
+$markdown.Add("| --------- | ------ | ----- | ------- | ---- |")
 foreach ($run in $collectorRuns) {
     $note = ($run.Note -replace '\|', '/') -replace '\s+', ' '
-    $markdown.Add("| $($run.Collector) | $($run.Status) | $($run.DurationSeconds) | $note |")
+    $markdown.Add("| $($run.Collector) | $($run.Status) | $($run.Scope) | $($run.DurationSeconds) | $note |")
 }
 $markdown.Add('')
 $markdown.Add('Raw collector output is under `collectors\`, one folder per collector.')
@@ -588,6 +686,9 @@ $summary = [pscustomobject]@{
     Organization = $Organization
     ComputerName = $env:COMPUTERNAME
     Elevated = $isElevated
+    EndpointScope = $scopeText
+    TargetCount = $resolvedTargets.Count
+    Targets = $resolvedTargets
     PackDirectory = $packDirectory
     IncludedEntra = [bool]$IncludeEntra
     IncludedActiveDirectory = [bool]$IncludeActiveDirectory

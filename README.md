@@ -169,6 +169,12 @@ Assemble a dated evidence pack answering the control questions insurers and asse
 pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -Organization "Example Ltd" -IncludeEntra -IncludeActiveDirectory
 ```
 
+Run the same pack across an estate from a machine list:
+
+```powershell
+pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -TargetListPath .\machines.txt
+```
+
 Find users who still depend on SMS or voice before Microsoft stops delivering them:
 
 ```powershell
@@ -191,6 +197,18 @@ Include service principals and check which credentials are still authenticating:
 
 ```powershell
 pwsh -File .\scripts\entra\Export-EntraAppCredentialExpiry.ps1 -Connect -IncludeServicePrincipals -IncludeSignInUsage -IncludeOwners
+```
+
+Report mailbox forwarding, legacy protocol exposure, and EWS use before the 2026 cutoffs:
+
+```powershell
+pwsh -File .\scripts\microsoft-365\Export-M365MailboxSecurityPosture.ps1 -Connect -IncludeInboxRules
+```
+
+Find Azure resources that are billing and attached to nothing:
+
+```powershell
+pwsh -File .\scripts\azure\Export-AzOrphanedResource.ps1 -MinimumAgeDays 30
 ```
 
 Export Microsoft 365 distribution group usage from message traces:

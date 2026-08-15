@@ -9,6 +9,13 @@ Instructions:
   control is remediated, enabled, or altered by this script.
 - Run elevated for complete results. Several collectors report Undetermined without
   elevation, and Undetermined is reported as such rather than folded into a pass.
+- Without -ComputerName or -TargetListPath the pack covers this machine only, and
+  says so on every endpoint control. Estate scope needs WinRM and local
+  administrator rights on each target.
+- Not every collector can reach a remote machine. The pack detects which ones accept
+  -ComputerName by reading their parameter blocks, passes the target list only to
+  those, and records the rest as local-only in the collector run log, so a
+  machine-scoped claim is never made from a single-machine reading.
 - -IncludeEntra and -IncludeActiveDirectory are off by default because they need
   credentials and modules that a workstation may not have. Controls whose collector
   did not run are reported NotAssessed, never Met.
@@ -50,6 +57,14 @@ param(
     [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$Organization = $env:USERDOMAIN,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$ComputerName,
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$TargetListPath,
 
     [Parameter()]
     [switch]$IncludeEntra,
@@ -95,6 +110,73 @@ if (-not $isElevated) {
 
 $collectorRuns = [System.Collections.Generic.List[object]]::new()
 $controls = [System.Collections.Generic.List[object]]::new()
+
+# Resolve the target list. A file wins nothing over -ComputerName; the two combine,
+# because an operator will keep a standing list and add a machine for one run.
+$targets = [System.Collections.Generic.List[string]]::new()
+foreach ($name in @($ComputerName)) {
+    if ($name) { $targets.Add($name) }
+}
+
+if ($TargetListPath) {
+    if (-not (Test-Path -LiteralPath $TargetListPath)) {
+        throw "Target list not found: $TargetListPath. One computer name per line; blank lines and lines starting with # are ignored."
+    }
+
+    foreach ($line in [System.IO.File]::ReadAllLines($TargetListPath)) {
+        $trimmed = $line.Trim()
+        if ($trimmed -and -not $trimmed.StartsWith('#')) {
+            $targets.Add($trimmed)
+        }
+    }
+}
+
+$resolvedTargets = @($targets | Sort-Object -Unique)
+$isEstateScope = $resolvedTargets.Count -gt 0
+$scopeText = if ($isEstateScope) { "$($resolvedTargets.Count) machine(s)" } else { 'this machine only' }
+Write-Verbose "Endpoint scope: $scopeText."
+
+function Test-CollectorSupportsComputerName {
+    <#
+    .SYNOPSIS
+    Return true when a collector script declares a ComputerName parameter.
+
+    .DESCRIPTION
+    Read from the script's own parameter block rather than from a maintained list, so
+    a collector that gains remote support starts being fanned out without anyone
+    remembering to update this script.
+
+    .PARAMETER Path
+    Path to the collector script.
+
+    .OUTPUTS
+    Boolean.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+    if (-not $ast.ParamBlock) {
+        return $false
+    }
+
+    foreach ($parameter in $ast.ParamBlock.Parameters) {
+        if ($parameter.Name.VariablePath.UserPath -eq 'ComputerName') {
+            return $true
+        }
+    }
+
+    $false
+}
 
 function Invoke-Collector {
     <#
@@ -147,6 +229,7 @@ function Invoke-Collector {
         ExitCode = $null
         OutputPath = $outputPath
         DurationSeconds = 0
+        Scope = 'LocalMachine'
         Note = ''
     }
 
@@ -162,8 +245,22 @@ function Invoke-Collector {
     $stderr = Join-Path $outputPath 'run.err.log'
     $started = Get-Date
 
+    # Fan out only to collectors that can actually reach a remote machine. A
+    # collector that cannot is recorded as local-only so no estate-wide claim is
+    # made from a reading of one machine.
+    $targetArgument = @()
+    if ($isEstateScope) {
+        if (Test-CollectorSupportsComputerName -Path $scriptPath) {
+            $targetArgument = @('-ComputerName') + $resolvedTargets
+            $result.Scope = "$($resolvedTargets.Count) machine(s)"
+        } else {
+            $result.Scope = 'LocalMachineOnly'
+            $result.Note = 'This collector has no -ComputerName parameter, so it covers only the machine the pack ran on.'
+        }
+    }
+
     try {
-        $arguments = @('-NoProfile', '-NonInteractive', '-File', $scriptPath, '-OutputDirectory', $outputPath) + $Argument
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $scriptPath, '-OutputDirectory', $outputPath) + $targetArgument + $Argument
         $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -NoNewWindow -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 
@@ -185,6 +282,11 @@ function Invoke-Collector {
     }
 
     $result.DurationSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+
+    # Record where the output sits relative to the pack, not as an absolute path. The
+    # pack should survive being zipped and read somewhere else, and an absolute path
+    # also makes every run-over-run comparison show a change that is not one.
+    $result | Add-Member -NotePropertyName RelativeOutputPath -NotePropertyValue "collectors\$Name" -Force
     $collectorRuns.Add($result)
     $result
 }
@@ -276,7 +378,7 @@ if ($null -eq $defenderStatus) {
     $edrStatus = if ($realTime -and $null -ne $signatureAge -and [int]$signatureAge -le 7) { 'Met' } elseif ($realTime) { 'Partial' } else { 'NotMet' }
     Add-Control -Id 'EDR-01' -Question 'Is endpoint protection deployed and running on all endpoints?' `
         -Status $edrStatus `
-        -Finding "Real-time protection: $realTime. Signature age: $signatureAge days. Tamper protection: $tamper. Scope: this machine only." `
+        -Finding "Real-time protection: $realTime. Signature age: $signatureAge days. Tamper protection: $tamper. Scope: this machine only, Defender is read locally." `
         -Collector 'inline:Get-MpComputerStatus'
 
     Add-Control -Id 'EDR-02' -Question 'Is tamper protection enabled so malware cannot disable endpoint protection?' `
@@ -306,7 +408,7 @@ if ($null -eq $bitlocker) {
     Add-Control -Id 'ENC-01' -Question 'Is disk encryption enabled on all endpoints and laptops?' `
         -Status $encStatus `
         -Finding "Protected: $protected. Partially protected: $partial. Not encrypted: $notEncrypted. Undetermined: $undetermined." `
-        -Evidence $bitlockerRun.OutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
+        -Evidence $bitlockerRun.RelativeOutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
 
     $noKey = [int](Get-OpsPropertyValue -InputObject $bitlocker -Name 'VolumesWithoutRecoveryKey')
     # Escrow is assessable wherever any volume is actually encrypted, including a
@@ -315,7 +417,7 @@ if ($null -eq $bitlocker) {
     Add-Control -Id 'ENC-02' -Question 'Are disk encryption recovery keys escrowed where they can be retrieved?' `
         -Status $escrowStatus `
         -Finding "Volumes with no recovery key: $noKey. Machines at risk: $atRisk. Escrow was verified against a directory only where -VerifyAdEscrow was used; otherwise this reflects policy configuration." `
-        -Evidence $bitlockerRun.OutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
+        -Evidence $bitlockerRun.RelativeOutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -336,12 +438,12 @@ if ($null -eq $laps) {
     Add-Control -Id 'PRIV-01' -Question 'Are local administrator passwords unique and managed?' `
         -Status $privStatus `
         -Finding "LAPS managed: $managed. Needs attention: $needsAttention. Unmanaged: $unmanaged." `
-        -Evidence $lapsRun.OutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
+        -Evidence $lapsRun.RelativeOutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
 
     Add-Control -Id 'PRIV-02' -Question 'Is local administrator group membership controlled and reviewed?' `
         -Status $(if ($orphans -gt 0) { 'NotMet' } else { 'Partial' }) `
         -Finding "Total local administrator members: $(Get-OpsPropertyValue -InputObject $laps -Name 'TotalAdminMembers'). Unresolvable SIDs holding admin: $orphans. Membership is reported, not approved; approval is a human review this cannot perform." `
-        -Evidence $lapsRun.OutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
+        -Evidence $lapsRun.RelativeOutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -360,7 +462,7 @@ if ($null -eq $update) {
     Add-Control -Id 'PATCH-01' -Question 'Are security patches applied within a defined window?' `
         -Status $(if ($unhealthy -gt 0) { 'NotMet' } elseif ($degraded -gt 0) { 'Partial' } elseif ($healthy -gt 0) { 'Met' } else { 'NotAssessed' }) `
         -Finding "Healthy: $healthy. Degraded: $degraded. Unhealthy: $unhealthy. Pending reboot on $(Get-OpsPropertyValue -InputObject $update -Name 'PendingRebootCount') machine(s)." `
-        -Evidence $updateRun.OutputPath -Collector 'Export-WindowsUpdateHealth.ps1'
+        -Evidence $updateRun.RelativeOutputPath -Collector 'Export-WindowsUpdateHealth.ps1'
 }
 
 $lifecycleRun = Invoke-Collector -Name 'lifecycle' -RelativePath 'it-operations\lifecycle\Export-WindowsLifecycleInventory.ps1'
@@ -376,7 +478,7 @@ if ($null -eq $lifecycle) {
     Add-Control -Id 'PATCH-02' -Question 'Are all operating systems still receiving security updates from the vendor?' `
         -Status $(if ($outOfSupport -gt 0) { 'NotMet' } elseif ($unknown -gt 0) { 'Partial' } elseif ($endingSoon -gt 0) { 'Partial' } else { 'Met' }) `
         -Finding "Out of support: $outOfSupport. Support ending within the warning window: $endingSoon. Unrecognised build: $unknown." `
-        -Evidence $lifecycleRun.OutputPath -Collector 'Export-WindowsLifecycleInventory.ps1'
+        -Evidence $lifecycleRun.RelativeOutputPath -Collector 'Export-WindowsLifecycleInventory.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -395,7 +497,7 @@ if ($null -eq $hardening) {
     Add-Control -Id 'CFG-01' -Question 'Are systems hardened to a documented configuration standard?' `
         -Status $(if ($checked -eq 0) { 'NotAssessed' } elseif ($drift -eq 0) { 'Met' } elseif ($compliant -gt 0) { 'Partial' } else { 'NotMet' }) `
         -Finding "$compliant of $checked hardening items are in the desired state. Items not in the desired state: $drift." `
-        -Evidence $hardeningRun.OutputPath -Collector 'Test-WindowsHardeningState.ps1'
+        -Evidence $hardeningRun.RelativeOutputPath -Collector 'Test-WindowsHardeningState.ps1'
 }
 
 $certRun = Invoke-Collector -Name 'certificates' -RelativePath 'certificates\Export-CertificateExpiryInventory.ps1'
@@ -410,7 +512,7 @@ if ($null -eq $certificates) {
     Add-Control -Id 'CFG-02' -Question 'Are certificates tracked and renewed before expiry?' `
         -Status $(if ($expired -gt 0) { 'NotMet' } elseif ($soon -gt 0) { 'Partial' } else { 'Met' }) `
         -Finding "Expired: $expired. Expiring within the warning window: $soon. Weak signature: $(Get-OpsPropertyValue -InputObject $certificates -Name 'WeakSignatureCount')." `
-        -Evidence $certRun.OutputPath -Collector 'Export-CertificateExpiryInventory.ps1'
+        -Evidence $certRun.RelativeOutputPath -Collector 'Export-CertificateExpiryInventory.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -430,12 +532,12 @@ if ($IncludeEntra) {
         Add-Control -Id 'MFA-01' -Question 'Is multi-factor authentication enforced for all users?' `
             -Status $(if ($adminNoMfa -gt 0 -or $noMfa -gt 0) { 'NotMet' } elseif ($reported -gt 0) { 'Met' } else { 'NotAssessed' }) `
             -Finding "Users with no MFA method registered: $noMfa of $reported. Administrators with no MFA: $adminNoMfa. Registration is not the same as enforcement; see the Conditional Access control." `
-            -Evidence $mfaRun.OutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
+            -Evidence $mfaRun.RelativeOutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
 
         Add-Control -Id 'MFA-02' -Question 'Is MFA resistant to phishing and help desk social engineering?' `
             -Status $(if ([int](Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyCount') -gt 0) { 'NotMet' } elseif ([int](Get-OpsPropertyValue -InputObject $mfa -Name 'PhishingResistantCount') -gt 0) { 'Partial' } else { 'NotAssessed' }) `
             -Finding "Telephony-only users: $(Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyCount'), of which $(Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyAdminCount') are administrators. Phishing-resistant: $(Get-OpsPropertyValue -InputObject $mfa -Name 'PhishingResistantCount'). Microsoft-provided telephony delivery ends 1 February 2027." `
-            -Evidence $mfaRun.OutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
+            -Evidence $mfaRun.RelativeOutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
     }
 
     $caRun = Invoke-Collector -Name 'entra-conditional-access' -RelativePath 'entra\Export-EntraConditionalAccessBaseline.ps1' -Argument @('-Connect')
@@ -450,7 +552,7 @@ if ($IncludeEntra) {
         Add-Control -Id 'IAM-01' -Question 'Are access policies enforced, including a block on legacy authentication?' `
             -Status $(if ($criticalGaps -gt 0) { 'NotMet' } elseif ($gaps -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Conditional Access policies: $(Get-OpsPropertyValue -InputObject $ca -Name 'PolicyCount') total, $(Get-OpsPropertyValue -InputObject $ca -Name 'EnabledCount') enforcing, $(Get-OpsPropertyValue -InputObject $ca -Name 'ReportOnlyCount') report-only. Missing baseline controls: $gaps, of which $criticalGaps are critical." `
-            -Evidence $caRun.OutputPath -Collector 'Export-EntraConditionalAccessBaseline.ps1'
+            -Evidence $caRun.RelativeOutputPath -Collector 'Export-EntraConditionalAccessBaseline.ps1'
     }
 
     $credRun = Invoke-Collector -Name 'entra-app-credentials' -RelativePath 'entra\Export-EntraAppCredentialExpiry.ps1' -Argument @('-Connect', '-IncludeServicePrincipals')
@@ -465,7 +567,7 @@ if ($IncludeEntra) {
         Add-Control -Id 'IAM-02' -Question 'Are application credentials rotated before they expire?' `
             -Status $(if ($expiredCreds -gt 0) { 'NotMet' } elseif ($expiringCreds -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Expired credentials still attached: $expiredCreds. Expiring within the warning window: $expiringCreds. Over-long secret lifetimes: $(Get-OpsPropertyValue -InputObject $credentials -Name 'ExceedsRecommendedLifetimeCount')." `
-            -Evidence $credRun.OutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
+            -Evidence $credRun.RelativeOutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
     }
 } else {
     foreach ($pair in @(
@@ -498,7 +600,7 @@ if ($IncludeActiveDirectory) {
         Add-Control -Id 'PRIV-03' -Question 'Is privileged directory access limited and free of known escalation paths?' `
             -Status $(if ($critical -gt 0) { 'NotMet' } elseif ($high -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Critical findings: $critical. High findings: $high. Tier-0 members: $(Get-OpsPropertyValue -InputObject $ad -Name 'Tier0MemberCount')." `
-            -Evidence $adRun.OutputPath -Collector 'Export-AdPrivilegedAccessAudit.ps1'
+            -Evidence $adRun.RelativeOutputPath -Collector 'Export-AdPrivilegedAccessAudit.ps1'
     }
 } else {
     Add-Control -Id 'PRIV-03' -Question 'Is privileged directory access limited and free of known escalation paths?' `
@@ -547,6 +649,7 @@ $markdown.Add("Organization: $Organization")
 $markdown.Add("Generated: $($asOf.ToString('yyyy-MM-dd HH:mm:ss'))")
 $markdown.Add("Machine: $env:COMPUTERNAME")
 $markdown.Add("Elevated: $isElevated")
+$markdown.Add("Endpoint scope: $scopeText")
 $markdown.Add('')
 $markdown.Add('This pack reports the state of this environment as read by automated collectors on the date above. Every control is answered from collector output or is marked NotAssessed. Nothing is inferred.')
 $markdown.Add('')
@@ -572,11 +675,11 @@ foreach ($control in $assessment) {
 $markdown.Add('')
 $markdown.Add("## Collector runs")
 $markdown.Add('')
-$markdown.Add("| Collector | Status | Seconds | Note |")
-$markdown.Add("| --------- | ------ | ------- | ---- |")
+$markdown.Add("| Collector | Status | Scope | Seconds | Note |")
+$markdown.Add("| --------- | ------ | ----- | ------- | ---- |")
 foreach ($run in $collectorRuns) {
     $note = ($run.Note -replace '\|', '/') -replace '\s+', ' '
-    $markdown.Add("| $($run.Collector) | $($run.Status) | $($run.DurationSeconds) | $note |")
+    $markdown.Add("| $($run.Collector) | $($run.Status) | $($run.Scope) | $($run.DurationSeconds) | $note |")
 }
 $markdown.Add('')
 $markdown.Add('Raw collector output is under `collectors\`, one folder per collector.')
@@ -588,6 +691,9 @@ $summary = [pscustomobject]@{
     Organization = $Organization
     ComputerName = $env:COMPUTERNAME
     Elevated = $isElevated
+    EndpointScope = $scopeText
+    TargetCount = $resolvedTargets.Count
+    Targets = $resolvedTargets
     PackDirectory = $packDirectory
     IncludedEntra = [bool]$IncludeEntra
     IncludedActiveDirectory = [bool]$IncludeActiveDirectory

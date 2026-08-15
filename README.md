@@ -12,7 +12,10 @@ Hardened operations and security administration scripts for Active Directory, Az
 - [archive/](archive/README.md): Retired scripts and supporting files kept for historical reference inside the ops-toolkit repo.
 - [data/](data/README.md): Non-secret, version-controlled input files used by ops-toolkit scripts as reference data.
 - [docs/](docs/README.md): Reference material, lab guides, diagrams, and review notes for the ops-toolkit.
+- [modules/](modules/README.md): Shared PowerShell modules imported by ops-toolkit scripts by relative path.
 - [scripts/](scripts/README.md): Runnable automation lives under this folder, grouped by platform or operational domain.
+- [tests/](tests/README.md): Pester specs covering the pure logic inside the ops-toolkit scripts.
+- [Invoke-RepoValidation.ps1](Invoke-RepoValidation.ps1): Run the ops-toolkit repository validation suite: parser, analyzer, help, shell syntax, and stale references.
 - [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)
 - [USER_STORIES.md](USER_STORIES.md): User-value master for the ops-toolkit scripts.
 
@@ -169,6 +172,19 @@ Assemble a dated evidence pack answering the control questions insurers and asse
 pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -Organization "Example Ltd" -IncludeEntra -IncludeActiveDirectory
 ```
 
+Compare the two most recent runs of a collector and see what changed since last time:
+
+```powershell
+pwsh -File .\scripts\reporting\Compare-OpsToolkitRun.ps1 -Path .\reports\active-directory
+pwsh -File .\scripts\reporting\Compare-OpsToolkitRun.ps1 -Path .\reports\entra -FailOnNewFinding
+```
+
+Run the same pack across an estate from a machine list:
+
+```powershell
+pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -TargetListPath .\machines.txt
+```
+
 Find users who still depend on SMS or voice before Microsoft stops delivering them:
 
 ```powershell
@@ -191,6 +207,18 @@ Include service principals and check which credentials are still authenticating:
 
 ```powershell
 pwsh -File .\scripts\entra\Export-EntraAppCredentialExpiry.ps1 -Connect -IncludeServicePrincipals -IncludeSignInUsage -IncludeOwners
+```
+
+Report mailbox forwarding, legacy protocol exposure, and EWS use before the 2026 cutoffs:
+
+```powershell
+pwsh -File .\scripts\microsoft-365\Export-M365MailboxSecurityPosture.ps1 -Connect -IncludeInboxRules
+```
+
+Find Azure resources that are billing and attached to nothing:
+
+```powershell
+pwsh -File .\scripts\azure\Export-AzOrphanedResource.ps1 -MinimumAgeDays 30
 ```
 
 Export Microsoft 365 distribution group usage from message traces:
@@ -263,6 +291,7 @@ Verify applied hardening is still in place, and prove the TLS client policy with
 
 ```powershell
 pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
+pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -ComputerName srv01,srv02 -FailOnDrift
 ```
 
 Preview Windows Schannel/TLS hardening and write plan reports:
@@ -370,6 +399,7 @@ Inventory certificate expiry across machine stores, IIS bindings, and live endpo
 
 ```powershell
 pwsh -File .\scripts\certificates\Export-CertificateExpiryInventory.ps1 -IncludeIisBindings -Endpoint 'www.example.com:443'
+pwsh -File .\scripts\certificates\Export-CertificateExpiryInventory.ps1 -ComputerName srv01,srv02 -IncludeIisBindings
 ```
 
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
@@ -495,6 +525,12 @@ Any script whose synopsis comes back as its own filename followed by a parameter
 - Use `PSScriptAnalyzerSettings.psd1` when linting PowerShell scripts.
 - Treat VBScript/CMD as archived reference only. Active automation should be PowerShell unless a target system requires another shell.
 - Put generated reports under `reports\`; do not commit generated output.
+- Write reports through `modules\OpsToolkit.Reporting` rather than with a local copy
+  of the same helpers. Every script writes to a timestamped run directory named
+  `<prefix>-yyyyMMdd_HHmmss`, containing one CSV and one JSON per report plus a
+  `summary.json`. That layout is what `Compare-OpsToolkitRun.ps1` needs in order to
+  diff one run against the previous one; a script writing loose timestamped files
+  cannot be compared at all.
 
 ## Validation
 
@@ -505,7 +541,7 @@ pwsh -File .\Invoke-RepoValidation.ps1
 pwsh -File .\Invoke-RepoValidation.ps1 -Strict -OutputDirectory .\reports\validation
 ```
 
-It runs six gates:
+It runs seven gates:
 
 - Parser check across every `.ps1` and `.psm1`.
 - Full PSScriptAnalyzer rule pass against `PSScriptAnalyzerSettings.psd1`.
@@ -514,6 +550,10 @@ It runs six gates:
 - Bash syntax check for the lab and pentesting shell scripts.
 - Stale-reference search: every script path named in a Markdown file must exist.
 - Module manifest check: every manifest loads and exports what it declares.
+- Pester tests under `tests\`, run in a child process so the Pester version cannot
+  collide with whatever the caller already has loaded. Requires Pester 5 or later;
+  the Pester 3.4 that ships with Windows cannot run these specs, and its absence is
+  reported as a missing tool rather than as a pass.
 
 Exit code 0 means the gates passed, 1 means a gate failed, 2 means a required tool
 is missing. Analyzer warnings do not fail the run unless `-Strict` is used.

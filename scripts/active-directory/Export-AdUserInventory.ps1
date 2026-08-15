@@ -42,6 +42,10 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
+    [string]$OutputPrefix = 'ad-user-inventory',
+
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
     [string]$SearchBase,
 
     [Parameter()]
@@ -58,6 +62,8 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
 function Get-AdUserQueryParameter {
     $properties = @(
@@ -152,32 +158,7 @@ function Select-AdUserDistinguishedNameReport {
     $User | Select-Object -Property Name, SamAccountName, UserPrincipalName, Enabled, DistinguishedName
 }
 
-function Export-Report {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyCollection()]
-        [object[]]$Rows,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Directory
-    )
-
-    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $path = Join-Path $Directory "ad-user-$Name-$timestamp.csv"
-    $Rows | Export-Csv -Path $path -NoTypeInformation -Encoding utf8
-
-    [pscustomobject]@{
-        ReportName = $Name
-        OutputPath = (Resolve-Path -LiteralPath $path).Path
-        RowCount = @($Rows).Count
-    }
-}
-
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-$resolvedOutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$runDirectory = Resolve-OpsRunDirectory -OutputDirectory $OutputDirectory -Prefix $OutputPrefix
 
 $queryParameters = Get-AdUserQueryParameter
 $users = @(Get-ADUser @queryParameters | Sort-Object -Property Name)
@@ -185,20 +166,24 @@ $exports = [System.Collections.Generic.List[object]]::new()
 
 if ($ReportType -in @('Attributes', 'All')) {
     $rows = @(Select-AdUserAttributeReport -User $users)
-    $exports.Add((Export-Report -Name 'attributes' -Rows $rows -Directory $resolvedOutputDirectory))
+    $exports.Add((Export-OpsReport -Name 'attributes' -Record $rows -Directory $runDirectory))
 }
 
 if ($ReportType -in @('DistinguishedNames', 'All')) {
     $rows = @(Select-AdUserDistinguishedNameReport -User $users)
-    $exports.Add((Export-Report -Name 'distinguished-names' -Rows $rows -Directory $resolvedOutputDirectory))
+    $exports.Add((Export-OpsReport -Name 'distinguished-names' -Record $rows -Directory $runDirectory))
 }
 
-[pscustomobject]@{
+$summary = [pscustomobject]@{
+    GeneratedAt = Get-Date
+    OutputDirectory = $runDirectory
     ReportType = $ReportType
     SearchBase = $SearchBase
     SearchScope = if ($SearchBase) { $SearchScope } else { $null }
     Server = $Server
     LdapFilter = $LdapFilter
     UserCount = @($users).Count
-    Reports = @($exports)
+    Exports = @($exports)
 }
+
+Export-OpsSummary -Summary $summary -Directory $runDirectory

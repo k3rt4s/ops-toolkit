@@ -79,19 +79,19 @@ if ($logicalDisk.DriveType -ne 3) {
 # Step 1: chkdsk
 # ---------------------------------------------------------------------------
 if ($SkipChkdsk) {
-    Write-Host "[$driveLetter] Skipping chkdsk (SkipChkdsk set)."
+    Write-Information "[$driveLetter] Skipping chkdsk (SkipChkdsk set)." -InformationAction Continue
 } else {
-    Write-Host "[$driveLetter] Running chkdsk /f /r /x — requires elevation. If the volume is in use, Windows will schedule the check on the next reboot and exit 0 now."
+    Write-Information "[$driveLetter] Running chkdsk /f /r /x — requires elevation. If the volume is in use, Windows will schedule the check on the next reboot and exit 0 now." -InformationAction Continue
     try {
         $proc = Start-Process -FilePath 'chkdsk' -ArgumentList "$driveLetter`: /f /r /x" -Wait -NoNewWindow -PassThru
         if ($proc.ExitCode -eq 0) {
-            Write-Host "[$driveLetter] chkdsk completed — no errors found."
+            Write-Information "[$driveLetter] chkdsk completed — no errors found." -InformationAction Continue
         } elseif ($proc.ExitCode -eq 1) {
-            Write-Host "[$driveLetter] chkdsk completed — errors were found and fixed."
+            Write-Information "[$driveLetter] chkdsk completed — errors were found and fixed." -InformationAction Continue
         } elseif ($proc.ExitCode -eq 2) {
-            Write-Host "[$driveLetter] chkdsk scheduled for next reboot (volume was locked)."
+            Write-Information "[$driveLetter] chkdsk scheduled for next reboot (volume was locked)." -InformationAction Continue
         } else {
-            Write-Host "[$driveLetter] chkdsk exited with code $($proc.ExitCode) — review output above."
+            Write-Information "[$driveLetter] chkdsk exited with code $($proc.ExitCode) — review output above." -InformationAction Continue
         }
     } catch {
         Write-Error "[$driveLetter] chkdsk failed: $_"
@@ -102,15 +102,15 @@ if ($SkipChkdsk) {
 # Step 2: cipher free-space wipe
 # ---------------------------------------------------------------------------
 if ($SkipCipherWipe) {
-    Write-Host "[$driveLetter] Skipping cipher free-space wipe (SkipCipherWipe set)."
+    Write-Information "[$driveLetter] Skipping cipher free-space wipe (SkipCipherWipe set)." -InformationAction Continue
 } else {
-    Write-Host "[$driveLetter] Wiping free space with cipher.exe /w — this can take several hours on large drives."
+    Write-Information "[$driveLetter] Wiping free space with cipher.exe /w — this can take several hours on large drives." -InformationAction Continue
     try {
         $proc = Start-Process -FilePath 'cipher.exe' -ArgumentList "/w:$driveLetter`:\" -Wait -NoNewWindow -PassThru
         if ($proc.ExitCode -eq 0) {
-            Write-Host "[$driveLetter] cipher free-space wipe completed."
+            Write-Information "[$driveLetter] cipher free-space wipe completed." -InformationAction Continue
         } else {
-            Write-Host "[$driveLetter] cipher exited with code $($proc.ExitCode) — review output above."
+            Write-Information "[$driveLetter] cipher exited with code $($proc.ExitCode) — review output above." -InformationAction Continue
         }
     } catch {
         Write-Error "[$driveLetter] cipher wipe failed: $_"
@@ -121,15 +121,15 @@ if ($SkipCipherWipe) {
 # Step 3: defrag / optimise
 # ---------------------------------------------------------------------------
 if ($SkipDefrag) {
-    Write-Host "[$driveLetter] Skipping defrag/optimise (SkipDefrag set)."
+    Write-Information "[$driveLetter] Skipping defrag/optimise (SkipDefrag set)." -InformationAction Continue
 } else {
-    Write-Host "[$driveLetter] Running defrag /U /V — Windows skips SSDs automatically."
+    Write-Information "[$driveLetter] Running defrag /U /V — Windows skips SSDs automatically." -InformationAction Continue
     try {
         $proc = Start-Process -FilePath 'defrag' -ArgumentList "$driveLetter`: /U /V" -Wait -NoNewWindow -PassThru
         if ($proc.ExitCode -eq 0) {
-            Write-Host "[$driveLetter] defrag/optimise completed."
+            Write-Information "[$driveLetter] defrag/optimise completed." -InformationAction Continue
         } else {
-            Write-Host "[$driveLetter] defrag exited with code $($proc.ExitCode) — review output above."
+            Write-Information "[$driveLetter] defrag exited with code $($proc.ExitCode) — review output above." -InformationAction Continue
         }
     } catch {
         Write-Error "[$driveLetter] defrag failed: $_"
@@ -140,7 +140,7 @@ if ($SkipDefrag) {
 # Step 4: 10 MB write / read benchmark
 # ---------------------------------------------------------------------------
 if ($SkipBenchmark) {
-    Write-Host "[$driveLetter] Skipping benchmark (SkipBenchmark set)."
+    Write-Information "[$driveLetter] Skipping benchmark (SkipBenchmark set)." -InformationAction Continue
 } else {
     $testFile = "$driveLetter`:\speedtest.tmp"
     $bufferSize = 10MB
@@ -149,27 +149,27 @@ if ($SkipBenchmark) {
     $minSeconds = 0.001   # guard against divide-by-zero on cached/very fast writes
 
     try {
-        Write-Host "[$driveLetter] Starting 10 MB write speed test..."
+        Write-Information "[$driveLetter] Starting 10 MB write speed test..." -InformationAction Continue
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         [System.IO.File]::WriteAllBytes($testFile, $buffer)
         $sw.Stop()
         $writeSeconds = [math]::Max($sw.Elapsed.TotalSeconds, $minSeconds)
-        Write-Host ("[$driveLetter] Write: 10 MB in {0:N3} s — {1:N2} MB/s" -f $sw.Elapsed.TotalSeconds, (10 / $writeSeconds))
+        Write-Information ("[$driveLetter] Write: 10 MB in {0:N3} s — {1:N2} MB/s" -f $sw.Elapsed.TotalSeconds, (10 / $writeSeconds)) -InformationAction Continue
 
-        Write-Host "[$driveLetter] Starting 10 MB read speed test..."
+        Write-Information "[$driveLetter] Starting 10 MB read speed test..." -InformationAction Continue
         $sw.Restart()
         [System.IO.File]::ReadAllBytes($testFile) | Out-Null
         $sw.Stop()
         $readSeconds = [math]::Max($sw.Elapsed.TotalSeconds, $minSeconds)
-        Write-Host ("[$driveLetter] Read:  10 MB in {0:N3} s — {1:N2} MB/s" -f $sw.Elapsed.TotalSeconds, (10 / $readSeconds))
+        Write-Information ("[$driveLetter] Read:  10 MB in {0:N3} s — {1:N2} MB/s" -f $sw.Elapsed.TotalSeconds, (10 / $readSeconds)) -InformationAction Continue
     } catch {
         Write-Error "[$driveLetter] Benchmark failed: $_"
     } finally {
         if (Test-Path -LiteralPath $testFile) {
             Remove-Item -LiteralPath $testFile -Force
-            Write-Host "[$driveLetter] Benchmark temp file removed."
+            Write-Information "[$driveLetter] Benchmark temp file removed." -InformationAction Continue
         }
     }
 }
 
-Write-Host "[$driveLetter] Disk maintenance sequence complete."
+Write-Information "[$driveLetter] Disk maintenance sequence complete." -InformationAction Continue

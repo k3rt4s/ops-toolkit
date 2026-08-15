@@ -34,8 +34,8 @@ Active script kept in the reorganized ops-toolkit repo.
 [CmdletBinding()]
 param(
     [Parameter()]
-    [ValidateSet('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module')]
-    [string[]]$Gate = @('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module'),
+    [ValidateSet('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test')]
+    [string[]]$Gate = @('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test'),
 
     [Parameter()]
     [switch]$IncludeArchive,
@@ -57,9 +57,7 @@ $moduleRoot = Join-Path $repoRoot 'modules'
 
 # Scripts that legitimately cannot pass a gate, with the reason. Anything not listed
 # here is expected to pass, so a new exemption is a decision someone has to make.
-$helpExempt = @{
-    'Page-File-Bleed.ps1' = 'Legacy keep with no comment-based help block at all.'
-}
+$helpExempt = @{}
 
 $findings = [System.Collections.Generic.List[object]]::new()
 $gateResults = [System.Collections.Generic.List[object]]::new()
@@ -356,6 +354,59 @@ if ($Gate -contains 'Module') {
     }
 
     Add-GateResult -Name 'Module' -Status $(if ($moduleErrors -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $manifests.Count -ErrorCount $moduleErrors -WarningCount 0
+}
+
+if ($Gate -contains 'Test') {
+    $testRoot = Join-Path $repoRoot 'tests'
+    $pester = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.0.0' } | Sort-Object Version -Descending | Select-Object -First 1
+
+    if (-not (Test-Path -LiteralPath $testRoot)) {
+        Add-GateResult -Name 'Test' -Status 'SKIP' -Checked 0 -ErrorCount 0 -WarningCount 0 -Note 'No tests directory.'
+    } elseif (-not $pester) {
+        # Pester 3.4 ships with Windows and cannot run these specs. Treat its absence
+        # as a missing tool rather than as a pass, or the suite silently stops running.
+        $script:MissingTool += 'Pester 5+'
+        Add-GateResult -Name 'Test' -Status 'SKIP' -Checked 0 -ErrorCount 0 -WarningCount 0 -Note 'Pester 5 or later is not installed. Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser'
+    } else {
+        # Pester runs in a child process so its module version cannot collide with
+        # whatever Pester the caller already has loaded.
+        $testLog = Join-Path ([System.IO.Path]::GetTempPath()) "ops-toolkit-pester-$([guid]::NewGuid().ToString('N')).xml"
+        # Import the exact module the parent discovered. Importing by name in the
+        # child lets PSModulePath ordering pick a different version, so the gate
+        # could report on a Pester the parent never checked.
+        $command = @(
+            "Import-Module '$($pester.Path)' -Force"
+            "`$config = New-PesterConfiguration"
+            "`$config.Run.Path = '$testRoot'"
+            "`$config.Run.PassThru = `$true"
+            "`$config.Output.Verbosity = 'None'"
+            "`$config.TestResult.Enabled = `$true"
+            "`$config.TestResult.OutputPath = '$testLog'"
+            "`$r = Invoke-Pester -Configuration `$config"
+            "exit `$r.FailedCount"
+        ) -join '; '
+
+        $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', $command) `
+            -NoNewWindow -Wait -PassThru
+        $failedCount = $process.ExitCode
+        $totalCount = 0
+
+        if (Test-Path -LiteralPath $testLog) {
+            try {
+                [xml]$results = Get-Content -LiteralPath $testLog -Raw
+                $totalCount = [int]$results.'test-results'.total
+                foreach ($testCase in $results.SelectNodes('//test-case[@success="False"]')) {
+                    Add-Finding -Gate 'Test' -Severity 'Error' -File 'tests' -Message "$($testCase.name): $($testCase.failure.message -replace '\s+', ' ')"
+                }
+            } catch {
+                Add-Finding -Gate 'Test' -Severity 'Error' -File 'tests' -Message "Could not read the Pester result file: $($_.Exception.Message)"
+            }
+
+            Remove-Item -LiteralPath $testLog -Force -ErrorAction SilentlyContinue
+        }
+
+        Add-GateResult -Name 'Test' -Status $(if ($failedCount -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $totalCount -ErrorCount $failedCount -WarningCount 0 -Note "Pester $($pester.Version)"
+    }
 }
 
 # Unconditional, not verbose-only: the point of running this is to see the table.

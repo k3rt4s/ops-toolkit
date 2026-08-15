@@ -314,10 +314,15 @@ function ConvertTo-OpsHexString {
         return $Value
     }
 
-    # Only a sequence of byte-convertible numbers is a thumbprint. Anything else that
-    # happens to be enumerable, a dictionary or a list of objects, is returned as-is
-    # rather than coerced into nonsense hex.
-    if ($Value -isnot [System.Collections.IDictionary] -and $Value -is [System.Collections.IEnumerable]) {
+    # A dictionary is never a thumbprint. Hand it to Join-OpsValue rather than letting
+    # it fall through to [string], which yields "System.Collections.Hashtable".
+    if ($Value -is [System.Collections.IDictionary]) {
+        return (Join-OpsValue -Value $Value)
+    }
+
+    # Only a sequence of byte-convertible numbers is a thumbprint. Any other
+    # enumerable falls back to a joined value rather than being coerced into hex.
+    if ($Value -is [System.Collections.IEnumerable]) {
         $bytes = @($Value)
         if ($bytes.Count -eq 0) {
             return ''
@@ -430,6 +435,261 @@ function Get-OpsSeverityRank {
     }
 }
 
+# Columns whose value changes on every run by arithmetic rather than by anything
+# happening. Comparing them makes every record look changed and buries the real
+# differences, which is the same failure as diffing a Conditional Access policy on
+# its modifiedDateTime.
+$script:OpsVolatileColumn = @(
+    'GeneratedAt', 'AssessedAt', 'AsOfUtc', 'LastWriteTime', 'TimeCreated'
+    'DaysToExpiry', 'DaysRemaining', 'AgeDays', 'UptimeDays', 'DaysSinceInstall'
+    'LastLogonDays', 'PasswordAgeDays', 'PwdLastSetAgeDays', 'LapsPasswordAgeDays'
+    'BuiltInAdminPasswordAgeDays', 'LifetimeDays', 'EncryptionPercentage'
+    'DurationSeconds', 'FirstSeen', 'LastSeen', 'SizeGb', 'EstimatedMonthlyCost'
+    # Paths into the run's own output folder differ on every run by construction.
+    'OutputPath', 'OutputDirectory', 'PackDirectory', 'CsvPath', 'JsonPath', 'SummaryPath', 'RunDirectory'
+)
+
+function Get-OpsVolatileColumn {
+    <#
+    .SYNOPSIS
+    Return the column names that change every run without anything having happened.
+
+    .DESCRIPTION
+    These are derived values, mostly ages and timestamps. The underlying facts they
+    are computed from, such as EndDateTime or LastBootUpTime, are compared instead.
+
+    .OUTPUTS
+    String array.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+
+    $script:OpsVolatileColumn
+}
+
+function Get-OpsRunDirectory {
+    <#
+    .SYNOPSIS
+    Return a collector's run directories, newest first.
+
+    .DESCRIPTION
+    Run directories are named prefix-yyyyMMdd_HHmmss. Sorting is done on the parsed
+    timestamp rather than on the name or the file system time, because a copied or
+    restored folder carries the wrong file system time and would reorder the history.
+
+    .PARAMETER Path
+    The report root to look under.
+
+    .PARAMETER Prefix
+    Optional run prefix. All prefixes are returned when omitted.
+
+    .OUTPUTS
+    PSCustomObject with Path, Prefix, and Timestamp, newest first.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$Prefix
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    # Accumulate into a list rather than assigning the foreach as an expression. A
+    # continue inside a foreach used as an expression can escape the loop entirely
+    # and propagate into the caller's own loops, which aborts a Pester run outright.
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($directory in (Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue)) {
+        $match = [regex]::Match($directory.Name, '^(?<prefix>.+)-(?<stamp>\d{8}_\d{6})$')
+        if (-not $match.Success) {
+            continue
+        }
+
+        if ($Prefix -and $match.Groups['prefix'].Value -ne $Prefix) {
+            continue
+        }
+
+        $parsed = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact($match.Groups['stamp'].Value, 'yyyyMMdd_HHmmss', $null, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+            continue
+        }
+
+        $results.Add([pscustomobject]@{
+                Path = $directory.FullName
+                Prefix = $match.Groups['prefix'].Value
+                Timestamp = $parsed
+            })
+    }
+
+    @($results) | Sort-Object Timestamp -Descending
+}
+
+function Compare-OpsRecordSet {
+    <#
+    .SYNOPSIS
+    Compare two record sets by key and report what was added, removed, and changed.
+
+    .DESCRIPTION
+    Records are matched on the key columns. Non-key, non-ignored columns are compared
+    value by value, and a changed record reports which fields differ and how.
+
+    When the key does not uniquely identify a record, comparison by key would silently
+    pick an arbitrary pair, so this reports the duplication and treats those records
+    as set membership only: present or absent, never changed.
+
+    .PARAMETER Previous
+    The earlier record set.
+
+    .PARAMETER Current
+    The later record set.
+
+    .PARAMETER KeyColumn
+    Columns that together identify a record.
+
+    .PARAMETER IgnoreColumn
+    Columns to exclude from comparison, in addition to the volatile defaults.
+
+    .PARAMETER IncludeVolatileColumn
+    Compare the volatile columns too. Off by default.
+
+    .OUTPUTS
+    PSCustomObject with Added, Removed, Changed, UnchangedCount, KeyIsUnique, and
+    DuplicateKey.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowNull()]
+        [object[]]$Previous,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowNull()]
+        [object[]]$Current,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$KeyColumn,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$IgnoreColumn = @(),
+
+        [Parameter()]
+        [switch]$IncludeVolatileColumn
+    )
+
+    $previousRecords = @($Previous | Where-Object { $null -ne $_ })
+    $currentRecords = @($Current | Where-Object { $null -ne $_ })
+
+    $ignored = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($column in $IgnoreColumn) { $ignored.Add($column) | Out-Null }
+    if (-not $IncludeVolatileColumn) {
+        foreach ($column in $script:OpsVolatileColumn) { $ignored.Add($column) | Out-Null }
+    }
+    foreach ($column in $KeyColumn) { $ignored.Add($column) | Out-Null }
+
+    function Get-Key {
+        param($Record)
+        (@($KeyColumn | ForEach-Object { Join-OpsValue -Value (Get-OpsPropertyValue -InputObject $Record -Name $_) }) -join '|')
+    }
+
+    # Duplicates are tracked per key, not as a single flag for the whole set. One
+    # ambiguous key must not switch off change detection for every other record in
+    # the report, which is a silent and total loss of the thing being asked for.
+    $duplicateKeySet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    $previousByKey = @{}
+    foreach ($record in $previousRecords) {
+        $key = Get-Key -Record $record
+        if ($previousByKey.ContainsKey($key)) {
+            $duplicateKeySet.Add($key) | Out-Null
+        } else {
+            $previousByKey[$key] = $record
+        }
+    }
+
+    $currentByKey = @{}
+    foreach ($record in $currentRecords) {
+        $key = Get-Key -Record $record
+        if ($currentByKey.ContainsKey($key)) {
+            $duplicateKeySet.Add($key) | Out-Null
+        } else {
+            $currentByKey[$key] = $record
+        }
+    }
+
+    $duplicateKeys = @($duplicateKeySet)
+    $keyIsUnique = $duplicateKeySet.Count -eq 0
+
+    $added = [System.Collections.Generic.List[object]]::new()
+    $removed = [System.Collections.Generic.List[object]]::new()
+    $changed = [System.Collections.Generic.List[object]]::new()
+    $unchanged = 0
+
+    foreach ($key in $currentByKey.Keys) {
+        if (-not $previousByKey.ContainsKey($key)) {
+            $added.Add([pscustomobject]@{ Key = $key; Record = $currentByKey[$key] })
+            continue
+        }
+
+        if ($duplicateKeySet.Contains($key)) {
+            # For this key alone, any pairing is arbitrary, so claim only membership.
+            # Every other key still gets a real comparison.
+            $unchanged++
+            continue
+        }
+
+        $before = $previousByKey[$key]
+        $after = $currentByKey[$key]
+        $columns = @(@($before.PSObject.Properties.Name) + @($after.PSObject.Properties.Name) | Select-Object -Unique | Where-Object { -not $ignored.Contains($_) })
+
+        $differences = [System.Collections.Generic.List[object]]::new()
+        foreach ($column in $columns) {
+            $beforeValue = Join-OpsValue -Value (Get-OpsPropertyValue -InputObject $before -Name $column)
+            $afterValue = Join-OpsValue -Value (Get-OpsPropertyValue -InputObject $after -Name $column)
+            if ($beforeValue -ne $afterValue) {
+                $differences.Add([pscustomobject]@{ Column = $column; Before = $beforeValue; After = $afterValue })
+            }
+        }
+
+        if ($differences.Count -gt 0) {
+            $changed.Add([pscustomobject]@{ Key = $key; Differences = @($differences); Record = $after })
+        } else {
+            $unchanged++
+        }
+    }
+
+    foreach ($key in $previousByKey.Keys) {
+        if (-not $currentByKey.ContainsKey($key)) {
+            $removed.Add([pscustomobject]@{ Key = $key; Record = $previousByKey[$key] })
+        }
+    }
+
+    [pscustomobject]@{
+        Added = @($added)
+        Removed = @($removed)
+        Changed = @($changed)
+        UnchangedCount = $unchanged
+        PreviousCount = $previousRecords.Count
+        CurrentCount = $currentRecords.Count
+        KeyColumn = @($KeyColumn)
+        KeyIsUnique = $keyIsUnique
+        DuplicateKey = @($duplicateKeys | Select-Object -Unique)
+        ComparedColumnsExclude = @($ignored | Sort-Object)
+    }
+}
+
 Export-ModuleMember -Function @(
     'Resolve-OpsOutputDirectory'
     'Resolve-OpsRunDirectory'
@@ -440,4 +700,7 @@ Export-ModuleMember -Function @(
     'ConvertTo-OpsHexString'
     'Get-OpsAge'
     'Get-OpsSeverityRank'
+    'Get-OpsVolatileColumn'
+    'Get-OpsRunDirectory'
+    'Compare-OpsRecordSet'
 )

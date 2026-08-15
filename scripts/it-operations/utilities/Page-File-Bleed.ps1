@@ -1,10 +1,53 @@
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
+<#
+.SYNOPSIS
+Force Windows to release page-file backed memory by removing and immediately restoring the page-file configuration.
+
+.DESCRIPTION
+Instructions:
+- Read the root README.md before running this script.
+- State-changing and disruptive. It removes every page file, waits, then restores
+  the exact configuration it captured first. Do not run it on a machine doing
+  anything that matters.
+- Run from an elevated shell. The script exits with an error if it is not elevated.
+- Nothing happens without -Execute. Without it the script prints what it would do
+  and exits 0. This gate predates the repo's -WhatIf convention; -WhatIf is also
+  honoured through ShouldProcess, so either will stop it.
+- Requires a reboot afterwards only if the restore step fails. The restore runs in a
+  finally block precisely so an error mid-operation still puts the configuration back.
+- If no Win32_PageFileSetting rows exist, the machine is on an automatically managed
+  page file and the script exits without changing anything.
+
+Purpose:
+Windows will leave memory paged out long after the pressure that caused it has gone,
+which shows up as a machine that feels slow with plenty of free RAM. Removing the
+page file forces the contents back into memory or discards them, and restoring it
+immediately puts the configuration back. This is a deliberate blunt instrument for a
+workstation after a heavy batch job, not maintenance to schedule.
+
+The original configuration is snapshotted before any change and restored in a finally
+block, so an interruption cannot leave the machine with no page file.
+
+Required syntax:
+pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1
+pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1 -Execute
+pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1 -Execute -WhatIf
+
+.OUTPUTS
+Writes progress to the information stream. No report files.
+
+.NOTES
+Status:
+Active script kept in the reorganized ops-toolkit repo. Legacy shape: it gates on
+-Execute rather than on -WhatIf alone, and it writes no plan or state report, unlike
+the newer state-changing scripts in this repo.
+#>
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [switch]$Execute
 )
 
 if (-not $Execute) {
-    Write-Host "Dry run only. Pass -Execute to modify page-file configuration."
+    Write-Information "Dry run only. Pass -Execute to modify page-file configuration." -InformationAction Continue
     Exit 0
 }
 
@@ -14,7 +57,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Exit 1
 }
 
-Write-Host "Checking current memory state..." -ForegroundColor Cyan
+Write-Information "Checking current memory state..." -InformationAction Continue
 $ComputerSystem = Get-CimInstance Win32_ComputerSystem
 $CurrentAutomatic = $ComputerSystem.AutomaticManagedPagefile
 
@@ -41,13 +84,13 @@ if (-not $PSCmdlet.ShouldProcess($TargetDescription, "Temporarily remove and res
 }
 
 try {
-    Set-CimInstance -Query "Select * from Win32_ComputerSystem" -Property @{AutomaticManagedPagefile=$False}
-    Write-Host "Temporarily removing page-file configuration..." -ForegroundColor Yellow
+    Set-CimInstance -Query 'Select * from Win32_ComputerSystem' -Property @{ AutomaticManagedPagefile = $false }
+    Write-Information "Temporarily removing page-file configuration..." -InformationAction Continue
     $PageSettings | Remove-CimInstance
     Start-Sleep -Seconds 5
 }
 finally {
-    Write-Host "Restoring original page-file configuration..." -ForegroundColor Green
+    Write-Information "Restoring original page-file configuration..." -InformationAction Continue
     foreach ($Setting in $OriginalSettings) {
         $Existing = Get-CimInstance Win32_PageFileSetting | Where-Object { $_.Name -eq $Setting.Name }
         if ($null -eq $Existing) {
@@ -92,4 +135,4 @@ if ($RestoredAutomatic -ne $CurrentAutomatic) {
     Write-Error "AutomaticManagedPagefile restore validation failed."
     Exit 1
 }
-Write-Host "Operation complete. Page-file configuration restored and validated." -ForegroundColor Cyan
+Write-Information "Operation complete. Page-file configuration restored and validated." -InformationAction Continue

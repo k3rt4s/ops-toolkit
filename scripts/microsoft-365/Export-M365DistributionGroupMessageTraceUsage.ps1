@@ -74,16 +74,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Resolve-OutputDirectory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    (Resolve-Path -LiteralPath $Path).Path
-}
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
 function Assert-ExchangeCommand {
     param(
@@ -225,11 +216,7 @@ try {
     Assert-ExchangeCommand -CommandName Get-MessageTraceV2
     Assert-ExchangeCommand -CommandName Get-DistributionGroup
 
-    $resolvedOutputDirectory = Resolve-OutputDirectory -Path $OutputDirectory
-    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $csvPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-$timestamp.csv"
-    $jsonPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-$timestamp.json"
-    $summaryPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-summary-$timestamp.json"
+    $runDirectory = Resolve-OpsRunDirectory -OutputDirectory $OutputDirectory -Prefix $OutputPrefix
 
     $startDate = $EndDate.AddDays(-$DaysBack)
     $windows = @(Get-TraceWindows -StartDate $startDate -EndDate $EndDate -WindowDays $ChunkDays)
@@ -279,11 +266,13 @@ try {
         }
     ) | Sort-Object @{ Expression = 'Active'; Descending = $true }, @{ Expression = 'TraceCount'; Descending = $true }, DisplayName
 
-    $results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-    Set-Content -LiteralPath $jsonPath -Value (@($results) | ConvertTo-Json -Depth 5) -Encoding utf8
+    $exports = @(
+        Export-OpsReport -Name 'distribution-group-usage' -Record @($results) -Directory $runDirectory
+    )
 
     $summary = [pscustomobject]@{
         GeneratedAt = Get-Date
+        OutputDirectory = $runDirectory
         DaysBack = $DaysBack
         ChunkDays = $ChunkDays
         ResultSize = $ResultSize
@@ -293,13 +282,11 @@ try {
         GroupCount = @($results).Count
         ActiveGroupCount = @($results | Where-Object Active).Count
         InactiveGroupCount = @($results | Where-Object { -not $_.Active }).Count
-        CsvPath = (Resolve-Path -LiteralPath $csvPath).Path
-        JsonPath = (Resolve-Path -LiteralPath $jsonPath).Path
-        SummaryPath = (Resolve-Path -LiteralPath $summaryPath).Path
+        Exports = @($exports)
     }
-    Set-Content -LiteralPath $summaryPath -Value ($summary | ConvertTo-Json -Depth 5) -Encoding utf8
-    Write-Information "Reports written to $resolvedOutputDirectory" -InformationAction Continue
-    $summary
+
+    Write-Information "Reports written to $runDirectory" -InformationAction Continue
+    Export-OpsSummary -Summary $summary -Directory $runDirectory
 } finally {
     if ($DisconnectWhenFinished) {
         Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue

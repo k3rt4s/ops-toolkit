@@ -269,6 +269,12 @@ function Join-OpsValue {
         return $Value
     }
 
+    # A dictionary is IEnumerable but enumerates to DictionaryEntry objects, which
+    # stringify as type names. Render it as key=value pairs in a stable order instead.
+    if ($Value -is [System.Collections.IDictionary]) {
+        return ((@($Value.Keys) | Sort-Object | ForEach-Object { "$_=$($Value[$_])" }) -join ';')
+    }
+
     if ($Value -is [System.Collections.IEnumerable]) {
         return ((@($Value) | Where-Object { $null -ne $_ }) -join ';')
     }
@@ -308,13 +314,25 @@ function ConvertTo-OpsHexString {
         return $Value
     }
 
-    if ($Value -is [System.Collections.IEnumerable]) {
+    # Only a sequence of byte-convertible numbers is a thumbprint. Anything else that
+    # happens to be enumerable, a dictionary or a list of objects, is returned as-is
+    # rather than coerced into nonsense hex.
+    if ($Value -isnot [System.Collections.IDictionary] -and $Value -is [System.Collections.IEnumerable]) {
         $bytes = @($Value)
         if ($bytes.Count -eq 0) {
             return ''
         }
 
-        return (($bytes | ForEach-Object { '{0:X2}' -f [byte]$_ }) -join '')
+        $converted = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $bytes) {
+            try {
+                $converted.Add('{0:X2}' -f [byte]$item)
+            } catch {
+                return (Join-OpsValue -Value $Value)
+            }
+        }
+
+        return ($converted -join '')
     }
 
     [string]$Value

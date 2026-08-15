@@ -9,8 +9,11 @@ Instructions:
 - Runs against the local machine by default. Use -ComputerName for remote hosts,
   which needs WinRM and local administrator rights on each target.
 - Support dates come from data\it-operations\lifecycle\windows-support-lifecycle.csv,
-  not from the script. Microsoft moves these dates. Update the file, not the code,
-  and the script warns when the file has not been touched for -DataMaxAgeDays.
+  not from the script. Microsoft moves these dates. Update the file, not the code.
+- Each row carries VerifiedOn and Source. Staleness is measured from the oldest
+  VerifiedOn date, not from the file timestamp, because git resets a checked-out
+  file's timestamp and a fresh clone of stale data would otherwise look current.
+  When you re-check a date against its Source, update its VerifiedOn.
 - A machine whose build is not in the data file is reported as Unknown rather than
   guessed. Unknown is a prompt to update the data file, not a pass.
 - Generated reports are written under reports\it-operations by default.
@@ -176,11 +179,25 @@ if (-not (Test-Path -LiteralPath $LifecycleDataPath)) {
 }
 
 $lifecycleData = @(Import-Csv -LiteralPath $LifecycleDataPath)
-$dataFile = Get-Item -LiteralPath $LifecycleDataPath
-$dataAgeDays = [int][math]::Floor(((Get-Date) - $dataFile.LastWriteTime).TotalDays)
-$dataIsStale = $dataAgeDays -gt $DataMaxAgeDays
-if ($dataIsStale) {
-    Write-Warning "The lifecycle data file is $dataAgeDays days old, over the $DataMaxAgeDays day threshold. Microsoft moves these dates. Re-check them before acting on this report."
+
+# Staleness comes from the VerifiedOn column, not from the file timestamp. Git sets
+# a checked-out file's mtime to the checkout time, so a fresh clone of two-year-old
+# data would otherwise report itself as verified today.
+$verifiedDates = foreach ($row in $lifecycleData) {
+    $parsed = [datetime]::MinValue
+    if ([datetime]::TryParse([string](Get-OpsPropertyValue -InputObject $row -Name 'VerifiedOn'), [ref]$parsed)) {
+        $parsed
+    }
+}
+
+$oldestVerified = @($verifiedDates) | Sort-Object | Select-Object -First 1
+$dataAgeDays = if ($oldestVerified) { [int][math]::Floor(((Get-Date) - $oldestVerified).TotalDays) } else { $null }
+$dataIsStale = $null -eq $dataAgeDays -or $dataAgeDays -gt $DataMaxAgeDays
+
+if ($null -eq $dataAgeDays) {
+    Write-Warning "The lifecycle data file has no usable VerifiedOn dates, so its age cannot be established. Treat every date in this report as unverified."
+} elseif ($dataIsStale) {
+    Write-Warning "The oldest lifecycle row was verified $dataAgeDays days ago, over the $DataMaxAgeDays day threshold. Microsoft moves these dates. Re-check them against the Source column before acting on this report."
 }
 
 $asOf = Get-Date
@@ -257,6 +274,8 @@ foreach ($target in $targets) {
             EditionClass = $editionClass
             EndOfServicing = $endOfServicing
             DaysRemaining = $daysRemaining
+            DateVerifiedOn = if ($row) { Get-OpsPropertyValue -InputObject $row -Name 'VerifiedOn' } else { '' }
+            DateSource = if ($row) { Get-OpsPropertyValue -InputObject $row -Name 'Source' } else { '' }
             Manufacturer = $fact.Manufacturer
             Model = $fact.Model
             Domain = $fact.Domain
@@ -287,6 +306,7 @@ $summary = [pscustomobject]@{
     GeneratedAt = $asOf
     OutputDirectory = $runDirectory
     LifecycleDataPath = (Resolve-Path -LiteralPath $LifecycleDataPath).Path
+    LifecycleDataOldestVerifiedOn = $oldestVerified
     LifecycleDataAgeDays = $dataAgeDays
     LifecycleDataIsStale = $dataIsStale
     WarnWithinDays = $WarnWithinDays

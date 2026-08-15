@@ -88,6 +88,8 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
+
 # userAccountControl bits this audit cares about.
 $script:UacFlag = @{
     AccountDisabled = 0x0002
@@ -118,68 +120,6 @@ $script:Tier0Group = @(
     [pscustomobject]@{ Key = 'Replicator'; Sid = 'S-1-5-32-552'; ForestRootOnly = $false; Label = 'Replicator' }
 )
 
-function Resolve-OutputDirectory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    (Resolve-Path -LiteralPath $Path).Path
-}
-
-function Export-Report {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyCollection()]
-        [object[]]$Record,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Directory
-    )
-
-    $csvPath = Join-Path $Directory "$Name.csv"
-    $jsonPath = Join-Path $Directory "$Name.json"
-    $Record | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-    Set-Content -LiteralPath $jsonPath -Value (@($Record) | ConvertTo-Json -Depth 8) -Encoding utf8
-
-    [pscustomobject]@{
-        Name = $Name
-        Count = @($Record).Count
-        CsvPath = (Resolve-Path -LiteralPath $csvPath).Path
-        JsonPath = (Resolve-Path -LiteralPath $jsonPath).Path
-    }
-}
-
-function Get-PropertyValue {
-    param(
-        [Parameter(Mandatory = $true)]
-        [AllowNull()]
-        [object]$InputObject,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name
-    )
-
-    if ($null -eq $InputObject) {
-        return $null
-    }
-
-    $property = $InputObject.PSObject.Properties[$Name]
-    if ($null -eq $property) {
-        return $null
-    }
-
-    $property.Value
-}
-
 function Test-UacFlag {
     param(
         [Parameter(Mandatory = $true)]
@@ -203,39 +143,6 @@ function Test-UacFlag {
     ([int]$UserAccountControl -band $flag) -eq $flag
 }
 
-# Returns whole days elapsed, or null when the timestamp was never set. AD writes
-# "never" as 0 or as an epoch date rather than as a null, so both are handled here.
-function Get-Age {
-    param(
-        [Parameter(Mandatory = $true)]
-        [AllowNull()]
-        [object]$Timestamp,
-
-        [Parameter(Mandatory = $true)]
-        [datetime]$AsOf
-    )
-
-    if ($null -eq $Timestamp) {
-        return $null
-    }
-
-    # Never-set AD timestamps come back as 0 or as the epoch, not as null.
-    if ($Timestamp -is [long] -or $Timestamp -is [int]) {
-        if ([long]$Timestamp -le 0) {
-            return $null
-        }
-
-        $Timestamp = [datetime]::FromFileTimeUtc([long]$Timestamp)
-    }
-
-    $value = [datetime]$Timestamp
-    if ($value.Year -le 1601) {
-        return $null
-    }
-
-    [int][math]::Floor(($AsOf - $value).TotalDays)
-}
-
 function Test-ManagedServiceAccount {
     param(
         [Parameter(Mandatory = $true)]
@@ -246,7 +153,7 @@ function Test-ManagedServiceAccount {
     # Get-ADUser returns ObjectClass as the single most specific class; a raw
     # directory entry returns the whole class chain as an array. Property lookup is
     # case-insensitive, so one read covers both ObjectClass and objectClass.
-    $objectClass = Get-PropertyValue -InputObject $AdObject -Name 'ObjectClass'
+    $objectClass = Get-OpsPropertyValue -InputObject $AdObject -Name 'ObjectClass'
     foreach ($entry in @($objectClass)) {
         if ([string]$entry -match '(?i)^(msDS-)?(Group)?ManagedServiceAccount$') {
             return $true
@@ -304,33 +211,17 @@ function Get-FindingRecord {
         FindingId = $FindingId
         Severity = $Severity
         Category = $Category
-        SamAccountName = [string](Get-PropertyValue -InputObject $AdObject -Name 'SamAccountName')
-        Name = [string](Get-PropertyValue -InputObject $AdObject -Name 'Name')
-        ObjectClass = [string](Get-PropertyValue -InputObject $AdObject -Name 'ObjectClass')
-        Enabled = Get-PropertyValue -InputObject $AdObject -Name 'Enabled'
+        SamAccountName = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'SamAccountName')
+        Name = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'Name')
+        ObjectClass = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'ObjectClass')
+        Enabled = Get-OpsPropertyValue -InputObject $AdObject -Name 'Enabled'
         IsTier0 = $IsTier0
-        DistinguishedName = [string](Get-PropertyValue -InputObject $AdObject -Name 'DistinguishedName')
+        DistinguishedName = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'DistinguishedName')
         Detail = $Detail
         Evidence = $Evidence
         PasswordAgeDays = $PwdLastSetAgeDays
         LastLogonDays = $LastLogonDays
         Recommendation = $Recommendation
-    }
-}
-
-function Get-SeverityRank {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Severity
-    )
-
-    switch ($Severity) {
-        'Critical' { 0 }
-        'High' { 1 }
-        'Medium' { 2 }
-        'Low' { 3 }
-        default { 4 }
     }
 }
 
@@ -353,7 +244,7 @@ $domainSid = [string]$domain.DomainSID
 $isForestRoot = $domain.DNSRoot -eq $forest.RootDomain
 $asOfUtc = (Get-Date).ToUniversalTime()
 
-$resolvedOutputDirectory = Resolve-OutputDirectory -Path $OutputDirectory
+$resolvedOutputDirectory = Resolve-OpsOutputDirectory -Path $OutputDirectory
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $runDirectory = Join-Path $resolvedOutputDirectory "$OutputPrefix-$timestamp"
 New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
@@ -399,27 +290,27 @@ foreach ($groupSpec in $script:Tier0Group) {
     }
 
     foreach ($member in $members) {
-        $memberSid = [string](Get-PropertyValue -InputObject $member -Name 'objectSid')
+        $memberSid = [string](Get-OpsPropertyValue -InputObject $member -Name 'objectSid')
         if ($memberSid) {
             $tier0Sids.Add($memberSid) | Out-Null
         }
 
-        $dn = [string](Get-PropertyValue -InputObject $member -Name 'DistinguishedName')
+        $dn = [string](Get-OpsPropertyValue -InputObject $member -Name 'DistinguishedName')
         if ($dn) {
             $tier0Sids.Add($dn) | Out-Null
         }
 
-        $uac = Get-PropertyValue -InputObject $member -Name 'userAccountControl'
+        $uac = Get-OpsPropertyValue -InputObject $member -Name 'userAccountControl'
         $tier0Members.Add([pscustomobject]@{
                 GroupKey = $groupSpec.Key
                 GroupLabel = $groupSpec.Label
-                SamAccountName = [string](Get-PropertyValue -InputObject $member -Name 'SamAccountName')
-                Name = [string](Get-PropertyValue -InputObject $member -Name 'Name')
-                ObjectClass = [string](Get-PropertyValue -InputObject $member -Name 'ObjectClass')
+                SamAccountName = [string](Get-OpsPropertyValue -InputObject $member -Name 'SamAccountName')
+                Name = [string](Get-OpsPropertyValue -InputObject $member -Name 'Name')
+                ObjectClass = [string](Get-OpsPropertyValue -InputObject $member -Name 'ObjectClass')
                 DistinguishedName = $dn
                 Enabled = if ($null -eq $uac) { $null } else { -not (Test-UacFlag -UserAccountControl $uac -FlagName 'AccountDisabled') }
-                PasswordAgeDays = Get-Age -Timestamp (Get-PropertyValue -InputObject $member -Name 'pwdLastSet') -AsOf $asOfUtc
-                LastLogonDays = Get-Age -Timestamp (Get-PropertyValue -InputObject $member -Name 'lastLogonTimestamp') -AsOf $asOfUtc
+                PasswordAgeDays = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $member -Name 'pwdLastSet') -AsOf $asOfUtc
+                LastLogonDays = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $member -Name 'lastLogonTimestamp') -AsOf $asOfUtc
             })
     }
 
@@ -440,12 +331,12 @@ function Test-Tier0Object {
         [object]$AdObject
     )
 
-    $dn = [string](Get-PropertyValue -InputObject $AdObject -Name 'DistinguishedName')
+    $dn = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'DistinguishedName')
     if ($dn -and $tier0Sids.Contains($dn)) {
         return $true
     }
 
-    $sid = [string](Get-PropertyValue -InputObject $AdObject -Name 'SID')
+    $sid = [string](Get-OpsPropertyValue -InputObject $AdObject -Name 'SID')
     if ($sid -and $tier0Sids.Contains($sid)) {
         return $true
     }
@@ -464,11 +355,11 @@ $computerProperties = @('SamAccountName', 'Name', 'Enabled', 'DistinguishedName'
 $computers = @(Get-ADComputer -Filter * -Properties $computerProperties @searchParameter)
 
 foreach ($user in $users) {
-    $uac = Get-PropertyValue -InputObject $user -Name 'userAccountControl'
-    $enabled = Get-PropertyValue -InputObject $user -Name 'Enabled'
+    $uac = Get-OpsPropertyValue -InputObject $user -Name 'userAccountControl'
+    $enabled = Get-OpsPropertyValue -InputObject $user -Name 'Enabled'
     $isTier0 = Test-Tier0Object -AdObject $user
-    $passwordAge = Get-Age -Timestamp (Get-PropertyValue -InputObject $user -Name 'pwdLastSet') -AsOf $asOfUtc
-    $logonAge = Get-Age -Timestamp (Get-PropertyValue -InputObject $user -Name 'lastLogonTimestamp') -AsOf $asOfUtc
+    $passwordAge = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $user -Name 'pwdLastSet') -AsOf $asOfUtc
+    $logonAge = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $user -Name 'lastLogonTimestamp') -AsOf $asOfUtc
     $isManaged = Test-ManagedServiceAccount -AdObject $user
     $common = @{ AdObject = $user; PwdLastSetAgeDays = $passwordAge; LastLogonDays = $logonAge; IsTier0 = $isTier0 }
 
@@ -480,7 +371,7 @@ foreach ($user in $users) {
                     -Recommendation 'Re-enable pre-authentication unless a documented legacy dependency requires it. If it must stay, give the account a long random password and keep it out of every privileged group.'))
     }
 
-    $spns = @(Get-PropertyValue -InputObject $user -Name 'servicePrincipalName' | Where-Object { $_ })
+    $spns = @(Get-OpsPropertyValue -InputObject $user -Name 'servicePrincipalName' | Where-Object { $_ })
     if ($spns.Count -gt 0 -and -not $isManaged) {
         $severity = if ($isTier0) {
             'Critical'
@@ -510,7 +401,7 @@ foreach ($user in $users) {
                     -Recommendation 'Use Kerberos-only constrained delegation where possible, and scope msDS-AllowedToDelegateTo as tightly as the application allows.'))
     }
 
-    $allowedToDelegate = @(Get-PropertyValue -InputObject $user -Name 'msDS-AllowedToDelegateTo' | Where-Object { $_ })
+    $allowedToDelegate = @(Get-OpsPropertyValue -InputObject $user -Name 'msDS-AllowedToDelegateTo' | Where-Object { $_ })
     if ($allowedToDelegate.Count -gt 0) {
         $findings.Add((Get-FindingRecord @common -FindingId 'AD-DELEG-003' -Category 'Delegation' -Severity 'Medium' `
                     -Detail 'Account has constrained delegation configured to specific services.' `
@@ -518,7 +409,7 @@ foreach ($user in $users) {
                     -Recommendation 'Confirm every target service is still required and that none of them are tier-0.'))
     }
 
-    if (Get-PropertyValue -InputObject $user -Name 'msDS-AllowedToActOnBehalfOfOtherIdentity') {
+    if (Get-OpsPropertyValue -InputObject $user -Name 'msDS-AllowedToActOnBehalfOfOtherIdentity') {
         $findings.Add((Get-FindingRecord @common -FindingId 'AD-DELEG-004' -Category 'Delegation' -Severity 'Medium' `
                     -Detail 'Resource-based constrained delegation is configured on this account, meaning some other principal may impersonate users to it.' `
                     -Evidence 'msDS-AllowedToActOnBehalfOfOtherIdentity is set' `
@@ -540,7 +431,7 @@ foreach ($user in $users) {
                     -Recommendation 'Clear the flag and force a password change. Reversible encryption is only needed by a small number of legacy protocols.'))
     }
 
-    $adminCount = Get-PropertyValue -InputObject $user -Name 'adminCount'
+    $adminCount = Get-OpsPropertyValue -InputObject $user -Name 'adminCount'
     if ($adminCount -eq 1 -and -not $isTier0) {
         $findings.Add((Get-FindingRecord @common -FindingId 'AD-ADMCNT-001' -Category 'Privilege residue' -Severity 'Medium' `
                     -Detail 'adminCount is 1 but the account is no longer in any tier-0 group. It keeps the adminSDHolder ACL, so normal delegated administration silently does not apply to it.' `
@@ -550,13 +441,13 @@ foreach ($user in $users) {
 }
 
 foreach ($computer in $computers) {
-    $uac = Get-PropertyValue -InputObject $computer -Name 'userAccountControl'
+    $uac = Get-OpsPropertyValue -InputObject $computer -Name 'userAccountControl'
     $isTier0 = Test-Tier0Object -AdObject $computer
-    $isDomainController = (Get-PropertyValue -InputObject $computer -Name 'PrimaryGroupID') -in @(516, 521)
+    $isDomainController = (Get-OpsPropertyValue -InputObject $computer -Name 'PrimaryGroupID') -in @(516, 521)
     $common = @{
         AdObject = $computer
-        PwdLastSetAgeDays = Get-Age -Timestamp (Get-PropertyValue -InputObject $computer -Name 'pwdLastSet') -AsOf $asOfUtc
-        LastLogonDays = Get-Age -Timestamp (Get-PropertyValue -InputObject $computer -Name 'lastLogonTimestamp') -AsOf $asOfUtc
+        PwdLastSetAgeDays = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $computer -Name 'pwdLastSet') -AsOf $asOfUtc
+        LastLogonDays = Get-OpsAge -Timestamp (Get-OpsPropertyValue -InputObject $computer -Name 'lastLogonTimestamp') -AsOf $asOfUtc
         IsTier0 = $isTier0
     }
 
@@ -583,7 +474,7 @@ foreach ($computer in $computers) {
                     -Recommendation 'Restrict to Kerberos-only constrained delegation where the application supports it.'))
     }
 
-    $allowedToDelegate = @(Get-PropertyValue -InputObject $computer -Name 'msDS-AllowedToDelegateTo' | Where-Object { $_ })
+    $allowedToDelegate = @(Get-OpsPropertyValue -InputObject $computer -Name 'msDS-AllowedToDelegateTo' | Where-Object { $_ })
     if ($allowedToDelegate.Count -gt 0) {
         $findings.Add((Get-FindingRecord @common -FindingId 'AD-DELEG-003' -Category 'Delegation' -Severity 'Medium' `
                     -Detail 'Computer has constrained delegation configured to specific services.' `
@@ -591,7 +482,7 @@ foreach ($computer in $computers) {
                     -Recommendation 'Confirm every target service is still required and that none of them are tier-0.'))
     }
 
-    if (Get-PropertyValue -InputObject $computer -Name 'msDS-AllowedToActOnBehalfOfOtherIdentity') {
+    if (Get-OpsPropertyValue -InputObject $computer -Name 'msDS-AllowedToActOnBehalfOfOtherIdentity') {
         $findings.Add((Get-FindingRecord @common -FindingId 'AD-DELEG-004' -Category 'Delegation' -Severity 'Medium' `
                     -Detail 'Resource-based constrained delegation is configured on this computer.' `
                     -Evidence 'msDS-AllowedToActOnBehalfOfOtherIdentity is set' `
@@ -602,7 +493,7 @@ foreach ($computer in $computers) {
 Write-Verbose 'Checking krbtgt password age.'
 try {
     $krbtgt = Get-ADUser -Identity 'krbtgt' -Properties SamAccountName, Name, Enabled, DistinguishedName, pwdLastSet, SID, objectClass @adParameter
-    $krbtgtAge = Get-Age -Timestamp $krbtgt.pwdLastSet -AsOf $asOfUtc
+    $krbtgtAge = Get-OpsAge -Timestamp $krbtgt.pwdLastSet -AsOf $asOfUtc
     if ($null -ne $krbtgtAge -and $krbtgtAge -gt $KrbtgtWarningDays) {
         $findings.Add((Get-FindingRecord -AdObject $krbtgt -FindingId 'AD-KRBTGT-001' -Category 'Kerberos' `
                     -Severity $(if ($krbtgtAge -gt ($KrbtgtWarningDays * 2)) { 'High' } else { 'Medium' }) `
@@ -656,7 +547,7 @@ foreach ($member in $tier0Members) {
     }
 }
 
-$allFindings = @($findings) | Sort-Object -Property @{ Expression = { Get-SeverityRank -Severity $_.Severity } }, FindingId, SamAccountName
+$allFindings = @($findings) | Sort-Object -Property @{ Expression = { Get-OpsSeverityRank -Severity $_.Severity } }, FindingId, SamAccountName
 
 $findingRollup = foreach ($group in (@($allFindings) | Group-Object -Property FindingId)) {
     $first = $group.Group[0]
@@ -672,10 +563,10 @@ $findingRollup = foreach ($group in (@($allFindings) | Group-Object -Property Fi
 }
 
 $exports = @(
-    Export-Report -Name 'findings' -Record $allFindings -Directory $runDirectory
-    Export-Report -Name 'finding-rollup' -Record @($findingRollup) -Directory $runDirectory
-    Export-Report -Name 'tier0-membership' -Record @($tier0Members) -Directory $runDirectory
-    Export-Report -Name 'tier0-groups' -Record @($groupInventory) -Directory $runDirectory
+    Export-OpsReport -Name 'findings' -Record $allFindings -Directory $runDirectory
+    Export-OpsReport -Name 'finding-rollup' -Record @($findingRollup) -Directory $runDirectory
+    Export-OpsReport -Name 'tier0-membership' -Record @($tier0Members) -Directory $runDirectory
+    Export-OpsReport -Name 'tier0-groups' -Record @($groupInventory) -Directory $runDirectory
 )
 
 $summaryPath = Join-Path $runDirectory 'summary.json'

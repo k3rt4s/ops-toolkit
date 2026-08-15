@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Run a sequence of disk maintenance operations on a specified drive.
 

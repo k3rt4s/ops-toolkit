@@ -248,6 +248,14 @@ if ($SearchBase) {
 }
 
 $scoped = @($scopedObjects | Sort-Object DistinguishedName -Unique)
+
+# -MaxObject bounds each LDAP query, so a wide tier-0 expansion can still add up to
+# more than it. Cap the total too, and say so rather than silently truncating.
+if ($scoped.Count -gt $MaxObject) {
+    Write-Warning "Scoped $($scoped.Count) objects, over the $MaxObject cap. Reading the first $MaxObject only; this report is incomplete. Raise -MaxObject or narrow with -SearchBase."
+    $scoped = @($scoped | Select-Object -First $MaxObject)
+}
+
 Write-Verbose "Reading security descriptors on $($scoped.Count) objects."
 
 $findings = [System.Collections.Generic.List[object]]::new()
@@ -276,15 +284,19 @@ foreach ($item in $scoped) {
 
         $identity = [string](Get-OpsPropertyValue -InputObject $rule -Name 'IdentityReference')
         $sid = ''
+        $resolved = $true
         try {
             $sid = ([System.Security.Principal.NTAccount]$identity).Translate([System.Security.Principal.SecurityIdentifier]).Value
         } catch {
-            # An identity that is already a raw SID did not translate because the
-            # account is gone. That is worth reporting, not worth failing on.
+            # Either the ACE already holds a raw SID because the account is gone, or a
+            # foreign or unresolvable principal did not translate. Both are reported;
+            # neither is suppressed, because a principal whose SID is unknown cannot be
+            # matched against the expected list and must not be assumed harmless.
+            $resolved = $false
             $sid = if ($identity -match '^S-1-') { $identity } else { '' }
         }
 
-        if (Test-ExpectedPrincipal -Sid $sid -DomainSid $domainSid) {
+        if ($resolved -and (Test-ExpectedPrincipal -Sid $sid -DomainSid $domainSid)) {
             continue
         }
 
@@ -294,6 +306,7 @@ foreach ($item in $scoped) {
                     Right = $right.Right
                     Principal = $identity
                     PrincipalSid = $sid
+                    PrincipalResolved = $resolved
                     PrincipalIsOrphaned = [bool]($identity -match '^S-1-')
                     TargetName = $item.Name
                     TargetClass = $item.Class
@@ -322,6 +335,7 @@ $principalRollup = foreach ($group in (@($sortedFindings) | Group-Object -Proper
     [pscustomobject]@{
         Principal = $group.Name
         PrincipalSid = $rows[0].PrincipalSid
+        PrincipalResolved = $rows[0].PrincipalResolved
         IsOrphaned = $rows[0].PrincipalIsOrphaned
         FindingCount = $rows.Count
         HighestSeverity = (@($rows | Sort-Object { Get-OpsSeverityRank -Severity $_.Severity } | Select-Object -First 1).Severity)
@@ -346,6 +360,7 @@ $summary = [pscustomobject]@{
     IncludeInherited = [bool]$IncludeInherited
     ObjectsScoped = $scoped.Count
     ObjectsUnreadable = $unreadable
+    UnresolvedPrincipals = @($principalRollup | Where-Object { -not $_.PrincipalResolved }).Count
     FindingCount = $sortedFindings.Count
     CriticalCount = @($sortedFindings | Where-Object { $_.Severity -eq 'Critical' }).Count
     HighCount = @($sortedFindings | Where-Object { $_.Severity -eq 'High' }).Count

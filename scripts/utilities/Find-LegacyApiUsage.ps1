@@ -73,6 +73,8 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
+
 if (-not $Path) {
     @(
         'Find-LegacyApiUsage.ps1 scans a folder tree for retired or soon-to-be-retired Microsoft APIs.'
@@ -181,45 +183,6 @@ if (-not $activeRules) {
     throw "No rules match -Severity $Severity."
 }
 
-function Resolve-OutputDirectory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    (Resolve-Path -LiteralPath $Path).Path
-}
-
-function Export-Report {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyCollection()]
-        [object[]]$Record,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Directory
-    )
-
-    $csvPath = Join-Path $Directory "$Name.csv"
-    $jsonPath = Join-Path $Directory "$Name.json"
-    $Record | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-    Set-Content -LiteralPath $jsonPath -Value (@($Record) | ConvertTo-Json -Depth 8) -Encoding utf8
-
-    [pscustomobject]@{
-        Name = $Name
-        Count = @($Record).Count
-        CsvPath = (Resolve-Path -LiteralPath $csvPath).Path
-        JsonPath = (Resolve-Path -LiteralPath $jsonPath).Path
-    }
-}
-
 function Test-CommentLine {
     param(
         [Parameter(Mandatory = $true)]
@@ -228,7 +191,13 @@ function Test-CommentLine {
 
         [Parameter(Mandatory = $true)]
         [AllowEmptyString()]
-        [string]$FileExtension
+        [string]$FileExtension,
+
+        # Markdown has no comment syntax, but it has the same distinction: a command
+        # inside a fenced block is something someone runs, and a name in a sentence is
+        # prose. Without this, a document describing these very rules reports itself.
+        [Parameter()]
+        [bool]$InCodeFence = $false
     )
 
     $trimmed = $Line.TrimStart()
@@ -241,7 +210,7 @@ function Test-CommentLine {
         { $_ -in '.cs', '.js', '.ts' } { return $trimmed.StartsWith('//') }
         '.vbs' { return $trimmed.StartsWith("'") }
         { $_ -in '.bat', '.cmd' } { return $trimmed -match '^(?i)(rem\b|::)' }
-        '.md' { return $false }
+        '.md' { return -not $InCodeFence }
         default { return $false }
     }
 }
@@ -307,7 +276,7 @@ function Get-ScanFile {
     }
 }
 
-$resolvedOutputDirectory = Resolve-OutputDirectory -Path $OutputDirectory
+$resolvedOutputDirectory = Resolve-OpsOutputDirectory -Path $OutputDirectory
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $runDirectory = Join-Path $resolvedOutputDirectory "$OutputPrefix-$timestamp"
 New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
@@ -334,9 +303,17 @@ foreach ($file in (Get-ScanFile -Root $Path -IncludeExtension $Extension -SkipDi
     }
 
     $scannedCount++
+    $isMarkdown = $file.Extension -ieq '.md'
+    $inCodeFence = $false
 
     for ($index = 0; $index -lt $lines.Count; $index++) {
         $line = $lines[$index]
+
+        if ($isMarkdown -and $line.TrimStart().StartsWith('```')) {
+            $inCodeFence = -not $inCodeFence
+            continue
+        }
+
         if (-not $line) {
             continue
         }
@@ -356,7 +333,7 @@ foreach ($file in (Get-ScanFile -Root $Path -IncludeExtension $Extension -SkipDi
                     LineNumber = $index + 1
                     MatchedText = $matchResult.Value
                     LineText = $line.Trim()
-                    InComment = Test-CommentLine -Line $line -FileExtension $file.Extension
+                    InComment = Test-CommentLine -Line $line -FileExtension $file.Extension -InCodeFence $inCodeFence
                     DeadlineNote = $rule.DeadlineNote
                     Replacement = $rule.Replacement
                 })
@@ -391,9 +368,9 @@ $deadlineRollup = foreach ($group in (@($allFindings) | Group-Object -Property D
 }
 
 $exports = @(
-    Export-Report -Name 'findings' -Record $allFindings -Directory $runDirectory
-    Export-Report -Name 'rule-rollup' -Record @($ruleRollup) -Directory $runDirectory
-    Export-Report -Name 'deadline-rollup' -Record @($deadlineRollup) -Directory $runDirectory
+    Export-OpsReport -Name 'findings' -Record $allFindings -Directory $runDirectory
+    Export-OpsReport -Name 'rule-rollup' -Record @($ruleRollup) -Directory $runDirectory
+    Export-OpsReport -Name 'deadline-rollup' -Record @($deadlineRollup) -Directory $runDirectory
 )
 
 $summaryPath = Join-Path $runDirectory 'summary.json'

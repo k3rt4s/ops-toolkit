@@ -63,6 +63,7 @@ $helpExempt = @{
 
 $findings = [System.Collections.Generic.List[object]]::new()
 $gateResults = [System.Collections.Generic.List[object]]::new()
+$script:MissingTool = @()
 
 function Add-Finding {
     param(
@@ -124,7 +125,7 @@ $relative = {
 }
 
 if ($Gate -contains 'Parser') {
-    $files = @(Get-RepoScript -Extension '*.ps1') + @(Get-RepoScript -Extension '*.psm1')
+    $files = @(@(Get-RepoScript -Extension '*.ps1') + @(Get-RepoScript -Extension '*.psm1') | Sort-Object FullName -Unique)
     $errorCount = 0
     foreach ($file in $files) {
         $tokens = $null
@@ -134,6 +135,21 @@ if ($Gate -contains 'Parser') {
             $errorCount++
             Add-Finding -Gate 'Parser' -Severity 'Error' -File (& $relative $file.FullName) -Line $parseError.Extent.StartLineNumber -Message $parseError.Message
         }
+
+        # PowerShell 7 reads a BOM-less file as UTF-8; Windows PowerShell 5.1, which
+        # is what a scheduled task runs, reads it as the ANSI code page. A file with
+        # non-ASCII characters and no BOM therefore fails to parse under 5.1 and the
+        # whole script silently does nothing. This has cost real overnight runs.
+        $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+        $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+        if (-not $hasBom) {
+            $nonAscii = @($bytes | Where-Object { $_ -gt 127 })
+            if ($nonAscii.Count -gt 0) {
+                $errorCount++
+                Add-Finding -Gate 'Parser' -Severity 'Error' -File (& $relative $file.FullName) `
+                    -Message "Contains $($nonAscii.Count) non-ASCII byte(s) with no UTF-8 BOM. Windows PowerShell 5.1 will fail to parse this file, so a scheduled task running it does nothing at all. Add a BOM or use ASCII only."
+            }
+        }
     }
 
     Add-GateResult -Name 'Parser' -Status $(if ($errorCount -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $files.Count -ErrorCount $errorCount -WarningCount 0
@@ -141,6 +157,8 @@ if ($Gate -contains 'Parser') {
 
 if ($Gate -contains 'Analyzer') {
     if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+        # A requested gate that cannot run is a missing prerequisite, not a pass.
+        $script:MissingTool += 'PSScriptAnalyzer'
         Add-GateResult -Name 'Analyzer' -Status 'SKIP' -Checked 0 -ErrorCount 0 -WarningCount 0 -Note 'PSScriptAnalyzer is not installed.'
     } else {
         Import-Module PSScriptAnalyzer -ErrorAction Stop
@@ -193,7 +211,35 @@ if ($Gate -contains 'Help') {
         }
     }
 
-    Add-GateResult -Name 'Help' -Status $(if ($helpErrors -eq 0) { 'PASS' } else { 'FAIL' }) -Checked ($files.Count - $exempted) -ErrorCount $helpErrors -WarningCount 0 -Note "$exempted exempt"
+    # Module functions carry help too, and modules\README.md claims they do. Checking
+    # only .ps1 would let that claim rot. Get-Help on a .psm1 file does not work, so
+    # the module is imported and its exported functions are checked individually.
+    $moduleFunctionCount = 0
+    if (Test-Path -LiteralPath $moduleRoot) {
+        foreach ($manifest in (Get-ChildItem -LiteralPath $moduleRoot -Filter '*.psd1' -Recurse -File)) {
+            try {
+                Import-Module $manifest.FullName -Force -ErrorAction Stop
+                $moduleName = [System.IO.Path]::GetFileNameWithoutExtension($manifest.Name)
+                foreach ($functionName in (Get-Module -Name $moduleName).ExportedFunctions.Keys) {
+                    $moduleFunctionCount++
+                    $functionHelp = Get-Help -Name $functionName -ErrorAction SilentlyContinue
+                    $functionSynopsis = if ($functionHelp) { [string]$functionHelp.Synopsis } else { '' }
+                    if (-not $functionSynopsis.Trim() -or $functionSynopsis -match '^\s*\S+\s+\[') {
+                        $helpErrors++
+                        Add-Finding -Gate 'Help' -Severity 'Error' -File (& $relative $manifest.FullName) `
+                            -Message "Exported function $functionName has no usable comment-based help."
+                    }
+                }
+
+                Remove-Module -Name $moduleName -Force -ErrorAction SilentlyContinue
+            } catch {
+                $helpErrors++
+                Add-Finding -Gate 'Help' -Severity 'Error' -File (& $relative $manifest.FullName) -Message "Could not import to check function help: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    Add-GateResult -Name 'Help' -Status $(if ($helpErrors -eq 0) { 'PASS' } else { 'FAIL' }) -Checked (($files.Count - $exempted) + $moduleFunctionCount) -ErrorCount $helpErrors -WarningCount 0 -Note "$exempted exempt, $moduleFunctionCount module functions"
 }
 
 if ($Gate -contains 'Shell') {
@@ -224,6 +270,10 @@ if ($Gate -contains 'Shell') {
     }
 
     if (-not $bashPath) {
+        if ($files.Count -gt 0) {
+            $script:MissingTool += 'bash'
+        }
+
         Add-GateResult -Name 'Shell' -Status 'SKIP' -Checked $files.Count -ErrorCount 0 -WarningCount 0 -Note 'No working bash found. Install Git for Windows or a WSL distro.'
     } else {
         $shellErrors = 0
@@ -308,7 +358,8 @@ if ($Gate -contains 'Module') {
     Add-GateResult -Name 'Module' -Status $(if ($moduleErrors -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $manifests.Count -ErrorCount $moduleErrors -WarningCount 0
 }
 
-$gateResults | Format-Table Gate, Status, Checked, Errors, Warnings, Note -AutoSize | Out-String | Write-Verbose
+# Unconditional, not verbose-only: the point of running this is to see the table.
+Write-Information ($gateResults | Format-Table Gate, Status, Checked, Errors, Warnings, Note -AutoSize | Out-String) -InformationAction Continue
 $failed = @($gateResults | Where-Object { $_.Status -eq 'FAIL' })
 
 $summary = [pscustomobject]@{
@@ -322,6 +373,7 @@ $summary = [pscustomobject]@{
     ErrorCount = @($findings | Where-Object { $_.Severity -eq 'Error' }).Count
     WarningCount = @($findings | Where-Object { $_.Severity -eq 'Warning' }).Count
     FailedGates = @($failed | ForEach-Object { $_.Gate })
+    MissingTools = @($script:MissingTool | Sort-Object -Unique)
     Passed = $failed.Count -eq 0
 }
 
@@ -338,6 +390,13 @@ if ($OutputDirectory) {
 }
 
 $summary
+
+# Exit 2 outranks exit 1: a gate that could not run is a worse answer than a gate
+# that ran and failed, because it is not an answer at all.
+if ($summary.MissingTools.Count -gt 0) {
+    Write-Warning "A requested gate could not run because a tool is missing: $($summary.MissingTools -join ', '). Exiting 2."
+    exit 2
+}
 
 if (-not $summary.Passed) {
     exit 1

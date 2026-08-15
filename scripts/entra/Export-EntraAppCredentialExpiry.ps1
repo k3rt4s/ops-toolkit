@@ -105,16 +105,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Resolve-OutputDirectory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    (Resolve-Path -LiteralPath $Path).Path
-}
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
 function Assert-GraphCommand {
     param(
@@ -128,96 +119,6 @@ function Assert-GraphCommand {
     }
 }
 
-function Get-PropertyValue {
-    param(
-        [Parameter(Mandatory = $true)]
-        [AllowNull()]
-        [object]$InputObject,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name
-    )
-
-    if ($null -eq $InputObject) {
-        return $null
-    }
-
-    $property = $InputObject.PSObject.Properties[$Name]
-    if ($null -eq $property) {
-        return $null
-    }
-
-    $property.Value
-}
-
-function Join-ReportValue {
-    param([AllowNull()][object]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    if ($Value -is [array]) {
-        return (@($Value) | Where-Object { $null -ne $_ }) -join ';'
-    }
-
-    [string]$Value
-}
-
-function ConvertTo-ThumbprintString {
-    param([AllowNull()][object]$Value)
-
-    if ($null -eq $Value) {
-        return ''
-    }
-
-    if ($Value -is [string]) {
-        return $Value
-    }
-
-    # customKeyIdentifier arrives as a byte array, but PowerShell unrolls an array
-    # returned from a function, so this must accept any byte enumerable, not [byte[]].
-    if ($Value -is [System.Collections.IEnumerable]) {
-        $bytes = @($Value)
-        if ($bytes.Count -eq 0) {
-            return ''
-        }
-
-        return (($bytes | ForEach-Object { '{0:X2}' -f [byte]$_ }) -join '')
-    }
-
-    [string]$Value
-}
-
-function Export-Report {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [AllowEmptyCollection()]
-        [object[]]$Record,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Directory
-    )
-
-    $csvPath = Join-Path $Directory "$Name.csv"
-    $jsonPath = Join-Path $Directory "$Name.json"
-    $Record | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-    Set-Content -LiteralPath $jsonPath -Value (@($Record) | ConvertTo-Json -Depth 8) -Encoding utf8
-
-    [pscustomobject]@{
-        Name = $Name
-        Count = @($Record).Count
-        CsvPath = (Resolve-Path -LiteralPath $csvPath).Path
-        JsonPath = (Resolve-Path -LiteralPath $jsonPath).Path
-    }
-}
-
 function Get-OwnerSummary {
     param(
         [Parameter(Mandatory = $true)]
@@ -226,7 +127,7 @@ function Get-OwnerSummary {
     )
 
     $names = foreach ($entry in @($Owner)) {
-        $additional = Get-PropertyValue -InputObject $entry -Name 'AdditionalProperties'
+        $additional = Get-OpsPropertyValue -InputObject $entry -Name 'AdditionalProperties'
         $displayName = $null
         if ($additional -is [System.Collections.IDictionary]) {
             foreach ($key in @('userPrincipalName', 'displayName', 'appId')) {
@@ -238,13 +139,13 @@ function Get-OwnerSummary {
         }
 
         if (-not $displayName) {
-            $displayName = Join-ReportValue (Get-PropertyValue -InputObject $entry -Name 'Id')
+            $displayName = Join-OpsValue (Get-OpsPropertyValue -InputObject $entry -Name 'Id')
         }
 
         $displayName
     }
 
-    Join-ReportValue (@($names) | Where-Object { $_ })
+    Join-OpsValue (@($names) | Where-Object { $_ })
 }
 
 function Get-HashtableValue {
@@ -262,7 +163,7 @@ function Get-HashtableValue {
         return $InputObject[$Key]
     }
 
-    Get-PropertyValue -InputObject $InputObject -Name $Key
+    Get-OpsPropertyValue -InputObject $InputObject -Name $Key
 }
 
 function Add-LatestSignIn {
@@ -330,8 +231,8 @@ function Get-ServicePrincipalSignInUsage {
                 }
 
                 $occurred = ([datetime]$rawCreated).ToUniversalTime()
-                $appId = Join-ReportValue (Get-HashtableValue -InputObject $signIn -Key 'appId')
-                $keyId = Join-ReportValue (Get-HashtableValue -InputObject $signIn -Key 'servicePrincipalCredentialKeyId')
+                $appId = Join-OpsValue (Get-HashtableValue -InputObject $signIn -Key 'appId')
+                $keyId = Join-OpsValue (Get-HashtableValue -InputObject $signIn -Key 'servicePrincipalCredentialKeyId')
 
                 if ($appId) {
                     Add-LatestSignIn -Map $result.ByApplication -Key $appId -Occurred $occurred
@@ -350,7 +251,7 @@ function Get-ServicePrincipalSignInUsage {
                 break
             }
 
-            $uri = Join-ReportValue (Get-HashtableValue -InputObject $response -Key '@odata.nextLink')
+            $uri = Join-OpsValue (Get-HashtableValue -InputObject $response -Key '@odata.nextLink')
         }
 
         $result.Available = $true
@@ -396,10 +297,10 @@ function Get-CredentialRecord {
         [string]$OwnerSummary = ''
     )
 
-    $appId = Join-ReportValue (Get-PropertyValue -InputObject $DirectoryObject -Name 'AppId')
-    $keyId = Join-ReportValue (Get-PropertyValue -InputObject $KeyEntry -Name 'KeyId')
-    $startDateTime = Get-PropertyValue -InputObject $KeyEntry -Name 'StartDateTime'
-    $endDateTime = Get-PropertyValue -InputObject $KeyEntry -Name 'EndDateTime'
+    $appId = Join-OpsValue (Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'AppId')
+    $keyId = Join-OpsValue (Get-OpsPropertyValue -InputObject $KeyEntry -Name 'KeyId')
+    $startDateTime = Get-OpsPropertyValue -InputObject $KeyEntry -Name 'StartDateTime'
+    $endDateTime = Get-OpsPropertyValue -InputObject $KeyEntry -Name 'EndDateTime'
 
     $daysToExpiry = $null
     $status = 'Unknown'
@@ -447,13 +348,13 @@ function Get-CredentialRecord {
 
     [pscustomobject]@{
         ObjectType = $ObjectType
-        DisplayName = Join-ReportValue (Get-PropertyValue -InputObject $DirectoryObject -Name 'DisplayName')
+        DisplayName = Join-OpsValue (Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'DisplayName')
         AppId = $appId
-        ObjectId = Join-ReportValue (Get-PropertyValue -InputObject $DirectoryObject -Name 'Id')
+        ObjectId = Join-OpsValue (Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'Id')
         CredentialType = $KeyEntryType
-        CredentialDisplayName = Join-ReportValue (Get-PropertyValue -InputObject $KeyEntry -Name 'DisplayName')
+        CredentialDisplayName = Join-OpsValue (Get-OpsPropertyValue -InputObject $KeyEntry -Name 'DisplayName')
         KeyId = $keyId
-        Thumbprint = ConvertTo-ThumbprintString -Value (Get-PropertyValue -InputObject $KeyEntry -Name 'CustomKeyIdentifier')
+        Thumbprint = ConvertTo-OpsHexString -Value (Get-OpsPropertyValue -InputObject $KeyEntry -Name 'CustomKeyIdentifier')
         StartDateTime = $startDateTime
         EndDateTime = $endDateTime
         DaysToExpiry = $daysToExpiry
@@ -462,9 +363,9 @@ function Get-CredentialRecord {
         ExceedsRecommendedLifetime = $exceedsRecommendedLifetime
         SignInStatus = $signInStatus
         LastSignInDateTime = $lastSignIn
-        SignInAudience = Join-ReportValue (Get-PropertyValue -InputObject $DirectoryObject -Name 'SignInAudience')
-        ServicePrincipalType = Join-ReportValue (Get-PropertyValue -InputObject $DirectoryObject -Name 'ServicePrincipalType')
-        AccountEnabled = Get-PropertyValue -InputObject $DirectoryObject -Name 'AccountEnabled'
+        SignInAudience = Join-OpsValue (Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'SignInAudience')
+        ServicePrincipalType = Join-OpsValue (Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'ServicePrincipalType')
+        AccountEnabled = Get-OpsPropertyValue -InputObject $DirectoryObject -Name 'AccountEnabled'
         Owners = $OwnerSummary
     }
 }
@@ -538,7 +439,7 @@ if (-not (Get-MgContext)) {
     throw 'No Microsoft Graph session. Run again with -Connect, or connect first with Connect-MgGraph.'
 }
 
-$resolvedOutputDirectory = Resolve-OutputDirectory -Path $OutputDirectory
+$resolvedOutputDirectory = Resolve-OpsOutputDirectory -Path $OutputDirectory
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $runDirectory = Join-Path $resolvedOutputDirectory "$OutputPrefix-$timestamp"
 New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
@@ -570,16 +471,16 @@ foreach ($application in $applications) {
         $ownerSummary = Get-OwnerSummary -Owner @(Get-MgApplicationOwner -ApplicationId $application.Id -All)
     }
 
-    $passwordCredentials = @(Get-PropertyValue -InputObject $application -Name 'PasswordCredentials' | Where-Object { $null -ne $_ })
-    $keyCredentials = @(Get-PropertyValue -InputObject $application -Name 'KeyCredentials' | Where-Object { $null -ne $_ })
+    $passwordCredentials = @(Get-OpsPropertyValue -InputObject $application -Name 'PasswordCredentials' | Where-Object { $null -ne $_ })
+    $keyCredentials = @(Get-OpsPropertyValue -InputObject $application -Name 'KeyCredentials' | Where-Object { $null -ne $_ })
 
     if ($passwordCredentials.Count -eq 0 -and $keyCredentials.Count -eq 0) {
         $objectsWithoutCredentials.Add([pscustomobject]@{
                 ObjectType = 'Application'
-                DisplayName = Join-ReportValue $application.DisplayName
-                AppId = Join-ReportValue $application.AppId
-                ObjectId = Join-ReportValue $application.Id
-                CreatedDateTime = Get-PropertyValue -InputObject $application -Name 'CreatedDateTime'
+                DisplayName = Join-OpsValue $application.DisplayName
+                AppId = Join-OpsValue $application.AppId
+                ObjectId = Join-OpsValue $application.Id
+                CreatedDateTime = Get-OpsPropertyValue -InputObject $application -Name 'CreatedDateTime'
                 Owners = $ownerSummary
             })
         continue
@@ -602,8 +503,8 @@ if ($IncludeServicePrincipals) {
     $servicePrincipals = @(Get-MgServicePrincipal -All -Property $servicePrincipalProperties)
 
     foreach ($servicePrincipal in $servicePrincipals) {
-        $passwordCredentials = @(Get-PropertyValue -InputObject $servicePrincipal -Name 'PasswordCredentials' | Where-Object { $null -ne $_ })
-        $keyCredentials = @(Get-PropertyValue -InputObject $servicePrincipal -Name 'KeyCredentials' | Where-Object { $null -ne $_ })
+        $passwordCredentials = @(Get-OpsPropertyValue -InputObject $servicePrincipal -Name 'PasswordCredentials' | Where-Object { $null -ne $_ })
+        $keyCredentials = @(Get-OpsPropertyValue -InputObject $servicePrincipal -Name 'KeyCredentials' | Where-Object { $null -ne $_ })
 
         if ($passwordCredentials.Count -eq 0 -and $keyCredentials.Count -eq 0) {
             continue
@@ -629,10 +530,10 @@ $needsAttention = @($allCredentials | Where-Object { $_.Status -in @('Expired', 
 $rollup = @(Get-ApplicationRollup -Record $allCredentials) | Sort-Object -Property @{ Expression = { if ($null -eq $_.EarliestExpiryDays) { [int]::MaxValue } else { $_.EarliestExpiryDays } } }, DisplayName
 
 $exports = @(
-    Export-Report -Name 'credentials' -Record $allCredentials -Directory $runDirectory
-    Export-Report -Name 'credentials-needing-attention' -Record $needsAttention -Directory $runDirectory
-    Export-Report -Name 'application-rollup' -Record $rollup -Directory $runDirectory
-    Export-Report -Name 'objects-without-credentials' -Record @($objectsWithoutCredentials) -Directory $runDirectory
+    Export-OpsReport -Name 'credentials' -Record $allCredentials -Directory $runDirectory
+    Export-OpsReport -Name 'credentials-needing-attention' -Record $needsAttention -Directory $runDirectory
+    Export-OpsReport -Name 'application-rollup' -Record $rollup -Directory $runDirectory
+    Export-OpsReport -Name 'objects-without-credentials' -Record @($objectsWithoutCredentials) -Directory $runDirectory
 )
 
 $summaryPath = Join-Path $runDirectory 'summary.json'

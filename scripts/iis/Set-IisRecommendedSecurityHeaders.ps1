@@ -2,7 +2,8 @@
 .SYNOPSIS
 Apply a recommended HTTP security header preset to IIS sites.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Review the preset headers before applying them to a production application.
 - Run from an elevated shell on the IIS server.
@@ -11,12 +12,12 @@ Apply a recommended HTTP security header preset to IIS sites.
 - When using -RemoveExisting, review the generated backup report before applying changes.
 - Review the summary output before rerunning without -WhatIf.
 
-.PURPOSE
+Purpose:
 Use this as a curated preset for common IIS HTTP security headers. For one
 custom header, use Set-IisSiteCustomHeader.ps1 or
 Set-IisSiteCustomHeaderForAllSites.ps1 instead.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "Default Web Site" -WhatIf
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName * -WhatIf
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "Default Web Site" -RemoveExisting -WhatIf
@@ -29,7 +30,8 @@ Returns one summary object containing target scope, changed/skipped/removed
 counts, restart state, optional backup report path, and per-site header results
 with old value, new value, action, and reason.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]

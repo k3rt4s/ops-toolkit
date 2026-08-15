@@ -2,7 +2,8 @@
 .SYNOPSIS
 Reclaim disk space from developer and Windows caches with plan/state reports and -WhatIf.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md and the IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell to include ComponentStore (WinSxS) or WindowsUpdateCache targets.
@@ -11,7 +12,7 @@ Reclaim disk space from developer and Windows caches with plan/state reports and
 - Generated reports are written under C:\Code_data\ops-toolkit\windows-file-cleanup by default,
   per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
 
-.PURPOSE
+Purpose:
 This script reclaims space from reclaimable caches that the file/temp cleanup helper does not
 cover: the pip package cache, Docker build cache and dangling images, the Recycle Bin, the
 Windows component store (WinSxS), and optionally the Windows Update download cache. It complements
@@ -19,7 +20,7 @@ Invoke-WindowsFileCleanup.ps1 (temp and stale files) and Invoke-DiskMaintenance.
 defrag, cipher wipe). It never touches source code, the live application database, audit_vault
 evidence, or the active model cache unless explicitly opted in.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target PipCache,RecycleBin
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target ComponentStore  # elevated
@@ -28,7 +29,8 @@ pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.
 Writes plan and state CSV/JSON files under the report directory. Returns a summary object with
 report paths, per-target reclaimed bytes, and a free-space before/after delta for the system drive.
 
-.STATUS
+.NOTES
+Status:
 Active script in the ops-toolkit repo. Companion to Invoke-WindowsFileCleanup.ps1.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan, remove, and partially roll back Windows 11 AppX bloatware packages.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - This script is scoped to Windows 11. It exits on older Windows builds unless -SkipWindows11Check is used.
 - Run with -WhatIf first and review the generated inventory, plan, and state CSV/JSON files.
@@ -10,13 +11,13 @@ Plan, remove, and partially roll back Windows 11 AppX bloatware packages.
 - Keep the protected list conservative. Do not remove Store, App Installer, Winget, WebView, UI runtimes, codecs, security UI, shell packages, or common dependencies.
 - Use -Rollback with a prior state CSV to re-register packages that still have a local AppxManifest.xml and to generate restore guidance for packages that must be restored from Store/winget/media.
 
-.PURPOSE
+Purpose:
 Use this to remove consumer, promotional, gaming, social, and optional inbox
 AppX packages from Windows 11 while preserving core platform packages. The
 package list is informed by Microsoft AppX servicing documentation, common
 Windows 11 debloat tooling, and infosec/admin community guidance.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
 pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
 pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
@@ -27,7 +28,8 @@ reports\windows-hardening by default. Returns a summary object with report
 paths, changed/skipped counts, removed items, protected matches, and rollback
 guidance.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Generate password-expiry reminder plans and optionally email users or administrators.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.
 - Report generation is the default. Email is sent only with -SendUserEmails or -SendAdminReport.
@@ -10,12 +11,12 @@ Generate password-expiry reminder plans and optionally email users or administra
 - Pass SMTP values explicitly when using -SendUserEmails or -SendAdminReport.
 - Generated reports are written under reports\active-directory by default.
 
-.PURPOSE
+Purpose:
 Use this to identify enabled AD users whose passwords are expired or expiring
 soon, write report artifacts, and optionally send user reminder emails and/or
 an admin summary.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1
 pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -DaysBeforeExpiry 14 -OutputDirectory .\reports\active-directory
 pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -SendUserEmails -SmtpServer smtp.example.com -From secops@example.com -AdminTo admins@example.com -ResetUrl https://password.example.com -WhatIf
@@ -24,7 +25,8 @@ pwsh -File .\scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1 -S
 Writes HTML, CSV, JSON, plan, and state files under reports\active-directory by
 default. Returns a summary object with output paths and send counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules ActiveDirectory

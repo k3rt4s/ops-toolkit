@@ -6,11 +6,14 @@ Runnable automation lives under this folder, grouped by platform or operational 
 
 - `active-directory/` - AD inventory and notification scripts.
 - `azure/` - Azure and Azure CLI automation.
+- `certificates/` - Certificate expiry across stores, IIS bindings, and TLS endpoints.
+- `entra/` - Microsoft Entra ID identity reporting through Microsoft Graph.
 - `iis/` - IIS configuration and HTTP response header scripts.
-- `it-operations/` - Endpoint administration, printers, user context, and cleanup helpers.
+- `it-operations/` - Endpoint administration, printers, user context, cleanup, and OS lifecycle helpers.
 - `microsoft-365/` - Exchange Online and Microsoft 365 administration.
 - `pentesting/` - Lab or workstation setup helpers for security testing.
-- `utilities/` - Small workstation and CSV utilities.
+- `reporting/` - Cross-cutting reporting that runs other collectors and assembles their output.
+- `utilities/` - Small workstation and CSV utilities, plus the retired-API scanner.
 - `windows-hardening/` - Windows telemetry, bloatware, and cipher hardening.
 
 ## Header Rule

@@ -2,7 +2,8 @@
 .SYNOPSIS
 Randomize or restore the MAC address of each physical network adapter, with plan, registry backup, and rollback.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell before applying live registry or adapter changes.
@@ -10,7 +11,7 @@ Randomize or restore the MAC address of each physical network adapter, with plan
 - Use -Rollback to remove the override and restore the burned-in (hardware) MAC.
 - Do not run against the only adapter carrying your session, restarting it drops the link and can lock you out; use -SkipAdapterRestart to defer the bounce to the next enable or reboot.
 
-.PURPOSE
+Purpose:
 Use this to replace the MAC address of physical adapters with a randomly generated,
 locally-administered, unicast address, or to restore the hardware default. Each MAC is
 written to the adapter's NetworkAddress driver registry value and applied by bouncing the
@@ -20,7 +21,7 @@ Typical use is defeating per-MAC tracking or per-device rate limiting on a local
 captive portal. Note that many ISPs rate-limit on the router's WAN MAC rather than a host NIC,
 in which case changing a host adapter here has no effect.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\networking\Set-NetworkAdapterRandomMac.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\networking\Set-NetworkAdapterRandomMac.ps1
 pwsh -File .\scripts\it-operations\networking\Set-NetworkAdapterRandomMac.ps1 -Name "Wi-Fi"
@@ -32,7 +33,8 @@ default. Live runs also export each targeted adapter's registry key to a .reg fi
 changes unless -SkipRegistryBackup is used. Returns a summary object with the report and
 backup paths, changed, ignored, skipped, and failed counts, and restart-required status.
 
-.STATUS
+.NOTES
+Status:
 Active script in the ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

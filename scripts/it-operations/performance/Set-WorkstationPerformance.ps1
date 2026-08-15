@@ -2,7 +2,8 @@
 .SYNOPSIS
 Plan, apply, and roll back workstation performance settings: active power plan and Defender exclusions.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md and the IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell to apply Defender exclusions (Add-MpPreference requires admin).
@@ -12,7 +13,7 @@ Plan, apply, and roll back workstation performance settings: active power plan a
 - Generated reports are written under C:\Code_data\ops-toolkit\windows-performance by default,
   per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
 
-.PURPOSE
+Purpose:
 Use this to put a workstation into a sustained-performance posture for heavy local batch work
 (media encode/transcode, transcription, large builds): activate the Ultimate or High Performance
 power plan so the CPU does not park or downclock mid-job, and exclude a trusted data/scratch
@@ -21,7 +22,7 @@ does not tax every file read and written during a long job. It intentionally doe
 OEM (MSI Center) modes, GPU clocks, or any security setting other than the explicit Defender
 exclusions, which are fully reversible with -Rollback.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1            # elevated for Defender
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
@@ -31,7 +32,8 @@ Writes plan and state CSV/JSON files under the report directory, plus a rollback
 live forward run that records the previous active power scheme and the exclusions added, so a later
 -Rollback can revert precisely. Returns a summary object with report paths and changed/skipped counts.
 
-.STATUS
+.NOTES
+Status:
 Active script in the ops-toolkit repo. Companion to Invoke-DiskSpaceReclaim.ps1.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]

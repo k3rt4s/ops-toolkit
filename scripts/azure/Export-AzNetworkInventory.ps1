@@ -2,20 +2,21 @@
 .SYNOPSIS
 Export Azure network inventory reports for NSGs, VNets, subnets, NICs, public IPs, and optional VMs.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires Az.Accounts and Az.Network. VM inventory additionally requires Az.Compute.
 - Connect first with Initialize-AzPowerShellSession.ps1 when working in a known tenant.
 - Use -SubscriptionId and -ResourceGroupName to keep exports scoped when possible.
 - Generated reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 Use this script to collect network review data without changing Azure. It
 exports separate CSV and JSON files for network security rules, NSG
 assignments, virtual networks, subnets, network interfaces, public IPs, and
 optional virtual machines.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\Export-AzNetworkInventory.ps1
 pwsh -File .\scripts\azure\Export-AzNetworkInventory.ps1 -SubscriptionId "<subscription-id>" -ResourceGroupName rg-network
 pwsh -File .\scripts\azure\Export-AzNetworkInventory.ps1 -IncludeVirtualMachines -OutputDirectory .\reports\azure
@@ -24,7 +25,8 @@ pwsh -File .\scripts\azure\Export-AzNetworkInventory.ps1 -IncludeVirtualMachines
 Writes CSV and JSON inventory files under reports\azure by default. Returns a
 summary object with output paths and record counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 #Requires -Modules Az.Accounts, Az.Network

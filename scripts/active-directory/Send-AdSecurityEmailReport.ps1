@@ -2,7 +2,8 @@
 .SYNOPSIS
 Generate and optionally email Active Directory security reports.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Requires the ActiveDirectory PowerShell module.
 - Report generation is the default. Email is sent only when -SendEmail is supplied.
@@ -10,11 +11,11 @@ Generate and optionally email Active Directory security reports.
 - Use -ReportType PrivilegedGroupMembership for AD group membership reports.
 - Use -ReportType PasswordNeverExpires for user accounts whose passwords never expire.
 
-.PURPOSE
+Purpose:
 This script replaces the separate Domain Admins membership and password-never-
 expires email reports with one AD security report command.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\active-directory\Send-AdSecurityEmailReport.ps1 -ReportType PrivilegedGroupMembership -GroupName "Domain Admins"
 pwsh -File .\scripts\active-directory\Send-AdSecurityEmailReport.ps1 -ReportType PasswordNeverExpires
 pwsh -File .\scripts\active-directory\Send-AdSecurityEmailReport.ps1 -ReportType PasswordNeverExpires -SendEmail -SmtpServer smtp.example.com -From secops@example.com -To admins@example.com
@@ -23,7 +24,8 @@ pwsh -File .\scripts\active-directory\Send-AdSecurityEmailReport.ps1 -ReportType
 Writes HTML, CSV, and JSON reports under reports\active-directory by default.
 Returns a summary object with output paths and row counts.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo. Replaces
 Send-AdDomainAdminsEmailReport.ps1 and Send-AdPasswordNeverExpiresEmailReport.ps1.
 #>

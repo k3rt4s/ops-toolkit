@@ -2,18 +2,19 @@
 .SYNOPSIS
 Set IIS site-default custom logging fields.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Confirm the server should apply these fields to IIS site defaults, not one site.
 - Run from an elevated shell on the IIS server.
 - Run with -WhatIf first before making live changes.
 - Review the summary output before rerunning without -WhatIf.
 
-.PURPOSE
+Purpose:
 Use this when IIS should log reverse-proxy or load-balancer request headers,
 such as X-Forwarded-For, through site-default custom logging fields.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\iis\Set-IisSiteDefaultCustomLogFields.ps1 -WhatIf
 
 Custom field example:
@@ -24,7 +25,8 @@ Returns one summary object containing the IIS configuration target,
 changed/skipped counts, and per-field results with old value, new value, action,
 and reason.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]

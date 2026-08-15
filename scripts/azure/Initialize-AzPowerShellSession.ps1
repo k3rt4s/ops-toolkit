@@ -2,20 +2,21 @@
 .SYNOPSIS
 Prepare an Az PowerShell session, connect to Azure, select context, and write a session report.
 
-.INSTRUCTIONS
+.DESCRIPTION
+Instructions:
 - Read the root README.md before running this script.
 - Uses current Az modules only; do not add AzureRM cleanup or AzureRM import behavior.
 - Installs Az.Accounts only when -InstallIfMissing is supplied.
 - Pass -TenantId, -SubscriptionId, and -AzureEnvironment explicitly when targeting a known tenant.
 - Generated session reports are written under reports\azure by default.
 
-.PURPOSE
+Purpose:
 Use this as the safe bootstrap step before running other Azure scripts in this
 repo. It verifies Az.Accounts, optionally installs it for the selected scope,
 connects only when needed or requested, selects the requested subscription, and
 writes a JSON session summary for review.
 
-.REQUIRED SYNTAX
+Required syntax:
 pwsh -File .\scripts\azure\Initialize-AzPowerShellSession.ps1
 pwsh -File .\scripts\azure\Initialize-AzPowerShellSession.ps1 -TenantId "<tenant-id>" -SubscriptionId "<subscription-id>" -UseDeviceAuthentication
 pwsh -File .\scripts\azure\Initialize-AzPowerShellSession.ps1 -InstallIfMissing -ModuleInstallScope CurrentUser -WhatIf
@@ -24,7 +25,8 @@ pwsh -File .\scripts\azure\Initialize-AzPowerShellSession.ps1 -InstallIfMissing 
 Writes an Az session JSON report under reports\azure by default. Returns the
 selected Az context, module version, and report path.
 
-.STATUS
+.NOTES
+Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]

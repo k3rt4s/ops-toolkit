@@ -169,6 +169,13 @@ Assemble a dated evidence pack answering the control questions insurers and asse
 pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -Organization "Example Ltd" -IncludeEntra -IncludeActiveDirectory
 ```
 
+Compare the two most recent runs of a collector and see what changed since last time:
+
+```powershell
+pwsh -File .\scripts\reporting\Compare-OpsToolkitRun.ps1 -Path .\reports\active-directory
+pwsh -File .\scripts\reporting\Compare-OpsToolkitRun.ps1 -Path .\reports\entra -FailOnNewFinding
+```
+
 Run the same pack across an estate from a machine list:
 
 ```powershell

@@ -282,6 +282,11 @@ function Invoke-Collector {
     }
 
     $result.DurationSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+
+    # Record where the output sits relative to the pack, not as an absolute path. The
+    # pack should survive being zipped and read somewhere else, and an absolute path
+    # also makes every run-over-run comparison show a change that is not one.
+    $result | Add-Member -NotePropertyName RelativeOutputPath -NotePropertyValue "collectors\$Name" -Force
     $collectorRuns.Add($result)
     $result
 }
@@ -403,7 +408,7 @@ if ($null -eq $bitlocker) {
     Add-Control -Id 'ENC-01' -Question 'Is disk encryption enabled on all endpoints and laptops?' `
         -Status $encStatus `
         -Finding "Protected: $protected. Partially protected: $partial. Not encrypted: $notEncrypted. Undetermined: $undetermined." `
-        -Evidence $bitlockerRun.OutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
+        -Evidence $bitlockerRun.RelativeOutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
 
     $noKey = [int](Get-OpsPropertyValue -InputObject $bitlocker -Name 'VolumesWithoutRecoveryKey')
     # Escrow is assessable wherever any volume is actually encrypted, including a
@@ -412,7 +417,7 @@ if ($null -eq $bitlocker) {
     Add-Control -Id 'ENC-02' -Question 'Are disk encryption recovery keys escrowed where they can be retrieved?' `
         -Status $escrowStatus `
         -Finding "Volumes with no recovery key: $noKey. Machines at risk: $atRisk. Escrow was verified against a directory only where -VerifyAdEscrow was used; otherwise this reflects policy configuration." `
-        -Evidence $bitlockerRun.OutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
+        -Evidence $bitlockerRun.RelativeOutputPath -Collector 'Export-BitLockerEscrowStatus.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -433,12 +438,12 @@ if ($null -eq $laps) {
     Add-Control -Id 'PRIV-01' -Question 'Are local administrator passwords unique and managed?' `
         -Status $privStatus `
         -Finding "LAPS managed: $managed. Needs attention: $needsAttention. Unmanaged: $unmanaged." `
-        -Evidence $lapsRun.OutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
+        -Evidence $lapsRun.RelativeOutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
 
     Add-Control -Id 'PRIV-02' -Question 'Is local administrator group membership controlled and reviewed?' `
         -Status $(if ($orphans -gt 0) { 'NotMet' } else { 'Partial' }) `
         -Finding "Total local administrator members: $(Get-OpsPropertyValue -InputObject $laps -Name 'TotalAdminMembers'). Unresolvable SIDs holding admin: $orphans. Membership is reported, not approved; approval is a human review this cannot perform." `
-        -Evidence $lapsRun.OutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
+        -Evidence $lapsRun.RelativeOutputPath -Collector 'Export-LocalAdminAndLapsPosture.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -457,7 +462,7 @@ if ($null -eq $update) {
     Add-Control -Id 'PATCH-01' -Question 'Are security patches applied within a defined window?' `
         -Status $(if ($unhealthy -gt 0) { 'NotMet' } elseif ($degraded -gt 0) { 'Partial' } elseif ($healthy -gt 0) { 'Met' } else { 'NotAssessed' }) `
         -Finding "Healthy: $healthy. Degraded: $degraded. Unhealthy: $unhealthy. Pending reboot on $(Get-OpsPropertyValue -InputObject $update -Name 'PendingRebootCount') machine(s)." `
-        -Evidence $updateRun.OutputPath -Collector 'Export-WindowsUpdateHealth.ps1'
+        -Evidence $updateRun.RelativeOutputPath -Collector 'Export-WindowsUpdateHealth.ps1'
 }
 
 $lifecycleRun = Invoke-Collector -Name 'lifecycle' -RelativePath 'it-operations\lifecycle\Export-WindowsLifecycleInventory.ps1'
@@ -473,7 +478,7 @@ if ($null -eq $lifecycle) {
     Add-Control -Id 'PATCH-02' -Question 'Are all operating systems still receiving security updates from the vendor?' `
         -Status $(if ($outOfSupport -gt 0) { 'NotMet' } elseif ($unknown -gt 0) { 'Partial' } elseif ($endingSoon -gt 0) { 'Partial' } else { 'Met' }) `
         -Finding "Out of support: $outOfSupport. Support ending within the warning window: $endingSoon. Unrecognised build: $unknown." `
-        -Evidence $lifecycleRun.OutputPath -Collector 'Export-WindowsLifecycleInventory.ps1'
+        -Evidence $lifecycleRun.RelativeOutputPath -Collector 'Export-WindowsLifecycleInventory.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -492,7 +497,7 @@ if ($null -eq $hardening) {
     Add-Control -Id 'CFG-01' -Question 'Are systems hardened to a documented configuration standard?' `
         -Status $(if ($checked -eq 0) { 'NotAssessed' } elseif ($drift -eq 0) { 'Met' } elseif ($compliant -gt 0) { 'Partial' } else { 'NotMet' }) `
         -Finding "$compliant of $checked hardening items are in the desired state. Items not in the desired state: $drift." `
-        -Evidence $hardeningRun.OutputPath -Collector 'Test-WindowsHardeningState.ps1'
+        -Evidence $hardeningRun.RelativeOutputPath -Collector 'Test-WindowsHardeningState.ps1'
 }
 
 $certRun = Invoke-Collector -Name 'certificates' -RelativePath 'certificates\Export-CertificateExpiryInventory.ps1'
@@ -507,7 +512,7 @@ if ($null -eq $certificates) {
     Add-Control -Id 'CFG-02' -Question 'Are certificates tracked and renewed before expiry?' `
         -Status $(if ($expired -gt 0) { 'NotMet' } elseif ($soon -gt 0) { 'Partial' } else { 'Met' }) `
         -Finding "Expired: $expired. Expiring within the warning window: $soon. Weak signature: $(Get-OpsPropertyValue -InputObject $certificates -Name 'WeakSignatureCount')." `
-        -Evidence $certRun.OutputPath -Collector 'Export-CertificateExpiryInventory.ps1'
+        -Evidence $certRun.RelativeOutputPath -Collector 'Export-CertificateExpiryInventory.ps1'
 }
 
 # ---------------------------------------------------------------------------
@@ -527,12 +532,12 @@ if ($IncludeEntra) {
         Add-Control -Id 'MFA-01' -Question 'Is multi-factor authentication enforced for all users?' `
             -Status $(if ($adminNoMfa -gt 0 -or $noMfa -gt 0) { 'NotMet' } elseif ($reported -gt 0) { 'Met' } else { 'NotAssessed' }) `
             -Finding "Users with no MFA method registered: $noMfa of $reported. Administrators with no MFA: $adminNoMfa. Registration is not the same as enforcement; see the Conditional Access control." `
-            -Evidence $mfaRun.OutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
+            -Evidence $mfaRun.RelativeOutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
 
         Add-Control -Id 'MFA-02' -Question 'Is MFA resistant to phishing and help desk social engineering?' `
             -Status $(if ([int](Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyCount') -gt 0) { 'NotMet' } elseif ([int](Get-OpsPropertyValue -InputObject $mfa -Name 'PhishingResistantCount') -gt 0) { 'Partial' } else { 'NotAssessed' }) `
             -Finding "Telephony-only users: $(Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyCount'), of which $(Get-OpsPropertyValue -InputObject $mfa -Name 'TelephonyOnlyAdminCount') are administrators. Phishing-resistant: $(Get-OpsPropertyValue -InputObject $mfa -Name 'PhishingResistantCount'). Microsoft-provided telephony delivery ends 1 February 2027." `
-            -Evidence $mfaRun.OutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
+            -Evidence $mfaRun.RelativeOutputPath -Collector 'Export-EntraAuthMethodReadiness.ps1'
     }
 
     $caRun = Invoke-Collector -Name 'entra-conditional-access' -RelativePath 'entra\Export-EntraConditionalAccessBaseline.ps1' -Argument @('-Connect')
@@ -547,7 +552,7 @@ if ($IncludeEntra) {
         Add-Control -Id 'IAM-01' -Question 'Are access policies enforced, including a block on legacy authentication?' `
             -Status $(if ($criticalGaps -gt 0) { 'NotMet' } elseif ($gaps -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Conditional Access policies: $(Get-OpsPropertyValue -InputObject $ca -Name 'PolicyCount') total, $(Get-OpsPropertyValue -InputObject $ca -Name 'EnabledCount') enforcing, $(Get-OpsPropertyValue -InputObject $ca -Name 'ReportOnlyCount') report-only. Missing baseline controls: $gaps, of which $criticalGaps are critical." `
-            -Evidence $caRun.OutputPath -Collector 'Export-EntraConditionalAccessBaseline.ps1'
+            -Evidence $caRun.RelativeOutputPath -Collector 'Export-EntraConditionalAccessBaseline.ps1'
     }
 
     $credRun = Invoke-Collector -Name 'entra-app-credentials' -RelativePath 'entra\Export-EntraAppCredentialExpiry.ps1' -Argument @('-Connect', '-IncludeServicePrincipals')
@@ -562,7 +567,7 @@ if ($IncludeEntra) {
         Add-Control -Id 'IAM-02' -Question 'Are application credentials rotated before they expire?' `
             -Status $(if ($expiredCreds -gt 0) { 'NotMet' } elseif ($expiringCreds -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Expired credentials still attached: $expiredCreds. Expiring within the warning window: $expiringCreds. Over-long secret lifetimes: $(Get-OpsPropertyValue -InputObject $credentials -Name 'ExceedsRecommendedLifetimeCount')." `
-            -Evidence $credRun.OutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
+            -Evidence $credRun.RelativeOutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
     }
 } else {
     foreach ($pair in @(
@@ -595,7 +600,7 @@ if ($IncludeActiveDirectory) {
         Add-Control -Id 'PRIV-03' -Question 'Is privileged directory access limited and free of known escalation paths?' `
             -Status $(if ($critical -gt 0) { 'NotMet' } elseif ($high -gt 0) { 'Partial' } else { 'Met' }) `
             -Finding "Critical findings: $critical. High findings: $high. Tier-0 members: $(Get-OpsPropertyValue -InputObject $ad -Name 'Tier0MemberCount')." `
-            -Evidence $adRun.OutputPath -Collector 'Export-AdPrivilegedAccessAudit.ps1'
+            -Evidence $adRun.RelativeOutputPath -Collector 'Export-AdPrivilegedAccessAudit.ps1'
     }
 } else {
     Add-Control -Id 'PRIV-03' -Question 'Is privileged directory access limited and free of known escalation paths?' `

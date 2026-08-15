@@ -314,10 +314,15 @@ function ConvertTo-OpsHexString {
         return $Value
     }
 
-    # Only a sequence of byte-convertible numbers is a thumbprint. Anything else that
-    # happens to be enumerable, a dictionary or a list of objects, is returned as-is
-    # rather than coerced into nonsense hex.
-    if ($Value -isnot [System.Collections.IDictionary] -and $Value -is [System.Collections.IEnumerable]) {
+    # A dictionary is never a thumbprint. Hand it to Join-OpsValue rather than letting
+    # it fall through to [string], which yields "System.Collections.Hashtable".
+    if ($Value -is [System.Collections.IDictionary]) {
+        return (Join-OpsValue -Value $Value)
+    }
+
+    # Only a sequence of byte-convertible numbers is a thumbprint. Any other
+    # enumerable falls back to a joined value rather than being coerced into hex.
+    if ($Value -is [System.Collections.IEnumerable]) {
         $bytes = @($Value)
         if ($bytes.Count -eq 0) {
             return ''

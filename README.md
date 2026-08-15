@@ -505,7 +505,7 @@ pwsh -File .\Invoke-RepoValidation.ps1
 pwsh -File .\Invoke-RepoValidation.ps1 -Strict -OutputDirectory .\reports\validation
 ```
 
-It runs six gates:
+It runs seven gates:
 
 - Parser check across every `.ps1` and `.psm1`.
 - Full PSScriptAnalyzer rule pass against `PSScriptAnalyzerSettings.psd1`.
@@ -514,6 +514,10 @@ It runs six gates:
 - Bash syntax check for the lab and pentesting shell scripts.
 - Stale-reference search: every script path named in a Markdown file must exist.
 - Module manifest check: every manifest loads and exports what it declares.
+- Pester tests under `tests\`, run in a child process so the Pester version cannot
+  collide with whatever the caller already has loaded. Requires Pester 5 or later;
+  the Pester 3.4 that ships with Windows cannot run these specs, and its absence is
+  reported as a missing tool rather than as a pass.
 
 Exit code 0 means the gates passed, 1 means a gate failed, 2 means a required tool
 is missing. Analyzer warnings do not fail the run unless `-Strict` is used.

@@ -36,6 +36,7 @@ object.
 Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
+#requires -Version 7
 [CmdletBinding()]
 param(
     [Parameter()]

@@ -44,6 +44,7 @@ summary as CSV and JSON under reports\azure by default. Returns a summary object
 Status:
 Active script kept in the reorganized ops-toolkit repo.
 #>
+#requires -Version 7
 #Requires -Modules Az.Accounts, Az.Compute, Az.Network
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(

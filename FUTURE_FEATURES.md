@@ -6,19 +6,14 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-- **Add `#requires -Version 7` to the three scripts that are pwsh-7 by design.**
-  Filed from the workspace lane 2026-08-15 with Jon's decision that ops-toolkit owns
-  its own scripts. Verified live that day by parsing all 59 `.ps1` files in this repo
-  with the real Windows PowerShell 5.1 parser: `Test-LdapSigningReadiness.ps1` line
-  197, `Export-AzOrphanedResource.ps1` line 375, and
-  `Export-LocalAdminAndLapsPosture.ps1` line 196 each fail with `Unexpected token
-  '??'`. Nothing else in the repo fails. The scripts are correct as written; the
-  directive just turns a confusing parse error into a plain version message for
-  anyone who runs one under 5.1. **Ergonomics, not risk, while every collector is
-  run by hand**, which is why this sits here rather than on a board. Note this is the
-  syntax half only: the encoding half, ASCII plus BOM, is already enforced by the
-  validation suite. It stops being ergonomics the moment the Scheduling item below is
-  picked up, because the task host is 5.1, so pair the two.
+Nothing.
+
+The `#requires -Version 7` item filed from the workspace lane on 2026-08-15 is done.
+`Test-LdapSigningReadiness.ps1`, `Export-AzOrphanedResource.ps1`, and
+`Export-LocalAdminAndLapsPosture.ps1` each carry the directive. Confirmed under the
+real Windows PowerShell 5.1 that all three now fail with the plain version message
+rather than `Unexpected token '??'`. Pair this with the Scheduling item below when
+that is picked up: the task host is 5.1, which is where it stops being ergonomics.
 
 The four items opened on 2026-08-15 were all completed the same day:
 

@@ -203,7 +203,13 @@ Assert-ExchangeCommand -CommandName 'Get-Mailbox'
 Assert-ExchangeCommand -CommandName 'Get-CASMailbox'
 
 $asOf = Get-Date
-$internalDomains = @($InternalDomain)
+
+# Filter nulls. An unbound [string[]] parameter is $null, and @($null) is a
+# one-element array containing null, so a bare @($InternalDomain) has Count 1. That
+# made the accepted-domain lookup below never run, reported InternalDomainsKnown as
+# true when nothing was known, and classified every destination as External because
+# nothing matched the null entry.
+$internalDomains = @($InternalDomain | Where-Object { $_ })
 
 # Accepted domains are the authoritative internal list. Ask the tenant rather than
 # making the operator supply it, and fall back to what was passed.

@@ -50,6 +50,21 @@ Recorded so the reasoning is not re-derived later.
   machines to be annoyed by it, because a throttled parallel implementation is easy
   to get subtly wrong and hard to debug remotely.
 
+## Residual risk, not a backlog item
+
+Every script runs end to end in the test suite against a stubbed back end. What no
+test here can establish is that a real Graph endpoint, domain controller, or Exchange
+Online tenant returns the shapes those stubs return.
+
+That risk is narrowed two ways and is not reducible further without credentials:
+fields are checked against the installed SDK model types, which caught two beta-only
+fields returning null instead of erroring, and the stubs are written to behave like
+the real thing in the cases that matter, including failing the way it fails.
+
+It is recorded here rather than as work because there is nothing to build. It closes
+the first time someone runs the six scripts against a live system, which the work
+board carries as the standing next action.
+
 ## Known deviations
 
 Things that look like gaps and are not.

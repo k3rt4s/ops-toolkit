@@ -452,7 +452,9 @@ $summary = [pscustomobject]@{
     UnreachableComputers = @($unreachable)
     StoresRequested = @($StorePath)
     IisBindingsChecked = $iisChecked
-    EndpointsProbed = @($Endpoint).Count
+    # Filter nulls: an unbound [string[]] is $null and @($null) has Count 1, which
+    # would report one endpoint probed on a run that probed none.
+    EndpointsProbed = @($Endpoint | Where-Object { $_ }).Count
     ExpiringWithinDays = $ExpiringWithinDays
     CertificateCount = @($inventory).Count
     ExpiredCount = @($inventory | Where-Object { $_.Status -eq 'Expired' }).Count

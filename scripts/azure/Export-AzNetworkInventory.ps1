@@ -330,7 +330,7 @@ $summary = [pscustomobject]@{
     GeneratedAt = Get-Date
     OutputDirectory = $runDirectory
     SubscriptionIds = @($subscriptions | ForEach-Object { $_.Id })
-    ResourceGroupNames = @($ResourceGroupName)
+    ResourceGroupNames = @($ResourceGroupName | Where-Object { $_ })
     IncludeVirtualMachines = [bool]$IncludeVirtualMachines
     Exports = @($exports)
 }

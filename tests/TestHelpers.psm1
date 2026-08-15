@@ -188,10 +188,153 @@ function Import-ScriptFunction {
     New-Module -Name $moduleName -ScriptBlock $withExports | Import-Module -Force -Global
 }
 
+function Use-FakeActiveDirectory {
+    <#
+    .SYNOPSIS
+    Stage the fake ActiveDirectory module and return the PSModulePath entry to use.
+
+    .DESCRIPTION
+    Copies the fixture into a temporary directory under the name ActiveDirectory,
+    with a manifest, so that a script declaring #Requires -Modules ActiveDirectory
+    will start on a machine with no RSAT. The caller prepends the returned path to
+    PSModulePath in the child process that runs the script.
+
+    Returns a path rather than importing, because the script under test has to run in
+    its own process: #Requires is evaluated when the script is parsed, so the module
+    must be discoverable before that process starts.
+
+    .OUTPUTS
+    String. The directory to prepend to PSModulePath.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $staging = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakead-$([guid]::NewGuid().ToString('N'))"
+    $moduleDirectory = Join-Path $staging 'ActiveDirectory'
+    New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+
+    $source = Join-Path $PSScriptRoot 'Fixtures\FakeActiveDirectory\FakeActiveDirectory.psm1'
+    Copy-Item -LiteralPath $source -Destination (Join-Path $moduleDirectory 'ActiveDirectory.psm1') -Force
+
+    New-ModuleManifest -Path (Join-Path $moduleDirectory 'ActiveDirectory.psd1') `
+        -RootModule 'ActiveDirectory.psm1' -ModuleVersion '1.0.0' `
+        -FunctionsToExport @('Get-ADDomain', 'Get-ADForest', 'Get-ADGroup', 'Get-ADUser', 'Get-ADComputer', 'Get-ADObject')
+
+    $staging
+}
+
+function Invoke-ScriptUnderTest {
+    <#
+    .SYNOPSIS
+    Run a repository script in a child process with fixtures staged, and return its summary.
+
+    .DESCRIPTION
+    The script runs in its own process for two reasons: #Requires is evaluated at
+    parse time so any stand-in module must be discoverable before the process starts,
+    and a stubbed cmdlet must not leak into the test session or into other tests.
+
+    The setup script block is dot-sourced into that process before the script under
+    test, which is where fixture data and any stubbed cmdlets are defined.
+
+    .PARAMETER RelativePath
+    Script path relative to the repository root.
+
+    .PARAMETER Setup
+    Script text run before the script under test. Define stubs and fixture data here.
+
+    .PARAMETER Argument
+    Arguments passed to the script under test.
+
+    .PARAMETER ModulePath
+    Optional directory prepended to PSModulePath, from Use-FakeActiveDirectory.
+
+    .OUTPUTS
+    PSCustomObject with Summary (the script's returned object, round-tripped through
+    JSON), ExitCode, and Output.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$RelativePath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Setup,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [hashtable]$Argument = @{},
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$ModulePath = ''
+    )
+
+    $scriptPath = Get-RepositoryScriptPath -RelativePath $RelativePath
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) "ops-run-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+    $summaryPath = Join-Path $work 'summary-out.json'
+
+    $splat = ($Argument.Keys | ForEach-Object {
+            $value = $Argument[$_]
+            if ($value -is [bool] -or $value -is [switch]) { "  $_ = `$$([bool]$value)" }
+            elseif ($value -is [array]) { "  $_ = @($(($value | ForEach-Object { "'$_'" }) -join ','))" }
+            else { "  $_ = '$value'" }
+        }) -join "`n"
+
+    $runner = Join-Path $work 'runner.ps1'
+    Set-Content -LiteralPath $runner -Encoding utf8 -Value @"
+`$ErrorActionPreference = 'Stop'
+$Setup
+`$splat = @{
+$splat
+}
+`$result = & '$scriptPath' @splat
+`$result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath '$summaryPath' -Encoding utf8
+"@
+
+    $arguments = @('-NoProfile', '-NonInteractive', '-File', $runner)
+    $stdout = Join-Path $work 'run.log'
+    $stderr = Join-Path $work 'run.err.log'
+
+    $previousModulePath = $env:PSModulePath
+    if ($ModulePath) {
+        $env:PSModulePath = $ModulePath + [System.IO.Path]::PathSeparator + $env:PSModulePath
+    }
+
+    try {
+        $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments `
+            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $exitCode = $process.ExitCode
+    } finally {
+        $env:PSModulePath = $previousModulePath
+    }
+
+    $summary = $null
+    if (Test-Path -LiteralPath $summaryPath) {
+        $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+    }
+
+    [pscustomobject]@{
+        Summary = $summary
+        ExitCode = $exitCode
+        Output = (@(
+                if (Test-Path $stdout) { Get-Content -LiteralPath $stdout -Raw }
+                if (Test-Path $stderr) { Get-Content -LiteralPath $stderr -Raw }
+            ) -join "`n")
+        WorkDirectory = $work
+    }
+}
+
 Export-ModuleMember -Function @(
     'Get-RepositoryRoot'
     'Get-RepositoryScriptPath'
     'Get-ScriptFunctionScriptBlock'
     'Import-ReportingModule'
     'Import-ScriptFunction'
+    'Use-FakeActiveDirectory'
+    'Invoke-ScriptUnderTest'
 )

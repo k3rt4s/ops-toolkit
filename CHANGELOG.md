@@ -7,9 +7,9 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-08-15
 
-Twenty new scripts, a shared module, a validation suite, and a test suite. The
-repository went from no automated gates to seven, and `Invoke-RepoValidation.ps1
--Strict` passes.
+Twenty new scripts, a shared module, a validation suite with seven gates, and a
+223-test Pester suite. `Invoke-RepoValidation.ps1 -Strict` passes, which it never did
+before: no analyzer findings, no help exemptions.
 
 ### Added
 
@@ -17,8 +17,9 @@ repository went from no automated gates to seven, and `Invoke-RepoValidation.ps1
   service principal secrets and certificates by days to expiry, and matches each
   credential against service principal sign-ins so an expiry alert says whether the
   credential is still authenticating. `Export-EntraAuthMethodReadiness.ps1` finds
-  users whose only registered method is SMS or voice. `Export-EntraConditionalAccessBaseline.ps1`
-  exports policies, gap-analyses them, and diffs against a saved baseline.
+  users whose only registered method is SMS or voice.
+  `Export-EntraConditionalAccessBaseline.ps1` exports policies, gap-analyses them,
+  and diffs against a saved baseline.
 - **Active Directory.** `Export-AdPrivilegedAccessAudit.ps1` covers AS-REP roastable
   and Kerberoastable accounts, all four delegation types, PASSWD_NOTREQD, reversible
   encryption, orphaned adminCount, krbtgt age, and nested tier-0 membership.
@@ -41,25 +42,38 @@ repository went from no automated gates to seven, and `Invoke-RepoValidation.ps1
   real handshakes.
 - **Utilities.** `Find-LegacyApiUsage.ps1` scans for retired and expiring Microsoft
   APIs with deadlines and replacements.
-- **Plumbing.** `modules\OpsToolkit.Reporting`, `Invoke-RepoValidation.ps1` with
-  seven gates, and a 167-test Pester suite under `tests\`.
+- **Plumbing.** `modules\OpsToolkit.Reporting`, `Invoke-RepoValidation.ps1`, and a
+  Pester suite with unit specs over the decision logic and integration specs that run
+  whole scripts end to end against stubbed back ends. A fake `ActiveDirectory` module
+  staged on `PSModulePath` lets the directory scripts run on a machine with no RSAT.
 - `THEORY.md`, `FUTURE_FEATURES.md`, and this changelog.
 
 ### Fixed
 
-- Comment-based help did not parse in 30 of 31 scripts. The documented header
+- **Comment-based help did not parse in 30 of 31 scripts.** The documented header
   standard used keywords PowerShell does not accept, and one unrecognised keyword
   invalidates the entire block. Headers folded into standard keywords; content
   preserved verbatim.
-- `Invoke-DiskMaintenance.ps1` contained non-ASCII characters with no BOM, so
-  Windows PowerShell 5.1 could not parse it and a scheduled run would have done
-  nothing while reporting success. BOM added and the parser gate now enforces this.
-- The OS lifecycle staleness warning measured the data file's `LastWriteTime`, which
-  git resets on checkout, so a fresh clone of stale support dates reported them as
-  verified today. Rows now carry `VerifiedOn` and `Source`.
-- Two Graph fields that exist only in beta were being read from v1.0 responses,
-  returning null silently: the sign-in credential key id, and `defaultMfaMethod`.
-- `Compare-OpsRecordSet` disabled change detection globally as soon as any key was
+- **`Invoke-DiskMaintenance.ps1` would have silently done nothing as a scheduled
+  task.** It contained non-ASCII characters with no BOM, which Windows PowerShell 5.1
+  cannot parse, and the task would still have reported success. BOM added and the
+  parser gate now enforces it.
+- **`Export-M365MailboxSecurityPosture.ps1` never read accepted domains and reported
+  every mail forward as leaving the organisation.** An unbound `[string[]]` parameter
+  is `$null` and `@($null)` has `Count` 1, so the `Count -eq 0` guard that triggers
+  the tenant lookup could never fire. `InternalDomainsKnown` reported true while
+  nothing was known. Found only by running the script end to end. The same pattern
+  caused `EndpointsProbed = 1` on a certificate run that probed none, and a `[null]`
+  entry in the Azure summary. The codebase was swept; the remaining instances are
+  guarded.
+- **Two Graph fields that exist only in beta were read from v1.0 responses**, where
+  they return null rather than erroring: the sign-in credential key id, which made
+  every live credential report as unused, and `defaultMfaMethod`, which left a column
+  empty on every row.
+- **The OS lifecycle staleness warning measured the data file's `LastWriteTime`**,
+  which git resets on checkout, so a fresh clone of stale support dates reported them
+  as verified today. Rows now carry `VerifiedOn` and `Source`.
+- **`Compare-OpsRecordSet` disabled change detection globally** as soon as any key was
   duplicated anywhere. Duplicates are now handled per key.
 - 27 `Write-Host` calls became `Write-Information`, clearing the last analyzer
   findings.
@@ -77,9 +91,14 @@ repository went from no automated gates to seven, and `Invoke-RepoValidation.ps1
 - Three pwsh-7-only scripts carry `#requires -Version 7`, turning a parse error under
   5.1 into a plain version message.
 
-### Not verified
+### Verification status
 
-The three Entra scripts, the two Active Directory scripts, and the Microsoft 365
-collector have never run against a live tenant or domain. Their logic is unit-tested
-and their Graph and Exchange field usage was checked against the installed SDK
-models, but no real call has been made. The work board records which is which.
+Every script now runs end to end in the test suite, including the six that cannot
+reach a live system from the build workstation: their back ends are stubbed and their
+reports asserted against planted faults and planted non-faults.
+
+What remains unproven is that a real Microsoft Graph endpoint, domain controller, or
+Exchange Online tenant returns the shapes the stubs return. That risk is narrowed by
+checking each field against the installed SDK model types, which is how the two
+beta-only fields above were caught, but it is not eliminated. No live tenant or
+domain run has been performed.

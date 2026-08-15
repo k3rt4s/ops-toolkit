@@ -553,7 +553,11 @@ It runs seven gates:
 - Pester tests under `tests\`, run in a child process so the Pester version cannot
   collide with whatever the caller already has loaded. Requires Pester 5 or later;
   the Pester 3.4 that ships with Windows cannot run these specs, and its absence is
-  reported as a missing tool rather than as a pass.
+  reported as a missing tool rather than as a pass. The suite has two layers: unit
+  specs over the decision logic, and integration specs that run whole scripts end to
+  end against stubbed back ends, including the Graph, Exchange and Active Directory
+  scripts that cannot reach a live system from a build workstation. See
+  [tests/README.md](tests/README.md).
 
 Exit code 0 means the gates passed, 1 means a gate failed, 2 means a required tool
 is missing. Analyzer warnings do not fail the run unless `-Strict` is used.

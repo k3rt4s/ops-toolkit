@@ -12,7 +12,10 @@ Hardened operations and security administration scripts for Active Directory, Az
 - [archive/](archive/README.md): Retired scripts and supporting files kept for historical reference inside the ops-toolkit repo.
 - [data/](data/README.md): Non-secret, version-controlled input files used by ops-toolkit scripts as reference data.
 - [docs/](docs/README.md): Reference material, lab guides, diagrams, and review notes for the ops-toolkit.
+- [modules/](modules/README.md): Shared PowerShell modules imported by ops-toolkit scripts by relative path.
 - [scripts/](scripts/README.md): Runnable automation lives under this folder, grouped by platform or operational domain.
+- [tests/](tests/README.md): Pester specs covering the pure logic inside the ops-toolkit scripts.
+- [Invoke-RepoValidation.ps1](Invoke-RepoValidation.ps1): Run the ops-toolkit repository validation suite: parser, analyzer, help, shell syntax, and stale references.
 - [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)
 - [USER_STORIES.md](USER_STORIES.md): User-value master for the ops-toolkit scripts.
 

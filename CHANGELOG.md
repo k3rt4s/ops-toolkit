@@ -8,7 +8,7 @@ that produced the current layout is described in the README under "What Changed"
 ## 2026-08-15
 
 Twenty new scripts, a shared module, a validation suite with seven gates, and a
-223-test Pester suite. `Invoke-RepoValidation.ps1 -Strict` passes, which it never did
+257-test Pester suite. `Invoke-RepoValidation.ps1 -Strict` passes, which it never did
 before: no analyzer findings, no help exemptions.
 
 ### Added
@@ -77,6 +77,22 @@ before: no analyzer findings, no help exemptions.
   duplicated anywhere. Duplicates are now handled per key.
 - 27 `Write-Host` calls became `Write-Information`, clearing the last analyzer
   findings.
+- **Both Azure collectors scanned nothing at all unless given `-ResourceGroupName`,
+  and reported success.** The unfiltered case was built as
+  `$filter = if ($ResourceGroupName) { ... } else { @($null) }`, but an `if` emits its
+  result down the pipeline, which unrolls the one-element array back to a bare `$null`,
+  and `foreach` over `$null` iterates zero times. Every collection loop was skipped.
+  `Export-AzNetworkInventory.ps1` wrote six empty reports and exited 0, and
+  `Export-AzOrphanedResource.ps1` reported no orphaned resources, so an unscanned
+  subscription was indistinguishable from a clean one. Both now build the filter list
+  explicitly. Predates the module retrofit; found by the new end-to-end coverage.
+- **`Export-AzNetworkInventory.ps1` crashed on ordinary Azure shapes.** Under
+  `Set-StrictMode -Version 3.0`, member enumeration over an empty collection throws
+  while a populated one succeeds, so an NSG attached to no network interface killed the
+  run; and reading a property through a null throws, so a subnet with no route table, a
+  NIC on no VM, or a public IP associated with nothing did the same. The last of those
+  is precisely what an orphan review is looking for. Optional nested reads now go
+  through `Get-OpsPropertyValue` and collections through `ForEach-Object`.
 
 ### Changed
 
@@ -93,9 +109,21 @@ before: no analyzer findings, no help exemptions.
 
 ### Verification status
 
-Every script now runs end to end in the test suite, including the six that cannot
-reach a live system from the build workstation: their back ends are stubbed and their
-reports asserted against planted faults and planted non-faults.
+257 tests pass and `Invoke-RepoValidation.ps1 -Strict` exits 0 across all seven gates.
+
+Every script runs end to end in the test suite, including the six that cannot reach a
+live system from the build workstation: their back ends are stubbed and their reports
+asserted against planted faults and planted non-faults. Fixtures now deliberately plant
+the null shapes a real service returns, which is what surfaced the two Azure defects
+above; a fixture with every optional field populated proves only the happy path.
+
+Eight scripts were additionally run for real against this workstation and their output
+checked against its actual state: the five Windows collectors, the certificate
+inventory, the hardening verifier, and the evidence pack, which drove all six
+collectors to completion and reported eight controls as NotAssessed rather than folding
+them into a pass. `Integration.LocalCollectors.Tests.ps1` keeps the evidence pack and
+the hardening verifier under real-system coverage, asserting the arithmetic rather than
+machine-specific values.
 
 What remains unproven is that a real Microsoft Graph endpoint, domain controller, or
 Exchange Online tenant returns the shapes the stubs return. That risk is narrowed by

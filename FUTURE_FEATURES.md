@@ -50,16 +50,34 @@ Recorded so the reasoning is not re-derived later.
   machines to be annoyed by it, because a throttled parallel implementation is easy
   to get subtly wrong and hard to debug remotely.
 
+## Open question for the developer
+
+**`windows-hardening` and `utilities` each exist at two levels of `scripts\`**, once at
+the top and once under `it-operations\`, with no principle separating them:
+`Test-WindowsHardeningState.ps1` is in one and `Export-BitLockerEscrowStatus.ps1` in the
+other. It looks like a move that stopped halfway. Two leftover empty directories
+(`scripts\printers\`, `scripts\windows-file-cleanup\`) were removed, as git tracked
+nothing in them, but no script was moved: which way the split should resolve is a
+structural call, and moving files would churn every documentation reference and any
+scheduled task path for no functional gain. Raised here rather than decided.
+
 ## Residual risk, not a backlog item
 
 Every script runs end to end in the test suite against a stubbed back end. What no
 test here can establish is that a real Graph endpoint, domain controller, or Exchange
 Online tenant returns the shapes those stubs return.
 
-That risk is narrowed two ways and is not reducible further without credentials:
+That risk is narrowed three ways and is not reducible further without credentials:
 fields are checked against the installed SDK model types, which caught two beta-only
-fields returning null instead of erroring, and the stubs are written to behave like
-the real thing in the cases that matter, including failing the way it fails.
+fields returning null instead of erroring; the stubs are written to behave like the
+real thing in the cases that matter, including failing the way it fails; and fixtures
+deliberately plant the null shapes a real service returns rather than populating every
+field, which is what caught both Azure defects logged in the changelog.
+
+That last point is the lesson worth keeping. Both Azure collectors had been scanning
+nothing at all in their default configuration and exiting 0, and no unit test, model
+check, or fully-populated fixture would ever have shown it. A wrong answer that looks
+like good news does not announce itself.
 
 It is recorded here rather than as work because there is nothing to build. It closes
 the first time someone runs the six scripts against a live system, which the work

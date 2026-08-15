@@ -57,6 +57,18 @@ being ignored for no visible reason.
 **Type switch parameters as switches.** A stub declaring `param($All)` fails with
 "Missing an argument for parameter 'All'" when the script calls `-All`.
 
+**Give a fixture the null shapes the real service returns.** A subnet with no route
+table, a NIC attached to no VM, a public IP associated with nothing, an NSG on no
+interface: those are ordinary Azure, and under `Set-StrictMode -Version 3.0` reading
+through them throws. A fixture where every optional property is populated proves only
+that the happy path works. `Integration.RetrofittedScripts.Tests.ps1` plants each of
+those, which is how two shipped crashes were found.
+
+**Standing in for a module that is not installed.** `Use-FakePlaceholderModule` stages
+named modules on `PSModulePath` that export nothing, which satisfies `#Requires` for a
+module this machine does not have (`Az.Network`, `Az.Compute`) without replacing the
+stubs already defined in the setup block.
+
 ### Standing in for the ActiveDirectory module
 
 The directory scripts declare `#Requires -Modules ActiveDirectory`, so without RSAT
@@ -70,16 +82,37 @@ it behave like the real one in the cases that matter, including the failure case
 fake `Get-ADGroup` throws on an unknown identity precisely because the audit relies on
 that to skip forest-root-only groups in a child domain.
 
+### Running against the real machine
+
+`Integration.LocalCollectors.Tests.ps1` is the exception to all of the above: it runs
+`Export-SecurityControlEvidencePack.ps1` and `Test-WindowsHardeningState.ps1` against
+this actual machine, with no stub anywhere. It is the slowest spec in the suite,
+because the evidence pack runs six collectors.
+
+It asserts invariants, never values. How many volumes are encrypted or what Defender
+reports is a property of whichever machine runs the suite. What has to hold everywhere
+is that the arithmetic is honest: the four outcome counts sum to the control count,
+the named control lists match their counts, a collector that failed is reported as
+failed rather than dropped, and nothing passes on an absence of evidence. Both scripts
+have previously got exactly that wrong, in the same direction.
+
 ## What is and is not proven
 
 Proven: the full pipeline of every script, including the six that cannot reach a live
 system from this machine. Planted faults are detected, planted non-faults are not, and
-the reports and summary counts agree.
+the reports and summary counts agree. For the two local collectors, proven against the
+real system rather than a stub.
 
 Not proven: that a real Graph endpoint, domain controller, or Exchange Online tenant
 returns the shapes the stubs return. That is the residual risk, and it is narrowed
 separately by checking each field against the installed SDK model types, which is how
 two beta-only fields were caught returning null instead of erroring.
+
+What that residual risk actually looks like is now on record rather than hypothetical.
+The Azure specs found two defects that no stub with fully-populated fixtures would have
+found, both of which made a script report a clean estate for an estate it had never
+successfully read. Shape mismatches do not announce themselves; they produce a plausible
+empty report.
 
 ## Conventions
 

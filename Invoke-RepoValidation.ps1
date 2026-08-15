@@ -57,9 +57,7 @@ $moduleRoot = Join-Path $repoRoot 'modules'
 
 # Scripts that legitimately cannot pass a gate, with the reason. Anything not listed
 # here is expected to pass, so a new exemption is a decision someone has to make.
-$helpExempt = @{
-    'Page-File-Bleed.ps1' = 'Legacy keep with no comment-based help block at all.'
-}
+$helpExempt = @{}
 
 $findings = [System.Collections.Generic.List[object]]::new()
 $gateResults = [System.Collections.Generic.List[object]]::new()

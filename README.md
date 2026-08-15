@@ -291,6 +291,7 @@ Verify applied hardening is still in place, and prove the TLS client policy with
 
 ```powershell
 pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
+pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -ComputerName srv01,srv02 -FailOnDrift
 ```
 
 Preview Windows Schannel/TLS hardening and write plan reports:
@@ -398,6 +399,7 @@ Inventory certificate expiry across machine stores, IIS bindings, and live endpo
 
 ```powershell
 pwsh -File .\scripts\certificates\Export-CertificateExpiryInventory.ps1 -IncludeIisBindings -Endpoint 'www.example.com:443'
+pwsh -File .\scripts\certificates\Export-CertificateExpiryInventory.ps1 -ComputerName srv01,srv02 -IncludeIisBindings
 ```
 
 Run all disk maintenance steps on drive D (chkdsk, cipher wipe, defrag, benchmark):
@@ -523,6 +525,12 @@ Any script whose synopsis comes back as its own filename followed by a parameter
 - Use `PSScriptAnalyzerSettings.psd1` when linting PowerShell scripts.
 - Treat VBScript/CMD as archived reference only. Active automation should be PowerShell unless a target system requires another shell.
 - Put generated reports under `reports\`; do not commit generated output.
+- Write reports through `modules\OpsToolkit.Reporting` rather than with a local copy
+  of the same helpers. Every script writes to a timestamped run directory named
+  `<prefix>-yyyyMMdd_HHmmss`, containing one CSV and one JSON per report plus a
+  `summary.json`. That layout is what `Compare-OpsToolkitRun.ps1` needs in order to
+  diff one run against the previous one; a script writing loose timestamped files
+  cannot be compared at all.
 
 ## Validation
 

@@ -60,5 +60,5 @@ public static extern System.IntPtr SendMessageTimeout(
         $HWND_BROADCAST, $WM_SETTINGCHANGE, [System.UIntPtr]::Zero,
         'ImmersiveColorSet', 2, 100, [ref]$result)
 
-    Write-Host "Windows theme set to $Mode mode."
+    Write-Information "Windows theme set to $Mode mode." -InformationAction Continue
 }

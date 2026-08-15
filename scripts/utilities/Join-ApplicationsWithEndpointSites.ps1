@@ -74,16 +74,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-function Resolve-OutputDirectory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    (Resolve-Path -LiteralPath $Path).Path
-}
+Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
 function Assert-CsvColumn {
     param(
@@ -175,33 +166,31 @@ foreach ($application in $applications) {
     }
 }
 
-$resolvedOutputDirectory = Resolve-OutputDirectory -Path $OutputDirectory
-$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$matchedPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-matched-$timestamp.csv"
-$unmatchedPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-unmatched-$timestamp.csv"
-$summaryPath = Join-Path $resolvedOutputDirectory "$OutputPrefix-summary-$timestamp.json"
+$runDirectory = Resolve-OpsRunDirectory -OutputDirectory $OutputDirectory -Prefix $OutputPrefix
 
-$matched | Export-Csv -Path $matchedPath -NoTypeInformation -Encoding utf8
-if ($IncludeUnmatchedApplications) {
-    $unmatched | Export-Csv -Path $unmatchedPath -NoTypeInformation -Encoding utf8
-}
+# Unmatched is always written, even when it was not requested and is therefore empty.
+# A report that exists and is empty proves the join ran and found nothing left over;
+# a missing file cannot be told apart from a run that never happened.
+$exports = @(
+    Export-OpsReport -Name 'matched' -Record @($matched) -Directory $runDirectory
+    Export-OpsReport -Name 'unmatched' -Record @(if ($IncludeUnmatchedApplications) { $unmatched } else { @() }) -Directory $runDirectory
+)
 
 $summary = [pscustomobject]@{
     GeneratedAt = Get-Date
+    OutputDirectory = $runDirectory
     ApplicationsPath = (Resolve-Path -LiteralPath $ApplicationsPath).Path
     EndpointsPath = (Resolve-Path -LiteralPath $EndpointsPath).Path
     CaseSensitive = [bool]$CaseSensitive
+    IncludedUnmatched = [bool]$IncludeUnmatchedApplications
     ApplicationCount = @($applications).Count
     EndpointCount = @($endpoints).Count
     MatchedCount = $matched.Count
     UnmatchedCount = $unmatched.Count
     DuplicateEndpointKeyCount = $duplicateEndpointKeys.Count
     DuplicateEndpointKeys = @($duplicateEndpointKeys)
-    MatchedPath = (Resolve-Path -LiteralPath $matchedPath).Path
-    UnmatchedPath = if ($IncludeUnmatchedApplications) { (Resolve-Path -LiteralPath $unmatchedPath).Path } else { $null }
-    SummaryPath = (Resolve-Path -LiteralPath $summaryPath).Path
+    Exports = @($exports)
 }
 
-Set-Content -LiteralPath $summaryPath -Value ($summary | ConvertTo-Json -Depth 5) -Encoding utf8
-Write-Information "Matched $($matched.Count) application endpoints. Output: $matchedPath" -InformationAction Continue
-$summary
+Write-Information "Matched $($matched.Count) application endpoints. Output: $runDirectory" -InformationAction Continue
+Export-OpsSummary -Summary $summary -Directory $runDirectory

@@ -69,6 +69,10 @@ param(
     [int]$ProbeTimeoutSeconds = 10,
 
     [Parameter()]
+    [ValidateRange(5, 3600)]
+    [int]$RemoteTimeoutSeconds = 120,
+
+    [Parameter()]
     [ValidateRange(0, 4096)]
     [int]$WeakKeySizeBits = 2048,
 
@@ -351,8 +355,12 @@ foreach ($machine in $targets) {
         if ($machine -eq $env:COMPUTERNAME) {
             $probe = & $certificateProbe $StorePath $IncludeIisBindings.IsPresent
         } else {
+            # Without an operation timeout a wedged WinRM call holds the whole run
+            # open indefinitely, so one unresponsive machine stops the estate report.
+            $sessionOption = New-PSSessionOption -OperationTimeout ($RemoteTimeoutSeconds * 1000) -OpenTimeout ($RemoteTimeoutSeconds * 1000)
             $probe = Invoke-Command -ComputerName $machine -ScriptBlock $certificateProbe `
-                -ArgumentList $StorePath, $IncludeIisBindings.IsPresent -ErrorAction Stop
+                -ArgumentList $StorePath, $IncludeIisBindings.IsPresent `
+                -SessionOption $sessionOption -ErrorAction Stop
         }
     } catch {
         Write-Warning "Could not probe $machine : $($_.Exception.Message)"

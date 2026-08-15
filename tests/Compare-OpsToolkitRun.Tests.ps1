@@ -85,6 +85,28 @@ Describe 'Compare-OpsRecordSet' {
         $result.Changed.Count | Should -Be 0
     }
 
+    It 'still detects changes on unique keys when a different key is duplicated' {
+        # One ambiguous key must not switch off change detection for the whole report.
+        # That is a silent and total loss of the thing being asked for.
+        $result = Compare-OpsRecordSet `
+            -Previous @(
+                [pscustomobject]@{ Id = 'dup'; V = '1' }
+                [pscustomobject]@{ Id = 'dup'; V = '2' }
+                [pscustomobject]@{ Id = 'unique'; V = 'before' }
+            ) `
+            -Current @(
+                [pscustomobject]@{ Id = 'dup'; V = '3' }
+                [pscustomobject]@{ Id = 'unique'; V = 'after' }
+            ) -KeyColumn 'Id'
+
+        $result.KeyIsUnique | Should -BeFalse
+        $result.DuplicateKey | Should -Contain 'dup'
+        $result.Changed.Count | Should -Be 1
+        $result.Changed[0].Key | Should -Be 'unique'
+        $result.Changed[0].Differences[0].Before | Should -Be 'before'
+        $result.Changed[0].Differences[0].After | Should -Be 'after'
+    }
+
     It 'reports a non-unique key instead of pairing records arbitrarily' {
         # With duplicate keys any pairing is a guess, and a guessed pairing produces a
         # confident and wrong list of changes.

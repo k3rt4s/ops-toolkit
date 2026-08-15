@@ -117,7 +117,10 @@ function Get-ResourceAgeDay {
         [datetime]$AsOf
     )
 
-    foreach ($property in @('TimeCreated', 'DiskState', 'CreatedTime', 'ProvisioningTime')) {
+    # Only properties that actually hold a timestamp. DiskState was in this list and
+    # holds a string such as "Unattached", so it could never match and only made the
+    # list look more authoritative than it is.
+    foreach ($property in @('TimeCreated', 'CreatedTime', 'ProvisioningTime')) {
         $value = Get-OpsPropertyValue -InputObject $Resource -Name $property
         if ($value -is [datetime]) {
             return Get-OpsAge -Timestamp $value -AsOf $AsOf
@@ -335,20 +338,30 @@ foreach ($subscription in $subscriptions) {
     }
 }
 
+# A resource whose age could not be read is kept even when -MinimumAgeDays is set,
+# because dropping it would hide an orphan on the strength of a missing property.
+# It is counted separately so the operator can see the filter did not apply to it.
 $filtered = @($orphans | Where-Object { $null -eq $_.AgeDays -or $_.AgeDays -ge $MinimumAgeDays })
+$unknownAge = @($filtered | Where-Object { $null -eq $_.AgeDays })
+if ($MinimumAgeDays -gt 0 -and $unknownAge.Count -gt 0) {
+    Write-Warning "$($unknownAge.Count) resource(s) have no readable creation time, so -MinimumAgeDays did not filter them. They are included and flagged with an empty AgeDays."
+}
 
 if ($TagForReview) {
     foreach ($orphan in $filtered) {
         if (-not $PSCmdlet.ShouldProcess($orphan.ResourceId, "Add tag $ReviewTagName")) {
-            $tagActions.Add([pscustomobject]@{ ResourceId = $orphan.ResourceId; Action = 'WouldTag'; Result = 'WhatIf' })
+            $tagActions.Add([pscustomobject]@{ SubscriptionName = $orphan.SubscriptionName; ResourceType = $orphan.ResourceType; ResourceId = $orphan.ResourceId; Action = 'WouldTag'; Result = 'WhatIf' })
             continue
         }
 
         try {
             Update-AzTag -ResourceId $orphan.ResourceId -Tag @{ $ReviewTagName = "orphaned-$($asOf.ToString('yyyy-MM-dd'))" } -Operation Merge | Out-Null
-            $tagActions.Add([pscustomobject]@{ ResourceId = $orphan.ResourceId; Action = 'Tagged'; Result = 'Success' })
+            $tagActions.Add([pscustomobject]@{ SubscriptionName = $orphan.SubscriptionName; ResourceType = $orphan.ResourceType; ResourceId = $orphan.ResourceId; Action = 'Tagged'; Result = 'Success' })
         } catch {
-            $tagActions.Add([pscustomobject]@{ ResourceId = $orphan.ResourceId; Action = 'Tag'; Result = "Failed: $($_.Exception.Message)" })
+            # Authorization failures repeat for every resource in the subscription and
+            # mean the run needs different rights; anything else may be transient.
+            $isAuthFailure = $_.Exception.Message -match '(?i)authoriz|forbidden|does not have permission'
+            $tagActions.Add([pscustomobject]@{ SubscriptionName = $orphan.SubscriptionName; ResourceType = $orphan.ResourceType; ResourceId = $orphan.ResourceId; Action = 'Tag'; Result = $(if ($isAuthFailure) { 'FailedNotAuthorized' } else { 'Failed' }); Detail = $_.Exception.Message })
         }
     }
 }
@@ -399,6 +412,8 @@ $summary = [pscustomobject]@{
     TotalOrphanedDiskGb = [math]::Round((@($filtered | Where-Object { $_.ResourceType -in @('ManagedDisk', 'Snapshot') } | ForEach-Object { [double]($_.SizeGb ?? 0) }) | Measure-Object -Sum).Sum, 2)
     EstimatedMonthlyCost = if ($pricedTotal.Count -gt 0) { [math]::Round((@($pricedTotal | ForEach-Object { [double]$_.EstimatedMonthlyCost }) | Measure-Object -Sum).Sum, 2) } else { $null }
     UnpricedCount = @($filtered | Where-Object { $null -eq $_.EstimatedMonthlyCost }).Count
+    UnknownAgeCount = $unknownAge.Count
+    TagFailedNotAuthorizedCount = @($tagActions | Where-Object { $_.Result -eq 'FailedNotAuthorized' }).Count
     TaggedForReview = @($tagActions | Where-Object { $_.Result -eq 'Success' }).Count
     Exports = @($exports)
 }

@@ -604,12 +604,16 @@ function Compare-OpsRecordSet {
         (@($KeyColumn | ForEach-Object { Join-OpsValue -Value (Get-OpsPropertyValue -InputObject $Record -Name $_) }) -join '|')
     }
 
+    # Duplicates are tracked per key, not as a single flag for the whole set. One
+    # ambiguous key must not switch off change detection for every other record in
+    # the report, which is a silent and total loss of the thing being asked for.
+    $duplicateKeySet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
     $previousByKey = @{}
-    $duplicateKeys = [System.Collections.Generic.List[string]]::new()
     foreach ($record in $previousRecords) {
         $key = Get-Key -Record $record
         if ($previousByKey.ContainsKey($key)) {
-            $duplicateKeys.Add($key)
+            $duplicateKeySet.Add($key) | Out-Null
         } else {
             $previousByKey[$key] = $record
         }
@@ -619,13 +623,14 @@ function Compare-OpsRecordSet {
     foreach ($record in $currentRecords) {
         $key = Get-Key -Record $record
         if ($currentByKey.ContainsKey($key)) {
-            $duplicateKeys.Add($key)
+            $duplicateKeySet.Add($key) | Out-Null
         } else {
             $currentByKey[$key] = $record
         }
     }
 
-    $keyIsUnique = $duplicateKeys.Count -eq 0
+    $duplicateKeys = @($duplicateKeySet)
+    $keyIsUnique = $duplicateKeySet.Count -eq 0
 
     $added = [System.Collections.Generic.List[object]]::new()
     $removed = [System.Collections.Generic.List[object]]::new()
@@ -638,8 +643,9 @@ function Compare-OpsRecordSet {
             continue
         }
 
-        if (-not $keyIsUnique) {
-            # With a non-unique key any pairing is arbitrary, so claim only membership.
+        if ($duplicateKeySet.Contains($key)) {
+            # For this key alone, any pairing is arbitrary, so claim only membership.
+            # Every other key still gets a real comparison.
             $unchanged++
             continue
         }

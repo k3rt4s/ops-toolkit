@@ -371,8 +371,11 @@ if ($Gate -contains 'Test') {
         # Pester runs in a child process so its module version cannot collide with
         # whatever Pester the caller already has loaded.
         $testLog = Join-Path ([System.IO.Path]::GetTempPath()) "ops-toolkit-pester-$([guid]::NewGuid().ToString('N')).xml"
+        # Import the exact module the parent discovered. Importing by name in the
+        # child lets PSModulePath ordering pick a different version, so the gate
+        # could report on a Pester the parent never checked.
         $command = @(
-            "Import-Module Pester -MinimumVersion 5.0 -Force"
+            "Import-Module '$($pester.Path)' -Force"
             "`$config = New-PesterConfiguration"
             "`$config.Run.Path = '$testRoot'"
             "`$config.Run.PassThru = `$true"

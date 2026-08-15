@@ -136,8 +136,13 @@ function Get-NsgAssignmentRecord {
         ResourceGroupName = $NetworkSecurityGroup.ResourceGroupName
         NetworkSecurityGroupName = $NetworkSecurityGroup.Name
         Location = $NetworkSecurityGroup.Location
-        AssignedSubnets = Join-OpsValue (@($NetworkSecurityGroup.Subnets.Id) | ForEach-Object { Get-ResourceNameFromId -Id $_ })
-        AssignedNetworkInterfaces = Join-OpsValue (@($NetworkSecurityGroup.NetworkInterfaces.Id) | ForEach-Object { Get-ResourceNameFromId -Id $_ })
+        # Enumerate with ForEach-Object rather than `.Subnets.Id`. Under
+        # Set-StrictMode -Version 3.0 member enumeration over an *empty* collection
+        # throws "The property 'Id' cannot be found on this object", while a populated
+        # one works, so an NSG attached only to subnets and to no network interface
+        # took the whole script down. That is a normal NSG, not an edge case.
+        AssignedSubnets = Join-OpsValue (@($NetworkSecurityGroup.Subnets | ForEach-Object { Get-ResourceNameFromId -Id $_.Id }))
+        AssignedNetworkInterfaces = Join-OpsValue (@($NetworkSecurityGroup.NetworkInterfaces | ForEach-Object { Get-ResourceNameFromId -Id $_.Id }))
     }
 }
 
@@ -157,7 +162,11 @@ function Get-VNetRecord {
         VirtualNetworkName = $VirtualNetwork.Name
         Location = $VirtualNetwork.Location
         AddressPrefixes = Join-OpsValue $VirtualNetwork.AddressSpace.AddressPrefixes
-        DnsServers = Join-OpsValue $VirtualNetwork.DhcpOptions.DnsServers
+        # DhcpOptions is null on a virtual network using Azure-provided DNS, and
+        # strict mode throws on a property read through a null. Every nested read in
+        # this file that Azure may legitimately return as null goes through
+        # Get-OpsPropertyValue for that reason.
+        DnsServers = Join-OpsValue (Get-OpsPropertyValue -InputObject $VirtualNetwork.DhcpOptions -Name 'DnsServers')
         SubnetCount = @($VirtualNetwork.Subnets).Count
     }
 }
@@ -182,8 +191,9 @@ function Get-SubnetRecord {
         SubnetName = $Subnet.Name
         AddressPrefix = Join-OpsValue $Subnet.AddressPrefix
         AddressPrefixes = Join-OpsValue $Subnet.AddressPrefixes
-        NetworkSecurityGroup = Get-ResourceNameFromId -Id $Subnet.NetworkSecurityGroup.Id
-        RouteTable = Get-ResourceNameFromId -Id $Subnet.RouteTable.Id
+        # A subnet with no NSG and no route table is ordinary, and both come back null.
+        NetworkSecurityGroup = Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $Subnet.NetworkSecurityGroup -Name 'Id')
+        RouteTable = Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $Subnet.RouteTable -Name 'Id')
         ServiceEndpoints = Join-OpsValue (@($Subnet.ServiceEndpoints) | ForEach-Object { $_.Service })
         Delegations = Join-OpsValue (@($Subnet.Delegations) | ForEach-Object { $_.ServiceName })
         PrivateEndpointNetworkPolicies = $Subnet.PrivateEndpointNetworkPolicies
@@ -206,12 +216,16 @@ function Get-NicRecord {
         ResourceGroupName = $NetworkInterface.ResourceGroupName
         NetworkInterfaceName = $NetworkInterface.Name
         Location = $NetworkInterface.Location
-        NetworkSecurityGroup = Get-ResourceNameFromId -Id $NetworkInterface.NetworkSecurityGroup.Id
-        VirtualMachine = Get-ResourceNameFromId -Id $NetworkInterface.VirtualMachine.Id
+        # An unattached NIC has no VirtualMachine, and most NICs carry no NSG of their
+        # own because the NSG is on the subnet. An unattached NIC is also exactly what
+        # an orphaned-resource review is looking for, so it must not be the shape that
+        # crashes the collection.
+        NetworkSecurityGroup = Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $NetworkInterface.NetworkSecurityGroup -Name 'Id')
+        VirtualMachine = Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $NetworkInterface.VirtualMachine -Name 'Id')
         PrivateIpAddresses = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { $_.PrivateIpAddress })
         PrivateIpAllocationMethods = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { $_.PrivateIpAllocationMethod })
-        PublicIpAddresses = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { Get-ResourceNameFromId -Id $_.PublicIpAddress.Id })
-        Subnets = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { Get-ResourceNameFromId -Id $_.Subnet.Id })
+        PublicIpAddresses = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $_.PublicIpAddress -Name 'Id') })
+        Subnets = Join-OpsValue (@($NetworkInterface.IpConfigurations) | ForEach-Object { Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $_.Subnet -Name 'Id') })
         EnableAcceleratedNetworking = $NetworkInterface.EnableAcceleratedNetworking
         EnableIPForwarding = $NetworkInterface.EnableIPForwarding
     }
@@ -234,10 +248,12 @@ function Get-PublicIpRecord {
         Location = $PublicIpAddress.Location
         IpAddress = $PublicIpAddress.IpAddress
         AllocationMethod = $PublicIpAddress.PublicIpAllocationMethod
-        SkuName = $PublicIpAddress.Sku.Name
-        DnsFqdn = $PublicIpAddress.DnsSettings.Fqdn
-        AttachedResource = Get-ResourceNameFromId -Id $PublicIpAddress.IpConfiguration.Id
-        AttachedResourceGroup = Get-ResourceGroupFromId -Id $PublicIpAddress.IpConfiguration.Id
+        SkuName = Get-OpsPropertyValue -InputObject $PublicIpAddress.Sku -Name 'Name'
+        # No DNS label means no DnsSettings, and an unattached address has no
+        # IpConfiguration. An unattached public IP is the whole point of this report.
+        DnsFqdn = Get-OpsPropertyValue -InputObject $PublicIpAddress.DnsSettings -Name 'Fqdn'
+        AttachedResource = Get-ResourceNameFromId -Id (Get-OpsPropertyValue -InputObject $PublicIpAddress.IpConfiguration -Name 'Id')
+        AttachedResourceGroup = Get-ResourceGroupFromId -Id (Get-OpsPropertyValue -InputObject $PublicIpAddress.IpConfiguration -Name 'Id')
     }
 }
 
@@ -269,7 +285,15 @@ $virtualMachines = [System.Collections.Generic.List[object]]::new()
 
 foreach ($subscription in $subscriptions) {
     Set-AzContext -SubscriptionId $subscription.Id | Out-Null
-    $resourceGroupFilter = if ($ResourceGroupName) { $ResourceGroupName } else { @($null) }
+    # One unfiltered pass is represented by a single null entry. Do not build this
+    # with `if (...) { } else { @($null) }`: an if-statement emits its result down
+    # the pipeline, which unrolls the one-element array back to a bare $null, and
+    # `foreach ($x in $null)` iterates zero times. That silently skipped every
+    # collection below whenever no resource group filter was supplied, writing empty
+    # reports and exiting 0, so an unscanned subscription read as an empty one.
+    $resourceGroupFilter = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in @($ResourceGroupName | Where-Object { $_ })) { $resourceGroupFilter.Add($name) }
+    if ($resourceGroupFilter.Count -eq 0) { $resourceGroupFilter.Add($null) }
 
     foreach ($resourceGroup in $resourceGroupFilter) {
         $groupParameter = if ($resourceGroup) { @{ ResourceGroupName = $resourceGroup } } else { @{} }
@@ -306,7 +330,8 @@ foreach ($subscription in $subscriptions) {
                         Location = $vm.Location
                         Size = $vm.HardwareProfile.VmSize
                         OsType = $vm.StorageProfile.OsDisk.OsType
-                        NetworkInterfaces = Join-OpsValue (@($vm.NetworkProfile.NetworkInterfaces.Id) | ForEach-Object { Get-ResourceNameFromId -Id $_ })
+                        # Enumerate, do not chain. See Get-NsgAssignmentRecord above.
+                        NetworkInterfaces = Join-OpsValue (@($vm.NetworkProfile.NetworkInterfaces | ForEach-Object { Get-ResourceNameFromId -Id $_.Id }))
                     })
             }
         }

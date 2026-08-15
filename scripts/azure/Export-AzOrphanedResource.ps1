@@ -239,7 +239,15 @@ function Add-Orphan {
 foreach ($subscription in $subscriptions) {
     Write-Verbose "Scanning subscription $($subscription.Name)."
     Set-AzContext -SubscriptionId $subscription.Id | Out-Null
-    $groupFilter = if ($ResourceGroupName) { $ResourceGroupName } else { @($null) }
+    # One unfiltered pass is represented by a single null entry. Do not build this
+    # with `if (...) { } else { @($null) }`: an if-statement emits its result down
+    # the pipeline, which unrolls the one-element array back to a bare $null, and
+    # `foreach ($x in $null)` iterates zero times. That silently skipped every scan
+    # below whenever no resource group filter was supplied, so a subscription full of
+    # orphaned resources reported none.
+    $groupFilter = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in @($ResourceGroupName | Where-Object { $_ })) { $groupFilter.Add($name) }
+    if ($groupFilter.Count -eq 0) { $groupFilter.Add($null) }
 
     foreach ($group in $groupFilter) {
         $groupParameter = if ($group) { @{ ResourceGroupName = $group } } else { @{} }

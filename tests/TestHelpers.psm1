@@ -224,6 +224,57 @@ function Use-FakeActiveDirectory {
     $staging
 }
 
+function Use-FakePlaceholderModule {
+    <#
+    .SYNOPSIS
+    Stage empty modules under the given names so #Requires is satisfied.
+
+    .DESCRIPTION
+    For modules that are not installed and whose cmdlets are stubbed as global
+    functions in the setup block. The staged module deliberately exports nothing: a
+    module that exported stubs would be imported by the script's own #Requires and
+    would replace the setup's functions, which is the trap documented in
+    tests\README.md.
+
+    #Requires -Modules checks that a module of that name is available, not what it
+    contains, so an empty one is enough.
+
+    .PARAMETER Name
+    Module names to stage.
+
+    .PARAMETER Path
+    Optional existing staging directory to add to, so several modules share one
+    PSModulePath entry.
+
+    .OUTPUTS
+    String. The directory to prepend to PSModulePath.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$Name,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$Path = ''
+    )
+
+    $staging = if ($Path) { $Path } else { Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakemod-$([guid]::NewGuid().ToString('N'))" }
+
+    foreach ($moduleName in $Name) {
+        $moduleDirectory = Join-Path $staging $moduleName
+        New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $moduleDirectory "$moduleName.psm1") -Encoding utf8 `
+            -Value "# Placeholder so #Requires -Modules $moduleName is satisfied. Exports nothing`r`n# on purpose; the cmdlets are stubbed as global functions by the test setup.`r`nExport-ModuleMember -Function @()"
+        New-ModuleManifest -Path (Join-Path $moduleDirectory "$moduleName.psd1") `
+            -RootModule "$moduleName.psm1" -ModuleVersion '1.0.0' -FunctionsToExport @()
+    }
+
+    $staging
+}
+
 function Invoke-ScriptUnderTest {
     <#
     .SYNOPSIS
@@ -336,5 +387,6 @@ Export-ModuleMember -Function @(
     'Import-ReportingModule'
     'Import-ScriptFunction'
     'Use-FakeActiveDirectory'
+    'Use-FakePlaceholderModule'
     'Invoke-ScriptUnderTest'
 )

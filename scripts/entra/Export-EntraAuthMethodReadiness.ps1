@@ -213,7 +213,16 @@ foreach ($entry in $registrations) {
             MethodsRegistered = ($methods -join ';')
             TelephonyMethods = ($telephony -join ';')
             PhishingResistantMethods = ($phishingResistant -join ';')
-            DefaultMethod = Join-OpsValue (Get-OpsPropertyValue -InputObject $entry -Name 'defaultMfaMethod')
+            # The v1.0 resource calls this userPreferredMethodForSecondaryAuthentication.
+            # An earlier version of this script read defaultMfaMethod, which exists only
+            # in beta, so the column was silently empty on every row.
+            PreferredMethod = Join-OpsValue (Get-OpsPropertyValue -InputObject $entry -Name 'userPreferredMethodForSecondaryAuthentication')
+            # System-preferred authentication is what actually promotes a user off SMS
+            # and voice, so it is the field that says whether the September 2026
+            # passkey default will move them or leave them where they are.
+            SystemPreferredEnabled = Get-OpsPropertyValue -InputObject $entry -Name 'isSystemPreferredAuthenticationMethodEnabled'
+            SystemPreferredMethods = Join-OpsValue (Get-OpsPropertyValue -InputObject $entry -Name 'systemPreferredAuthenticationMethods')
+            IsSsprCapable = Get-OpsPropertyValue -InputObject $entry -Name 'isSsprCapable'
             LastUpdated = Get-OpsPropertyValue -InputObject $entry -Name 'lastUpdatedDateTime'
             UserId = Join-OpsValue (Get-OpsPropertyValue -InputObject $entry -Name 'id')
         })
@@ -263,6 +272,7 @@ $summary = [pscustomobject]@{
     PhishingResistantCount = @($inventory | Where-Object { $_.Readiness -eq 'PhishingResistant' }).Count
     AdminCount = @($inventory | Where-Object { $_.IsAdmin }).Count
     AdminsWithoutMfa = @($inventory | Where-Object { $_.IsAdmin -and -not $_.IsMfaRegistered }).Count
+    SystemPreferredEnabledCount = @($inventory | Where-Object { $_.SystemPreferredEnabled -eq $true }).Count
     Exports = @($exports)
 }
 

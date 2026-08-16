@@ -217,9 +217,14 @@ function Use-FakeActiveDirectory {
     $source = Join-Path $PSScriptRoot 'Fixtures\FakeActiveDirectory\FakeActiveDirectory.psm1'
     Copy-Item -LiteralPath $source -Destination (Join-Path $moduleDirectory 'ActiveDirectory.psm1') -Force
 
+    # Export whatever the fixture exports. This was a hard-coded list, which silently
+    # went stale the moment a cmdlet was added to the fixture: the manifest gates the
+    # export, so the script under test called a command that did not exist, its own
+    # try/catch recorded a failed action, and the run still exited 0 with a plausible
+    # report. The fixture's Export-ModuleMember is the one place that decides.
     New-ModuleManifest -Path (Join-Path $moduleDirectory 'ActiveDirectory.psd1') `
         -RootModule 'ActiveDirectory.psm1' -ModuleVersion '1.0.0' `
-        -FunctionsToExport @('Get-ADDomain', 'Get-ADForest', 'Get-ADGroup', 'Get-ADUser', 'Get-ADComputer', 'Get-ADObject')
+        -FunctionsToExport '*'
 
     $staging
 }

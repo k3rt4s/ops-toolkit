@@ -38,15 +38,44 @@ function Get-FakeAdData {
     @()
 }
 
+function Write-FakeAdMutation {
+    <#
+    .SYNOPSIS
+    Append one attempted directory change to the mutation log a test is watching.
+
+    .DESCRIPTION
+    This is what makes "-WhatIf changed nothing" a checkable claim rather than an
+    assumption. Every write cmdlet below records here instead of changing anything, so
+    a test can assert the log is empty after a -WhatIf run and populated after a real
+    one. Without the second assertion the first is unfalsifiable: a script that does
+    nothing at all also writes no mutations.
+
+    Recording is off unless OPSTOOLKIT_TEST_MUTATION_LOG names a file, so a script run
+    outside a test still calls a cmdlet that changes nothing.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter()]$Identity,
+        [Parameter()][hashtable]$Detail = @{}
+    )
+
+    $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
+    if (-not $path) { return }
+
+    $record = [ordered]@{ Command = $Command; Identity = [string]$Identity }
+    foreach ($key in $Detail.Keys) { $record[$key] = [string]$Detail[$key] }
+    Add-Content -LiteralPath $path -Value ([pscustomobject]$record | ConvertTo-Json -Compress) -Encoding utf8
+}
+
 function Get-ADDomain {
     [CmdletBinding()]
-    param([Parameter()]$Server, [Parameter()]$Credential, [Parameter()]$Identity)
+    param([Parameter()]$Server, [Parameter()][pscredential]$Credential, [Parameter()]$Identity)
     Get-FakeAdData -Name 'Domain'
 }
 
 function Get-ADForest {
     [CmdletBinding()]
-    param([Parameter()]$Server, [Parameter()]$Credential, [Parameter()]$Identity)
+    param([Parameter()]$Server, [Parameter()][pscredential]$Credential, [Parameter()]$Identity)
     Get-FakeAdData -Name 'Forest'
 }
 
@@ -55,7 +84,7 @@ function Get-ADGroup {
     param(
         [Parameter()]$Identity, [Parameter()]$Filter, [Parameter()]$LDAPFilter,
         [Parameter()]$Properties, [Parameter()]$SearchBase, [Parameter()]$Server,
-        [Parameter()]$Credential, [Parameter()]$ResultSetSize
+        [Parameter()][pscredential]$Credential, [Parameter()]$ResultSetSize
     )
 
     $groups = @(Get-FakeAdData -Name 'Groups')
@@ -78,7 +107,7 @@ function Get-ADUser {
     param(
         [Parameter()]$Identity, [Parameter()]$Filter, [Parameter()]$LDAPFilter,
         [Parameter()]$Properties, [Parameter()]$SearchBase, [Parameter()]$SearchScope,
-        [Parameter()]$Server, [Parameter()]$Credential, [Parameter()]$ResultSetSize
+        [Parameter()]$Server, [Parameter()][pscredential]$Credential, [Parameter()]$ResultSetSize
     )
 
     $users = @(Get-FakeAdData -Name 'Users')
@@ -99,7 +128,7 @@ function Get-ADComputer {
     param(
         [Parameter()]$Identity, [Parameter()]$Filter, [Parameter()]$LDAPFilter,
         [Parameter()]$Properties, [Parameter()]$SearchBase, [Parameter()]$Server,
-        [Parameter()]$Credential, [Parameter()]$ResultSetSize
+        [Parameter()][pscredential]$Credential, [Parameter()]$ResultSetSize
     )
 
     $computers = @(Get-FakeAdData -Name 'Computers')
@@ -107,6 +136,15 @@ function Get-ADComputer {
         $match = @($computers | Where-Object { $_.SamAccountName -eq [string]$Identity -or $_.Name -eq [string]$Identity })
         if ($match.Count -eq 0) { throw "Cannot find an object with identity: '$Identity'." }
         return $match[0]
+    }
+
+    # Honour the enabled filter. The stale-computer script relies on the directory
+    # excluding disabled accounts unless it asks for them, so a fixture that returned
+    # everything regardless would have the test assert behaviour the real cmdlet does
+    # not have. Other filter forms are not interpreted; add one here when a script
+    # under test depends on it rather than letting it quietly match everything.
+    if ($Filter -and [string]$Filter -replace '\s', '' -eq 'Enabled-eq$true') {
+        return @($computers | Where-Object { $_.Enabled })
     }
 
     $computers
@@ -117,7 +155,7 @@ function Get-ADObject {
     param(
         [Parameter()]$Identity, [Parameter()]$Filter, [Parameter()]$LDAPFilter,
         [Parameter()]$Properties, [Parameter()]$SearchBase, [Parameter()]$Server,
-        [Parameter()]$Credential, [Parameter()]$ResultSetSize
+        [Parameter()][pscredential]$Credential, [Parameter()]$ResultSetSize
     )
 
     # Nested tier-0 membership is read with the LDAP in-chain matching rule, so the
@@ -139,4 +177,40 @@ function Get-ADObject {
     @(Get-FakeAdData -Name 'Objects')
 }
 
-Export-ModuleMember -Function 'Get-ADDomain', 'Get-ADForest', 'Get-ADGroup', 'Get-ADUser', 'Get-ADComputer', 'Get-ADObject'
+# ---------------------------------------------------------------------------
+# Write cmdlets. These never change anything; they record the attempt so a test
+# can assert what a script would have done. They deliberately do not declare
+# SupportsShouldProcess: the scripts gate their own calls with ShouldProcess and
+# must not be able to lean on the cmdlet doing it for them, or a missing gate
+# would still pass a -WhatIf test.
+# ---------------------------------------------------------------------------
+
+function Disable-ADAccount {
+    [CmdletBinding()]
+    param([Parameter()]$Identity, [Parameter()]$Server, [Parameter()][pscredential]$Credential)
+    Write-FakeAdMutation -Command 'Disable-ADAccount' -Identity $Identity
+}
+
+function Enable-ADAccount {
+    [CmdletBinding()]
+    param([Parameter()]$Identity, [Parameter()]$Server, [Parameter()][pscredential]$Credential)
+    Write-FakeAdMutation -Command 'Enable-ADAccount' -Identity $Identity
+}
+
+function Move-ADObject {
+    [CmdletBinding()]
+    param([Parameter()]$Identity, [Parameter()]$TargetPath, [Parameter()]$Server, [Parameter()][pscredential]$Credential)
+    Write-FakeAdMutation -Command 'Move-ADObject' -Identity $Identity -Detail @{ TargetPath = $TargetPath }
+}
+
+function Set-ADUser {
+    [CmdletBinding()]
+    param(
+        [Parameter()]$Identity, [Parameter()]$UserPrincipalName, [Parameter()]$Replace,
+        [Parameter()]$Add, [Parameter()]$Clear, [Parameter()]$Server, [Parameter()][pscredential]$Credential
+    )
+    Write-FakeAdMutation -Command 'Set-ADUser' -Identity $Identity -Detail @{ UserPrincipalName = $UserPrincipalName }
+}
+
+Export-ModuleMember -Function 'Get-ADDomain', 'Get-ADForest', 'Get-ADGroup', 'Get-ADUser',
+'Get-ADComputer', 'Get-ADObject', 'Disable-ADAccount', 'Enable-ADAccount', 'Move-ADObject', 'Set-ADUser'

@@ -247,7 +247,13 @@ function Get-EmailPlan {
 }
 
 Import-Module ActiveDirectory -ErrorAction Stop
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+
+# -WhatIf:$false is load-bearing. New-Item honours ShouldProcess, so without it a
+# -WhatIf run does not create the directory, the Resolve-Path below throws, and the
+# script cannot be rehearsed at all unless the directory already exists. Creating the
+# report directory is not the change being previewed; writing the plan into it is the
+# entire point of the preview. Every other script here does the same.
+New-Item -ItemType Directory -Path $OutputDirectory -Force -WhatIf:$false | Out-Null
 $resolvedOutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $generatedAt = Get-Date
@@ -261,13 +267,15 @@ $jsonPath = Join-Path $resolvedOutputDirectory "ad-password-expiry-$timestamp.js
 $planPath = Join-Path $resolvedOutputDirectory "ad-password-expiry-email-plan-$timestamp.csv"
 $statePath = Join-Path $resolvedOutputDirectory "ad-password-expiry-email-state-$timestamp.csv"
 
-$html | Set-Content -LiteralPath $htmlPath -Encoding utf8
-$users | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-Set-Content -LiteralPath $jsonPath -Value (@($users) | ConvertTo-Json -Depth 4) -Encoding utf8
+# Reports are written on a -WhatIf run too. The mail is the change being previewed;
+# the report is the preview itself, and the summary below resolves these paths.
+$html | Set-Content -LiteralPath $htmlPath -Encoding utf8 -WhatIf:$false
+$users | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
+Set-Content -LiteralPath $jsonPath -Value (@($users) | ConvertTo-Json -Depth 4) -Encoding utf8 -WhatIf:$false
 
 $emailPlan = @(Get-EmailPlan -User $users -AdminReportBody $html -GeneratedAt $generatedAt -ReminderResetUrl $ResetUrl)
 $emailPlanForReport = @($emailPlan | Select-Object PlanType, SamAccountName, Recipient, Subject, Reason)
-$emailPlanForReport | Export-Csv -Path $planPath -NoTypeInformation -Encoding utf8
+$emailPlanForReport | Export-Csv -Path $planPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
 
 $emailState = foreach ($item in $emailPlan) {
     $result = try {
@@ -285,7 +293,7 @@ $emailState = foreach ($item in $emailPlan) {
         Result = $result
     }
 }
-$emailState | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8
+$emailState | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$false
 
 [pscustomobject]@{
     DaysBeforeExpiry = $DaysBeforeExpiry

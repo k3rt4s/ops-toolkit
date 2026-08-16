@@ -229,6 +229,42 @@ function Use-FakeActiveDirectory {
     $staging
 }
 
+function Use-FakeWebAdministration {
+    <#
+    .SYNOPSIS
+    Stage the fake WebAdministration module and return the PSModulePath entry to use.
+
+    .DESCRIPTION
+    The IIS scripts call Import-Module WebAdministration -ErrorAction Stop and then
+    walk the IIS: drive, so on a machine with no IIS they stop at the import. Staging a
+    module under that name satisfies the import and supplies the configuration
+    cmdlets; the module creates the IIS: drive itself when it loads.
+
+    The caller sets OPSTOOLKIT_TEST_IIS_SITES and the header or log-field fixtures in
+    the setup block, because the module reads them when it is imported inside the
+    child process.
+
+    .OUTPUTS
+    String. The directory to prepend to PSModulePath.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $staging = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakeiis-mod-$([guid]::NewGuid().ToString('N'))"
+    $moduleDirectory = Join-Path $staging 'WebAdministration'
+    New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+
+    $source = Join-Path $PSScriptRoot 'Fixtures\FakeWebAdministration\FakeWebAdministration.psm1'
+    Copy-Item -LiteralPath $source -Destination (Join-Path $moduleDirectory 'WebAdministration.psm1') -Force
+
+    New-ModuleManifest -Path (Join-Path $moduleDirectory 'WebAdministration.psd1') `
+        -RootModule 'WebAdministration.psm1' -ModuleVersion '1.0.0' `
+        -FunctionsToExport '*'
+
+    $staging
+}
+
 function Use-FakePlaceholderModule {
     <#
     .SYNOPSIS
@@ -392,6 +428,7 @@ Export-ModuleMember -Function @(
     'Import-ReportingModule'
     'Import-ScriptFunction'
     'Use-FakeActiveDirectory'
+    'Use-FakeWebAdministration'
     'Use-FakePlaceholderModule'
     'Invoke-ScriptUnderTest'
 )

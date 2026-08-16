@@ -14,9 +14,12 @@ Hardened operations and security administration scripts for Active Directory, Az
 - [docs/](docs/README.md): Reference material, lab guides, diagrams, and review notes for the ops-toolkit.
 - [modules/](modules/README.md): Shared PowerShell modules imported by ops-toolkit scripts by relative path.
 - [scripts/](scripts/README.md): Runnable automation lives under this folder, grouped by platform or operational domain.
-- [tests/](tests/README.md): Pester specs covering the pure logic inside the ops-toolkit scripts.
+- [tests/](tests/README.md): Pester specs covering the ops-toolkit scripts, in two layers: unit specs over the decision logic, and integration specs that run whole scripts end to end against stubbed back ends.
+- [CHANGELOG.md](CHANGELOG.md): Notable changes to the ops-toolkit.
+- [FUTURE_FEATURES.md](FUTURE_FEATURES.md): Backlog for the ops-toolkit.
 - [Invoke-RepoValidation.ps1](Invoke-RepoValidation.ps1): Run the ops-toolkit repository validation suite: parser, analyzer, help, shell syntax, and stale references.
 - [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)
+- [THEORY.md](THEORY.md): Constraints that look arbitrary until you know why, and traps a fresh thread will otherwise re-derive the hard way.
 - [USER_STORIES.md](USER_STORIES.md): User-value master for the ops-toolkit scripts.
 
 <!-- END CONTENTS -->

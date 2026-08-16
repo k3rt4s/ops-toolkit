@@ -5,6 +5,67 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-08-16
+
+Coverage for all 22 state-changing scripts, which had none, and an incident during that
+work that changed the machine the tests were written on.
+
+### Added: state-changing coverage
+
+- **Every script that modifies Active Directory, Azure, IIS, or Windows is now tested.**
+  Coverage went from 17 of 48 scripts to 39 of 48; the suite went from 257 tests to 345.
+  Each state-changing script runs twice against one fixture: with `-WhatIf`, where the
+  mutation log must stay empty, and executing, where it must fill with exactly the
+  changes the plan described. The paired run is the point, because "`-WhatIf` attempted
+  nothing" is unfalsifiable on its own: a script that has quietly stopped working
+  satisfies it perfectly, which is a failure this repository has shipped before.
+- Fixtures for `WebAdministration`, `ScheduledTasks`, `Defender`, and `PrintManagement`,
+  joining the existing `ActiveDirectory` one. The IIS scripts could not previously be run
+  here at all, stopping at `Import-Module WebAdministration -ErrorAction Stop`.
+- Secret-handling assertions on the two Azure scripts that produce credentials. The
+  storage account key and the generated client secret must not appear in any report
+  file; the check reads every file in the report directory rather than the paths the
+  summary names.
+
+### Fixed: rehearsal and fixture faults
+
+- **`Send-AdPasswordExpiryReminderEmails.ps1` could not be rehearsed.** `New-Item`
+  honours `ShouldProcess`, so under `-WhatIf` the output directory was never created and
+  the `Resolve-Path` after it threw. The one thing its header tells you to do first
+  failed unless the directory already existed. Its report writes had the same problem.
+  Both now pass `-WhatIf:$false`, matching every sibling script.
+- `Use-FakeActiveDirectory` hard-coded `FunctionsToExport`, so a cmdlet added to the
+  fixture was never exported: the script called a command that did not exist, its own
+  try/catch recorded a failed action, and the run still exited 0 with a plausible
+  report. The fixture's own `Export-ModuleMember` now decides.
+
+### Incident
+
+Writing these tests disabled four real scheduled tasks and added three real Defender
+path exclusions on the development machine. The exclusions have been removed; the tasks
+were left as they were found, on the developer's decision, since they are telemetry
+tasks this repository's own hardening script disables by design.
+
+The cause was an assumption that a same-named function in the caller's scope shadows any
+command. It shadows the `Microsoft.PowerShell.Management` cmdlets, so registry, service,
+and file writes were correctly intercepted, and it does not shadow the commands exported
+by `ScheduledTasks`, `Defender`, or `PrintManagement`. The printer connection reached the
+real cmdlet too and failed only because the spooler happened to be unreachable, which is
+luck rather than isolation.
+
+Isolation is now by staged module for those subsystems: the real module is never loaded,
+so there is nothing left to shadow. The verification that matters is the machine's own
+state afterwards, not the test result, and that is now checked.
+
+### Known and not fixed
+
+- **Nine hard-coded absolute paths** across four scripts, in a repository whose standing
+  rules say parameters only: `C:\Code_data` defaults in `Invoke-DiskSpaceReclaim`,
+  `Set-WorkstationLockPosture`, and `Set-WorkstationPerformance`, which also defaults a
+  Defender exclusion to `C:\Code_data`; and `C:\Temp`, `D:\Temp`, `E:\Temp`, `I:\Temp`,
+  `C:\Code` inside `Invoke-WindowsFileCleanup`. Changing a default changes behaviour for
+  anyone already running these, so it is recorded rather than done.
+
 ## 2026-08-15
 
 Twenty new scripts, a shared module, a validation suite with seven gates, and a

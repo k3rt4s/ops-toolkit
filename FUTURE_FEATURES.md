@@ -6,7 +6,8 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-Nothing.
+One item: the hard-coded absolute paths, described in its own section below. There is
+also one open question for the developer, further down.
 
 The `#requires -Version 7` item filed from the workspace lane on 2026-08-15 is done.
 `Test-LdapSigningReadiness.ps1`, `Export-AzOrphanedResource.ps1`, and
@@ -50,6 +51,20 @@ Recorded so the reasoning is not re-derived later.
   machines to be annoyed by it, because a throttled parallel implementation is easy
   to get subtly wrong and hard to debug remotely.
 
+## Queued item: hard-coded absolute paths
+
+Nine of them across four scripts, in a repository whose standing rules say parameters
+only. `Invoke-DiskSpaceReclaim`, `Set-WorkstationLockPosture`, and
+`Set-WorkstationPerformance` default their report directory to `C:\Code_data`, and the
+last also defaults a **Defender exclusion** to `C:\Code_data`, which is a security
+setting pointed at one particular machine's layout. `Invoke-WindowsFileCleanup` carries
+`C:\Temp`, `D:\Temp`, `E:\Temp`, `I:\Temp`, and `C:\Code` in its own lists.
+
+Not done in the same pass that found them, because changing a default changes behaviour
+for anyone already running these, and what the replacement should be is a product
+decision rather than a cleanup: an environment variable, a required parameter, or a
+per-install config file. The Defender one is the sharpest and could reasonably go first.
+
 ## Open question for the developer
 
 **`windows-hardening` and `utilities` each exist at two levels of `scripts\`**, once at
@@ -63,9 +78,20 @@ scheduled task path for no functional gain. Raised here rather than decided.
 
 ## Residual risk, not a backlog item
 
-Every script runs end to end in the test suite against a stubbed back end. What no
-test here can establish is that a real Graph endpoint, domain controller, or Exchange
+39 of the 48 scripts have automated coverage, including all 22 that change something.
+The nine without it are read-only or trivial utilities whose failure mode is an
+unhelpful report rather than a change to a system.
+
+Every covered script runs end to end in the test suite against a stubbed back end. What
+no test here can establish is that a real Graph endpoint, domain controller, or Exchange
 Online tenant returns the shapes those stubs return.
+
+For the state-changing scripts there is a second, sharper limit. The tests prove what
+each script decides to do and that `-WhatIf` suppresses all of it. They cannot prove
+that the real registry, service manager, print subsystem, or Azure control plane accepts
+those calls, and the isolation is only as good as the list of subsystems someone
+remembered to stage a module for. That list was wrong once already, and it changed the
+machine rather than failing a test.
 
 That risk is narrowed three ways and is not reducible further without credentials:
 fields are checked against the installed SDK model types, which caught two beta-only

@@ -13,7 +13,7 @@ work that changed the machine the tests were written on.
 ### Added: state-changing coverage
 
 - **Every script that modifies Active Directory, Azure, IIS, or Windows is now tested.**
-  Coverage went from 17 of 48 scripts to 39 of 48; the suite went from 257 tests to 345.
+  Coverage went from 17 of 48 scripts to 41 of 48; the suite went from 257 tests to 345.
   Each state-changing script runs twice against one fixture: with `-WhatIf`, where the
   mutation log must stay empty, and executing, where it must fill with exactly the
   changes the plan described. The paired run is the point, because "`-WhatIf` attempted

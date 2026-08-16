@@ -229,6 +229,155 @@ function Use-FakeActiveDirectory {
     $staging
 }
 
+function Use-FakeSystemModule {
+    <#
+    .SYNOPSIS
+    Stage fake ScheduledTasks, Defender, and PrintManagement modules and return the PSModulePath entry.
+
+    .DESCRIPTION
+    Defining a same-named function in the caller's scope shadows the cmdlets in
+    Microsoft.PowerShell.Management, but it does not reliably shadow the commands these
+    three modules export. Relying on it let a test run disable four real scheduled tasks
+    and add three real Defender path exclusions on a development machine.
+
+    Staging a module of the same name earlier on PSModulePath means the real module is
+    never loaded, so there is nothing to shadow. That is the approach already used for
+    ActiveDirectory and WebAdministration, and it is the only one proven to hold for
+    these. Any script that touches scheduled tasks, Defender, or printers must run with
+    this path prepended, not with function stubs alone.
+
+    .OUTPUTS
+    String. The directory to prepend to PSModulePath.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $staging = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakesys-$([guid]::NewGuid().ToString('N'))"
+    $source = Join-Path $PSScriptRoot 'Fixtures\FakeSystemModules'
+
+    foreach ($name in @('ScheduledTasks', 'Defender', 'PrintManagement')) {
+        $moduleDirectory = Join-Path $staging $name
+        New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $source "$name.psm1") `
+            -Destination (Join-Path $moduleDirectory "$name.psm1") -Force
+        New-ModuleManifest -Path (Join-Path $moduleDirectory "$name.psd1") `
+            -RootModule "$name.psm1" -ModuleVersion '1.0.0' -FunctionsToExport '*'
+    }
+
+    $staging
+}
+
+function Get-WindowsMutationStubText {
+    <#
+    .SYNOPSIS
+    Return setup text that turns every Windows-changing command into a recorder.
+
+    .DESCRIPTION
+    The Windows scripts change this machine: registry values, services, printers,
+    network adapters, provisioned apps, scheduled tasks, and files. They cannot be run
+    here unstubbed, and that includes their -WhatIf runs, because the failure being
+    tested for is precisely a mutation that is not gated by ShouldProcess. Stubbing
+    protects the machine and catches that fault rather than suffering it.
+
+    Each stub records to the file named by OPSTOOLKIT_TEST_MUTATION_LOG and returns.
+    The functions are defined in the runner's script scope, which shadows the real
+    cmdlets for the script under test without touching the test session.
+
+    Switch parameters are declared as [switch]. A stub declaring a plain $Force
+    swallows the following argument and the call fails with "Missing an argument for
+    parameter 'Force'", which reads like a fault in the script under test.
+
+    New-Item is the exception to recording: it passes filesystem paths through to the
+    real cmdlet, because the scripts use it to create their own report directories, and
+    a report that cannot be written is not the change under test.
+
+    .PARAMETER MutationLogPath
+    File the stubs append to, one JSON record per line.
+
+    .OUTPUTS
+    String. PowerShell source to place at the top of a setup block.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$MutationLogPath
+    )
+
+    @"
+`$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$MutationLogPath'
+
+function Write-OpsTestMutation {
+    param([string]`$Command, [string]`$Target, [string]`$Detail)
+    Add-Content -LiteralPath '$MutationLogPath' -Encoding utf8 -Value ([pscustomobject]@{
+        Command = `$Command; Target = `$Target; Detail = `$Detail } | ConvertTo-Json -Compress)
+}
+
+function Set-ItemProperty {
+    param(`$Path, `$Name, `$Value, `$Type, [switch]`$Force, `$ErrorAction)
+    Write-OpsTestMutation -Command 'Set-ItemProperty' -Target "`$Path\`$Name" -Detail ([string]`$Value)
+}
+
+function New-ItemProperty {
+    param(`$Path, `$Name, `$Value, `$PropertyType, [switch]`$Force, `$ErrorAction)
+    Write-OpsTestMutation -Command 'New-ItemProperty' -Target "`$Path\`$Name" -Detail ([string]`$Value)
+}
+
+function Remove-ItemProperty {
+    param(`$Path, `$Name, [switch]`$Force, `$ErrorAction)
+    Write-OpsTestMutation -Command 'Remove-ItemProperty' -Target "`$Path\`$Name" -Detail ''
+}
+
+function New-Item {
+    param(`$Path, `$ItemType, `$Value, [switch]`$Force, `$ErrorAction, `$LiteralPath)
+    `$target = if (`$Path) { [string]`$Path } else { [string]`$LiteralPath }
+    if (`$target -match '^(HKLM|HKCU|HKCR|HKU|Registry::)') {
+        Write-OpsTestMutation -Command 'New-Item' -Target `$target -Detail 'registry key'
+        return
+    }
+
+    # A report directory is not the change under test, so let it really be created.
+    # -WhatIf:`$false is required: the real cmdlet honours the caller's
+    # `$WhatIfPreference, so without it a preview run creates no directory and the
+    # script's own Resolve-Path on that directory throws. The scripts already pass
+    # -WhatIf:`$false themselves; this stub does not receive it, so it must reassert it.
+    `$forward = @{ Path = `$target; Force = `$true; WhatIf = `$false }
+    if (`$ItemType) { `$forward.ItemType = `$ItemType }
+    Microsoft.PowerShell.Management\New-Item @forward
+}
+
+function Remove-Item {
+    param(`$Path, `$LiteralPath, [switch]`$Recurse, [switch]`$Force, `$ErrorAction, `$Filter, `$Include, `$Exclude)
+    `$target = if (`$Path) { (`$Path -join ';') } else { (`$LiteralPath -join ';') }
+    Write-OpsTestMutation -Command 'Remove-Item' -Target `$target -Detail ''
+}
+
+function Set-Service { param(`$Name, `$StartupType, `$Status, `$ErrorAction) Write-OpsTestMutation -Command 'Set-Service' -Target ([string]`$Name) -Detail ([string]`$StartupType) }
+function Stop-Service { param(`$Name, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Stop-Service' -Target ([string]`$Name) -Detail '' }
+function Start-Service { param(`$Name, `$ErrorAction) Write-OpsTestMutation -Command 'Start-Service' -Target ([string]`$Name) -Detail '' }
+function Restart-NetAdapter { param(`$Name, `$Confirm, `$ErrorAction) Write-OpsTestMutation -Command 'Restart-NetAdapter' -Target ([string]`$Name) -Detail '' }
+function Add-Printer { param(`$Name, `$ConnectionName, `$ErrorAction) Write-OpsTestMutation -Command 'Add-Printer' -Target ([string]`$ConnectionName) -Detail ([string]`$Name) }
+function Remove-Printer { param(`$Name, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-Printer' -Target ([string]`$Name) -Detail '' }
+function Remove-AppxPackage { param(`$Package, [switch]`$AllUsers, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-AppxPackage' -Target ([string]`$Package) -Detail '' }
+function Remove-AppxProvisionedPackage { param([switch]`$Online, `$PackageName, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-AppxProvisionedPackage' -Target ([string]`$PackageName) -Detail '' }
+function Disable-ScheduledTask { param(`$TaskName, `$TaskPath, `$ErrorAction) Write-OpsTestMutation -Command 'Disable-ScheduledTask' -Target "`$TaskPath`$TaskName" -Detail '' }
+function Enable-ScheduledTask { param(`$TaskName, `$TaskPath, `$ErrorAction) Write-OpsTestMutation -Command 'Enable-ScheduledTask' -Target "`$TaskPath`$TaskName" -Detail '' }
+function Clear-RecycleBin { param(`$DriveLetter, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Clear-RecycleBin' -Target ([string]`$DriveLetter) -Detail '' }
+function Set-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Set-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
+function Add-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Add-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
+function Remove-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
+
+# Function names may contain dots, and PowerShell resolves functions before
+# applications, so these shadow the real executables.
+function reg.exe { Write-OpsTestMutation -Command 'reg.exe' -Target (`$args -join ' ') -Detail '' }
+function powercfg.exe { Write-OpsTestMutation -Command 'powercfg.exe' -Target (`$args -join ' ') -Detail '' }
+function powercfg { Write-OpsTestMutation -Command 'powercfg' -Target (`$args -join ' ') -Detail '' }
+"@
+}
+
+
 function Use-FakeWebAdministration {
     <#
     .SYNOPSIS
@@ -428,6 +577,8 @@ Export-ModuleMember -Function @(
     'Import-ReportingModule'
     'Import-ScriptFunction'
     'Use-FakeActiveDirectory'
+    'Use-FakeSystemModule'
+    'Get-WindowsMutationStubText'
     'Use-FakeWebAdministration'
     'Use-FakePlaceholderModule'
     'Invoke-ScriptUnderTest'

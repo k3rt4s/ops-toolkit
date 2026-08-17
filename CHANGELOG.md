@@ -7,8 +7,104 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-08-17
 
-Full script coverage, a validation gate that catches the suite changing the machine, and
-`-WhatIf` on the last two scripts that lacked it.
+Full script coverage, a validation gate that catches the suite changing the machine,
+`-WhatIf` on the last two scripts that lacked it, and a new collector answering whether
+the logging a hunt would need is switched on at all.
+
+### Added: endpoint telemetry posture
+
+- **`scripts\logging\Export-EndpointTelemetryPosture.ps1`.** Reports whether PowerShell
+  script-block, module, and transcription logging are on, whether process creation
+  events include the command line, which of nine audit subcategories are auditing,
+  whether Sysmon is running and under which config, whether an event-forwarding
+  subscription manager is configured, and the state of eleven security-relevant event
+  channels.
+- **Retention is measured, not inferred.** Each channel's retention comes from the
+  oldest record still in it, not from its configured maximum size. On the development
+  workstation that distinction is the whole finding: the Security log is capped at
+  20 MB, sits at 100% of it, and holds six hours. A report reading configured size
+  would have called that 20 MB of coverage.
+- A channel below the required window is Insufficient only when it is full. One that is
+  simply younger than the window is Building, so a machine built last week is not
+  reported as misconfigured. Unknown fullness is treated as full, because assuming the
+  generous case is how a rolling log gets reported as fine.
+- Audit subcategories are matched by GUID rather than by display name. The names are
+  localized, so a name match on a non-English Windows silently finds nothing and every
+  subcategory reads as absent.
+- Sysmon is found by service image path rather than by service name, because the name
+  is chosen at install time.
+- Sysmon and event forwarding are Conditional by default, so an estate that runs
+  neither is not reported as having holes where they would be. `-RequireSysmon` and
+  `-RequireEventForwarding` make their absence a finding.
+
+### Added: two evidence pack controls
+
+- **LOG-01 and LOG-02** in `Export-SecurityControlEvidencePack.ps1`, covering whether
+  security-relevant activity is logged and whether it is retained long enough to
+  investigate an incident found late. They are asked separately because they fail
+  separately: a machine can be generating everything and keeping six hours of it. Any
+  setting the collector could not read takes LOG-01 to NotAssessed outright rather
+  than to a verdict drawn from the settings that were read.
+
+### Added: Defender for Endpoint device inventory
+
+- **`scripts\logging\Export-DefenderEndpointDeviceInventory.ps1`.** The device list with
+  onboarding coverage and how long each agent has been silent. Separates a Silent agent
+  from an Inactive machine, because ten days quiet is an agent that stopped talking on a
+  machine that still exists and sixty days is a machine that has gone, and those need
+  different actions.
+- **A device with no last-contact time is Unmeasured, never Protected.** An unread
+  contact time and a recent one are opposite facts that look identical in a count, which
+  is how a silenced agent stays inside the managed device count for as long as anyone
+  cares to look.
+- **Every page is followed, or the run fails.** A collector that reads page one and
+  stops writes a short inventory that reads as a complete one, and the reconciliation
+  below would then report every machine on page two as a coverage gap. A page error and
+  the page cap both throw before anything is written.
+- The token and client secret are held as `SecureString`, exist in plain text on one
+  line, and are asserted absent from every written report. A failed token request
+  surfaces only its status line, because some error shapes echo the secret back.
+
+### Added: coverage reconciliation
+
+- **`scripts\reporting\Export-CoverageReconciliation.ps1`.** Reconciles any number of
+  exported inventories against each other and reports which machines only some of them
+  know about. Each authority is a CSV plus a key column, so any console that can export
+  a device list is covered without a per-product integration.
+- **An authority that could not be read is NotRead, not an authority that returned
+  nothing.** Graded as Absent, every machine becomes a gap; skipped, every machine
+  becomes covered. Both are confident and wrong and the input looks identical, so an
+  unread authority instead sets every machine to NotAssessed against it and takes the
+  run verdict to Undetermined.
+- A gap found against the authorities that were read is still reported while another is
+  unread, because it is true regardless of what the unread source would have said.
+- Names are normalised before matching, so PC01 and pc01.contoso.com are one machine
+  rather than two false gaps. An authority marked not required, such as a subnet scan,
+  is reported without inventing a gap for every machine it does not contain.
+- Fewer than two readable authorities fails the run. One source can only agree with
+  itself, and the report it would write says every machine is covered.
+
+### Fixed: a column check that read the wrong object
+
+- The reconciliation script's key-column validation used
+  `@($rows | Select-Object -First 1).PSObject.Properties.Name`, which reads the wrapping
+  array's own members. Every column check failed, reporting `Length, Rank, SyncRoot` as
+  the columns found in the CSV. This is the trap already recorded in `THEORY.md`, caught
+  here by the tests before it shipped rather than after.
+
+### Changed: test helper
+
+- `Invoke-ScriptUnderTest` gained `-RawArgument`, whose values are emitted into the
+  splat verbatim as expressions rather than quoted. A `SecureString` parameter has no
+  literal form and could not otherwise be passed to a script under test.
+
+### Coverage note on the telemetry collector
+
+- The paths where a reading is null, meaning audit policy or the Security log could not
+  be read, occur only in an unelevated session, and the validation suite is normally
+  run elevated. They are therefore covered by unit specs over the grading functions
+  rather than by the live run. If those paths were wrong the script would report a
+  clean posture for a machine it never read, and no elevated run here would show it.
 
 ### Added: the machine-state gate
 

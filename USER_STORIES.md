@@ -412,6 +412,90 @@ Acceptance criteria:
 - Given `-UpdateBaseline`, When the baseline is overwritten, Then a warning states
   that it now records current state whatever that state is.
 
+## Epic: Telemetry posture
+
+### Story: Know whether anything would have recorded it
+
+As a security-conscious operator, I want to know which security logging is switched on
+across the estate and how many days of it actually survive, so that a hunt or an
+investigation is not run against a channel that was never enabled or that rolled over
+this morning.
+
+Status: shipped 2026-08-17 (`scripts/logging/Export-EndpointTelemetryPosture.ps1`)
+
+Acceptance criteria:
+
+- Given a machine, When its telemetry posture is read, Then PowerShell script-block
+  logging, command-line process auditing, the required audit subcategories, Sysmon,
+  and event forwarding are each reported Enabled, Disabled, NotRequired, or
+  Undetermined, with the reason the setting matters carried into the report.
+- Given a setting that could not be read, such as audit policy in an unelevated
+  session, When it is graded, Then it is Undetermined and never Enabled, and the
+  machine verdict is Undetermined even where other settings were read cleanly.
+- Given a channel, When its retention is reported, Then it is measured from the oldest
+  record still present rather than from the configured maximum size, and a channel
+  with no measurable history is Unmeasured rather than sufficient.
+- Given a channel holding less than the required window, When it is graded, Then it is
+  Insufficient only if it is full, and Building if it is simply younger than the
+  window, so a newly built machine is not reported as misconfigured.
+- Given Sysmon or event forwarding is absent, When the run is graded, Then their
+  absence is not counted as a gap unless `-RequireSysmon` or `-RequireEventForwarding`
+  was passed, because an estate that does not run them is not thereby non-compliant.
+
+### Story: Know which agents have gone quiet
+
+As a security-conscious operator, I want the EDR device list with how long since each
+agent last checked in, so that an agent silenced on Tuesday is not still counted as a
+managed device on Friday.
+
+Status: shipped 2026-08-17 (`scripts/logging/Export-DefenderEndpointDeviceInventory.ps1`)
+
+Acceptance criteria:
+
+- Given a device list, When it is exported, Then each device is Protected, Silent,
+  Inactive, NotOnboarded, Unsupported, or Undetermined, and the days since last
+  contact are reported alongside the status.
+- Given a device the API returns with no last-contact time, When it is graded, Then it
+  is Unmeasured and never Protected, because an unread contact time and a recent one
+  are opposite facts that look identical in a count.
+- Given a device the service can see and does not protect, When it is graded, Then it
+  is NotOnboarded, and a device nothing could onboard is Unsupported rather than a gap.
+- Given a device list spanning more than one page, When it is read, Then every page is
+  followed, and a run that cannot complete the paging fails rather than writing a
+  truncated inventory that reads as a complete one.
+- Given any run, When reports are written, Then no token or client secret appears in
+  any of them.
+
+## Epic: Coverage reconciliation
+
+### Story: Find the machines only some systems know about
+
+As a security-conscious operator, I want to reconcile the directory, the EDR console,
+the asset system, and the address space against each other, so that a machine missing
+from one of them is visible, which it never is from inside the system that is missing
+it.
+
+Status: shipped 2026-08-17 (`scripts/reporting/Export-CoverageReconciliation.ps1`)
+
+Acceptance criteria:
+
+- Given two or more exported inventories with a named key column, When they are
+  reconciled, Then every machine is reported Present, Absent, or NotAssessed against
+  each authority, with the required authorities it is missing from named.
+- Given the same machine named differently by different authorities, such as PC01 and
+  pc01.contoso.com, When they are matched, Then it is one machine rather than two
+  false gaps.
+- Given an authority whose file is missing or whose key column is not in the CSV, When
+  it is graded, Then it is NotRead, every machine reads NotAssessed against it, and the
+  run verdict is Undetermined. It is never graded as an authority that returned nothing.
+- Given a gap found against the authorities that were read, When another authority is
+  unread, Then the gap is still reported, because it is true regardless of what the
+  unread source would have said.
+- Given an authority marked not required, such as a subnet scan, When machines are
+  graded, Then its absences are reported and produce no gap.
+- Given fewer than two authorities could be read, When the run completes, Then it fails
+  rather than reporting an estate that agrees with itself.
+
 ## Epic: Compliance evidence
 
 ### Story: Answer the questions insurers and assessors actually ask

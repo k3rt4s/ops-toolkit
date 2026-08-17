@@ -485,7 +485,16 @@ function Invoke-ScriptUnderTest {
     Script text run before the script under test. Define stubs and fixture data here.
 
     .PARAMETER Argument
-    Arguments passed to the script under test.
+    Arguments passed to the script under test. Values are rendered as string, boolean,
+    or array literals, so they cannot express a type that has no literal form.
+
+    .PARAMETER RawArgument
+    Arguments whose values are emitted into the splat verbatim as PowerShell
+    expressions rather than quoted. This is how a parameter with no literal syntax is
+    passed, a SecureString credential being the case that forced it:
+    @{ AccessToken = "(ConvertTo-SecureString 'x' -AsPlainText -Force)" }. Anything
+    passed here is code that will run in the child process, so it belongs in a test
+    and nowhere else.
 
     .PARAMETER ModulePath
     Optional directory prepended to PSModulePath, from Use-FakeActiveDirectory.
@@ -510,6 +519,10 @@ function Invoke-ScriptUnderTest {
         [hashtable]$Argument = @{},
 
         [Parameter()]
+        [AllowEmptyCollection()]
+        [hashtable]$RawArgument = @{},
+
+        [Parameter()]
         [AllowEmptyString()]
         [string]$ModulePath = ''
     )
@@ -519,12 +532,16 @@ function Invoke-ScriptUnderTest {
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     $summaryPath = Join-Path $work 'summary-out.json'
 
-    $splat = ($Argument.Keys | ForEach-Object {
+    $splatLines = @(
+        @($Argument.Keys) | ForEach-Object {
             $value = $Argument[$_]
             if ($value -is [bool] -or $value -is [switch]) { "  $_ = `$$([bool]$value)" }
             elseif ($value -is [array]) { "  $_ = @($(($value | ForEach-Object { "'$_'" }) -join ','))" }
             else { "  $_ = '$value'" }
-        }) -join "`n"
+        }
+        @($RawArgument.Keys) | ForEach-Object { "  $_ = $($RawArgument[$_])" }
+    )
+    $splat = ($splatLines -join "`n")
 
     $runner = Join-Path $work 'runner.ps1'
     Set-Content -LiteralPath $runner -Encoding utf8 -Value @"

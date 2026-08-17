@@ -516,6 +516,43 @@ if ($null -eq $certificates) {
 }
 
 # ---------------------------------------------------------------------------
+# Security logging. Assessors and insurers ask whether logs are kept and for how
+# long, and both halves are asked separately because they fail separately: a
+# machine can be generating everything and retaining six hours of it.
+# ---------------------------------------------------------------------------
+$telemetryRun = Invoke-Collector -Name 'telemetry-posture' -RelativePath 'logging\Export-EndpointTelemetryPosture.ps1'
+$telemetry = Get-CollectorSummary -Run $telemetryRun
+if ($null -eq $telemetry) {
+    Add-Control -Id 'LOG-01' -Question 'Is security-relevant activity logged on endpoints?' `
+        -Status 'NotAssessed' -Finding "The telemetry posture collector did not produce a summary. Status: $($telemetryRun.Status). $($telemetryRun.Note)" -Collector 'Export-EndpointTelemetryPosture.ps1'
+    Add-Control -Id 'LOG-02' -Question 'Are logs retained long enough to investigate an incident found late?' `
+        -Status 'NotAssessed' -Finding 'Not assessed because the telemetry posture collector did not run.' -Collector 'Export-EndpointTelemetryPosture.ps1'
+} else {
+    $settingsDisabled = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'RequiredSettingsDisabled')
+    $settingsUnread = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'SettingsUndetermined')
+    $checksGraded = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'ChecksGraded')
+
+    # An unread setting is not a pass and not a failure. It is the reason the run
+    # cannot answer the question, so it takes the control to NotAssessed outright.
+    $logStatus = if ($checksGraded -eq 0 -or $settingsUnread -gt 0) { 'NotAssessed' } elseif ($settingsDisabled -gt 0) { 'NotMet' } else { 'Met' }
+    Add-Control -Id 'LOG-01' -Question 'Is security-relevant activity logged on endpoints?' `
+        -Status $logStatus `
+        -Finding "Required logging settings switched off: $settingsDisabled of $checksGraded graded. Settings that could not be read: $settingsUnread. Machines fully covered: $(Get-OpsPropertyValue -InputObject $telemetry -Name 'CoveredCount'), partially: $(Get-OpsPropertyValue -InputObject $telemetry -Name 'PartialCount'), not covered: $(Get-OpsPropertyValue -InputObject $telemetry -Name 'NotCoveredCount')." `
+        -Evidence $telemetryRun.RelativeOutputPath -Collector 'Export-EndpointTelemetryPosture.ps1'
+
+    $shortRetention = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'ChannelsInsufficientRetention')
+    $unmeasured = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'ChannelsUnmeasuredRetention')
+    $channelsGraded = [int](Get-OpsPropertyValue -InputObject $telemetry -Name 'ChannelsGraded')
+    $minimumDays = Get-OpsPropertyValue -InputObject $telemetry -Name 'MinimumRetentionDays'
+
+    $retentionStatus = if ($channelsGraded -eq 0) { 'NotAssessed' } elseif ($shortRetention -gt 0) { 'NotMet' } elseif ($unmeasured -gt 0) { 'Partial' } else { 'Met' }
+    Add-Control -Id 'LOG-02' -Question 'Are logs retained long enough to investigate an incident found late?' `
+        -Status $retentionStatus `
+        -Finding "Required channels retaining less than $minimumDays days: $shortRetention. Channels with no measurable history: $unmeasured of $channelsGraded. Retention is measured from the oldest record still present, not from configured log size, because a large log on a busy machine can hold hours." `
+        -Evidence $telemetryRun.RelativeOutputPath -Collector 'Export-EndpointTelemetryPosture.ps1'
+}
+
+# ---------------------------------------------------------------------------
 # Identity. Off by default: needs a tenant and consented scopes.
 # ---------------------------------------------------------------------------
 if ($IncludeEntra) {

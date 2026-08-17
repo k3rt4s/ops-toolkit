@@ -10,6 +10,7 @@ Runnable automation lives under this folder, grouped by platform or operational 
 - `entra/` - Microsoft Entra ID identity reporting through Microsoft Graph.
 - `iis/` - IIS configuration and HTTP response header scripts.
 - `it-operations/` - Endpoint administration, printers, user context, cleanup, and OS lifecycle helpers.
+- `logging/` - Whether the security telemetry a hunt or detection needs is switched on, and how long it survives.
 - `microsoft-365/` - Exchange Online and Microsoft 365 administration.
 - `pentesting/` - Lab or workstation setup helpers for security testing.
 - `reporting/` - Cross-cutting reporting that runs other collectors and assembles their output.

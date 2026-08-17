@@ -6,15 +6,28 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-Four items, each described in its own section below: the endpoint telemetry and
-audit-logging posture collector, the coverage reconciliation report, the Defender for
-Endpoint device collector that reconciliation depends on, and the hard-coded absolute
-paths. There is also one open question for the developer, further down.
+One item: the hard-coded absolute paths, described in its own section below. There is
+also one open question for the developer, further down.
 
-The first three were derived on 2026-08-17 from a threat-hunting conference transcript
-and scoped against what this repo can actually read. The rejected candidates from the
-same review are recorded under "Considered and not queued" so the reasoning is not
-re-derived.
+The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
+built the same day and are shipped: the endpoint telemetry and audit-logging posture
+collector, the Defender for Endpoint device collector, and the coverage reconciliation
+report. See `CHANGELOG.md` and `USER_STORIES.md`. The rejected candidates from the same
+review stay under "Considered and not queued" so the reasoning is not re-derived.
+
+Two of the three carry a live-verification debt, recorded with the rest of it on the
+work board rather than as separate backlog items:
+
+- `Export-DefenderEndpointDeviceInventory.ps1` has never run against a licensed
+  Defender for Endpoint tenant. There is no such tenant available. Its stub specs prove
+  the paging, the grading, and the refusals; they cannot prove that
+  api.securitycenter.microsoft.com returns the shapes they stub.
+- `Export-EndpointTelemetryPosture.ps1` has been run for real against this workstation
+  and its output checked against actual machine state, which is how the six-hour
+  Security log was found. What has not run is its unelevated path, because the
+  validation suite runs elevated. That path is covered by unit specs over the grading
+  functions instead, and it is the path where a wrong answer would report a clean
+  posture for a machine nobody read.
 
 The `#requires -Version 7` item filed from the workspace lane on 2026-08-15 is done.
 `Test-LdapSigningReadiness.ps1`, `Export-AzOrphanedResource.ps1`, and
@@ -81,7 +94,7 @@ Recorded so the reasoning is not re-derived later.
   falls out almost free once the Defender for Endpoint device collector below exists.
   Build it there rather than as its own item.
 
-## Queued item: endpoint telemetry and audit-logging posture
+## Shipped 2026-08-17: endpoint telemetry and audit-logging posture
 
 A read-only collector answering the question that has to be answered before any hunt or
 detection is worth writing: is the logging that would ever show you an attacker actually
@@ -106,7 +119,7 @@ Feeds a new logging control into `Export-SecurityControlEvidencePack.ps1`, and
 `Compare-OpsToolkitRun.ps1` then shows coverage improving run over run without new
 machinery.
 
-## Queued item: coverage reconciliation
+## Shipped 2026-08-17: coverage reconciliation
 
 Pull an inventory from each independent authority that should know about a device or an
 identity, differential them, and report what only one of them knows about. A machine in
@@ -136,7 +149,7 @@ reconciliation that quietly drops the authority it could not read reports a clea
 estate, which is the same failure mode as an evidence pack folding "we did not check"
 into "we are fine."
 
-## Queued item: Defender for Endpoint device collector
+## Shipped 2026-08-17: Defender for Endpoint device collector
 
 A read-only device-list collector against Defender for Endpoint: the enrolled devices,
 their onboarding and health state, and last check-in time. It is the missing EDR

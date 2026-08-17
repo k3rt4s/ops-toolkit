@@ -442,6 +442,60 @@ Acceptance criteria:
   absence is not counted as a gap unless `-RequireSysmon` or `-RequireEventForwarding`
   was passed, because an estate that does not run them is not thereby non-compliant.
 
+### Story: Know which agents have gone quiet
+
+As a security-conscious operator, I want the EDR device list with how long since each
+agent last checked in, so that an agent silenced on Tuesday is not still counted as a
+managed device on Friday.
+
+Status: shipped 2026-08-17 (`scripts/logging/Export-DefenderEndpointDeviceInventory.ps1`)
+
+Acceptance criteria:
+
+- Given a device list, When it is exported, Then each device is Protected, Silent,
+  Inactive, NotOnboarded, Unsupported, or Undetermined, and the days since last
+  contact are reported alongside the status.
+- Given a device the API returns with no last-contact time, When it is graded, Then it
+  is Unmeasured and never Protected, because an unread contact time and a recent one
+  are opposite facts that look identical in a count.
+- Given a device the service can see and does not protect, When it is graded, Then it
+  is NotOnboarded, and a device nothing could onboard is Unsupported rather than a gap.
+- Given a device list spanning more than one page, When it is read, Then every page is
+  followed, and a run that cannot complete the paging fails rather than writing a
+  truncated inventory that reads as a complete one.
+- Given any run, When reports are written, Then no token or client secret appears in
+  any of them.
+
+## Epic: Coverage reconciliation
+
+### Story: Find the machines only some systems know about
+
+As a security-conscious operator, I want to reconcile the directory, the EDR console,
+the asset system, and the address space against each other, so that a machine missing
+from one of them is visible, which it never is from inside the system that is missing
+it.
+
+Status: shipped 2026-08-17 (`scripts/reporting/Export-CoverageReconciliation.ps1`)
+
+Acceptance criteria:
+
+- Given two or more exported inventories with a named key column, When they are
+  reconciled, Then every machine is reported Present, Absent, or NotAssessed against
+  each authority, with the required authorities it is missing from named.
+- Given the same machine named differently by different authorities, such as PC01 and
+  pc01.contoso.com, When they are matched, Then it is one machine rather than two
+  false gaps.
+- Given an authority whose file is missing or whose key column is not in the CSV, When
+  it is graded, Then it is NotRead, every machine reads NotAssessed against it, and the
+  run verdict is Undetermined. It is never graded as an authority that returned nothing.
+- Given a gap found against the authorities that were read, When another authority is
+  unread, Then the gap is still reported, because it is true regardless of what the
+  unread source would have said.
+- Given an authority marked not required, such as a subnet scan, When machines are
+  graded, Then its absences are reported and produce no gap.
+- Given fewer than two authorities could be read, When the run completes, Then it fails
+  rather than reporting an estate that agrees with itself.
+
 ## Epic: Compliance evidence
 
 ### Story: Answer the questions insurers and assessors actually ask

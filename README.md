@@ -189,6 +189,47 @@ and both are reported Undetermined rather than compliant when the read fails. Re
 is measured from the oldest record still in each channel rather than from the configured
 maximum size, because a 4 GB Security log on a busy machine can hold hours.
 
+Export the Defender for Endpoint device list, with the coverage gaps and the agents
+that have gone quiet:
+
+```powershell
+pwsh -File .\scripts\logging\Export-DefenderEndpointDeviceInventory.ps1 -AccessToken $token
+pwsh -File .\scripts\logging\Export-DefenderEndpointDeviceInventory.ps1 -TenantId "<tenant-id>" -ClientId "<app-id>" -ClientSecret $secret -SilenceThresholdDays 3
+```
+
+Needs an Entra application with `Machine.Read.All` on WindowsDefenderATP and admin
+consent granted. The secret and the token are held as `SecureString` and never written
+to a report. A device the API returns with no last-contact time is reported Unmeasured,
+never as reporting, because a silenced agent otherwise stays inside the managed device
+count indefinitely.
+
+Reconcile the systems that should each know about the same machine, and see what only
+some of them know about:
+
+```powershell
+pwsh -File .\scripts\reporting\Export-CoverageReconciliation.ps1 -ManifestPath .\authorities.json
+pwsh -File .\scripts\reporting\Export-CoverageReconciliation.ps1 -Authority @{Name='ActiveDirectory';Path='.\ad-computers.csv';KeyColumn='Name'},@{Name='Defender';Path='.\devices.csv';KeyColumn='ComputerDnsName'}
+```
+
+Each authority is a CSV plus the column holding the machine identity, so any console
+that can export a device list can be reconciled without a per-product integration. The
+manifest form is the same thing saved to a file:
+
+```json
+[
+  { "Name": "ActiveDirectory", "Path": "C:\\exports\\ad-computers.csv", "KeyColumn": "Name", "Required": true },
+  { "Name": "Defender", "Path": "C:\\exports\\devices.csv", "KeyColumn": "ComputerDnsName", "Required": true },
+  { "Name": "SubnetScan", "Path": "C:\\exports\\scan.csv", "KeyColumn": "Address", "Required": false }
+]
+```
+
+An authority whose file is missing, or whose key column is not in the CSV, is reported
+`NotRead` and every machine reads `NotAssessed` against it. It is never graded as an
+authority that returned nothing, because an unread source and an empty one produce
+opposite reports from identical-looking input. Mark a partial source such as a subnet
+scan `Required: false` so it is reported without inventing a gap for every machine it
+does not contain.
+
 Compare the two most recent runs of a collector and see what changed since last time:
 
 ```powershell
@@ -489,6 +530,8 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 | `scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1`   | New script setting workstation idle-lock and sleep posture (never sleep/hibernate on AC, screensaver lock) with `-WhatIf`, `-Rollback`, optional elevated ConsoleLock and machine-wide inactivity lock.                                                                                                                                       |
 | `scripts\entra\Export-EntraAppCredentialExpiry.ps1`                        | New report-only Entra ID credential expiry export covering app registration and service principal secrets and certificates, with optional owner lookup and a sign-in match that says whether an expiring credential is still in use.                                                                                                          |
 | `scripts\logging\Export-EndpointTelemetryPosture.ps1`                      | New read-only collector reporting whether PowerShell script-block logging, command-line process auditing, the required audit subcategories, Sysmon, and event forwarding are switched on, plus the measured retention of each security channel taken from its oldest surviving record. Feeds controls LOG-01 and LOG-02 in the evidence pack. |
+| `scripts\logging\Export-DefenderEndpointDeviceInventory.ps1`               | New read-only Defender for Endpoint device inventory covering onboarding coverage and how long each agent has been silent, paged in full and refusing to write a truncated list. Unverified against a live tenant.                                                                                                                            |
+| `scripts\reporting\Export-CoverageReconciliation.ps1`                      | New read-only reconciliation across any number of exported inventories, reporting which machines only some authorities know about. An authority that could not be read is NotRead, never an authority that returned nothing.                                                                                                                  |
 | `scripts\reporting\Export-SecurityControlEvidencePack.ps1`                 | Added controls LOG-01 and LOG-02, covering whether security-relevant activity is logged and whether it is retained long enough to investigate an incident found late.                                                                                                                                                                         |
 | `scripts\utilities\Find-LegacyApiUsage.ps1`                                | New read-only scanner for retired and soon-to-be-retired Microsoft APIs (MSOnline, AzureAD, AzureRM, ADAL, EWS, Exchange Online `-Credential`, Application Impersonation, Get-MessageTrace, Send-MailMessage), reporting deadline, replacement, and whether the hit is in a comment.                                                          |
 | `scripts\active-directory\Export-AdPrivilegedAccessAudit.ps1`              | New read-only AD audit covering AS-REP roastable and Kerberoastable accounts, all four delegation types, PASSWD_NOTREQD, reversible encryption, orphaned adminCount, krbtgt password age, and nested tier-0 membership resolved by well-known SID.                                                                                            |

@@ -46,6 +46,58 @@ the logging a hunt would need is switched on at all.
   setting the collector could not read takes LOG-01 to NotAssessed outright rather
   than to a verdict drawn from the settings that were read.
 
+### Added: Defender for Endpoint device inventory
+
+- **`scripts\logging\Export-DefenderEndpointDeviceInventory.ps1`.** The device list with
+  onboarding coverage and how long each agent has been silent. Separates a Silent agent
+  from an Inactive machine, because ten days quiet is an agent that stopped talking on a
+  machine that still exists and sixty days is a machine that has gone, and those need
+  different actions.
+- **A device with no last-contact time is Unmeasured, never Protected.** An unread
+  contact time and a recent one are opposite facts that look identical in a count, which
+  is how a silenced agent stays inside the managed device count for as long as anyone
+  cares to look.
+- **Every page is followed, or the run fails.** A collector that reads page one and
+  stops writes a short inventory that reads as a complete one, and the reconciliation
+  below would then report every machine on page two as a coverage gap. A page error and
+  the page cap both throw before anything is written.
+- The token and client secret are held as `SecureString`, exist in plain text on one
+  line, and are asserted absent from every written report. A failed token request
+  surfaces only its status line, because some error shapes echo the secret back.
+
+### Added: coverage reconciliation
+
+- **`scripts\reporting\Export-CoverageReconciliation.ps1`.** Reconciles any number of
+  exported inventories against each other and reports which machines only some of them
+  know about. Each authority is a CSV plus a key column, so any console that can export
+  a device list is covered without a per-product integration.
+- **An authority that could not be read is NotRead, not an authority that returned
+  nothing.** Graded as Absent, every machine becomes a gap; skipped, every machine
+  becomes covered. Both are confident and wrong and the input looks identical, so an
+  unread authority instead sets every machine to NotAssessed against it and takes the
+  run verdict to Undetermined.
+- A gap found against the authorities that were read is still reported while another is
+  unread, because it is true regardless of what the unread source would have said.
+- Names are normalised before matching, so PC01 and pc01.contoso.com are one machine
+  rather than two false gaps. An authority marked not required, such as a subnet scan,
+  is reported without inventing a gap for every machine it does not contain.
+- Fewer than two readable authorities fails the run. One source can only agree with
+  itself, and the report it would write says every machine is covered.
+
+### Fixed: a column check that read the wrong object
+
+- The reconciliation script's key-column validation used
+  `@($rows | Select-Object -First 1).PSObject.Properties.Name`, which reads the wrapping
+  array's own members. Every column check failed, reporting `Length, Rank, SyncRoot` as
+  the columns found in the CSV. This is the trap already recorded in `THEORY.md`, caught
+  here by the tests before it shipped rather than after.
+
+### Changed: test helper
+
+- `Invoke-ScriptUnderTest` gained `-RawArgument`, whose values are emitted into the
+  splat verbatim as expressions rather than quoted. A `SecureString` parameter has no
+  literal form and could not otherwise be passed to a script under test.
+
 ### Coverage note on the telemetry collector
 
 - The paths where a reading is null, meaning audit policy or the Security log could not

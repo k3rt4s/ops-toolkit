@@ -6,8 +6,15 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-One item: the hard-coded absolute paths, described in its own section below. There is
-also one open question for the developer, further down.
+Four items, each described in its own section below: the endpoint telemetry and
+audit-logging posture collector, the coverage reconciliation report, the Defender for
+Endpoint device collector that reconciliation depends on, and the hard-coded absolute
+paths. There is also one open question for the developer, further down.
+
+The first three were derived on 2026-08-17 from a threat-hunting conference transcript
+and scoped against what this repo can actually read. The rejected candidates from the
+same review are recorded under "Considered and not queued" so the reasoning is not
+re-derived.
 
 The `#requires -Version 7` item filed from the workspace lane on 2026-08-15 is done.
 `Test-LdapSigningReadiness.ps1`, `Export-AzOrphanedResource.ps1`, and
@@ -50,6 +57,98 @@ Recorded so the reasoning is not re-derived later.
   one. Worth revisiting only once someone has actually run this against enough
   machines to be annoyed by it, because a throttled parallel implementation is easy
   to get subtly wrong and hard to debug remotely.
+- **Behavioural detection signals.** Reviewed 2026-08-17 and rejected as a product
+  direction: abnormal access to systems a user does not normally touch,
+  role-inappropriate LOLBin execution, after-hours authentication volume, privileged
+  cloud API calls, DNS tunnelling patterns, and rare or limited-use protocols. Every
+  one needs an event stream over time plus a baseline of what is normal for that user
+  or role. This toolkit reads configuration state at a point in time and diffs two
+  runs of the same collector; it has no log ingestion, no time-series store, and no
+  baseline. Building these turns it into a detection engine competing with whatever
+  SIEM the estate already has, which is a different product. What was kept from this
+  group is the precondition rather than the detections: whether the telemetry those
+  detections need is being generated and retained at all. That is the endpoint
+  telemetry posture collector below.
+- **Detection signals already covered.** Three items from the same review need no work
+  because a shipped collector already answers them. Long-lived credentials:
+  `Export-EntraAppCredentialExpiry.ps1` reports `ExceedsRecommendedLifetimeCount` and
+  whether the credential is still authenticating. Stale accounts and last login:
+  `Export-AdUserInventory.ps1` and `Disable-AdStaleComputerAccountsAndMoveToOu.ps1`.
+  Standing privilege and escalation paths: `Export-AdPrivilegedAccessAudit.ps1` and
+  `Export-AdAclRiskReport.ps1`.
+- **EDR silence delta check.** How long since each EDR agent last checked in, against a
+  threshold. Not filed separately because it is a read of the EDR management plane and
+  falls out almost free once the Defender for Endpoint device collector below exists.
+  Build it there rather than as its own item.
+
+## Queued item: endpoint telemetry and audit-logging posture
+
+A read-only collector answering the question that has to be answered before any hunt or
+detection is worth writing: is the logging that would ever show you an attacker actually
+switched on, on every machine, with a retention window that outlives your time to
+detect. The estate this matters to is the one that believes it is covered.
+
+What it reads, all configuration state, all local or over `-ComputerName` like the other
+collectors: PowerShell script-block and module logging, process-creation auditing and
+whether command line is included, the advanced audit policy subcategories that matter,
+Sysmon presence and its config, DNS client logging, per-channel event log size and
+retention mode, and event-forwarding subscription state.
+
+The pattern is already proven in this repo and should be copied rather than reinvented.
+`Test-LdapSigningReadiness.ps1` reports the NTDS diagnostic setting first and returns
+`Unmeasured` rather than a clean result when per-client logging is off, and its header
+says outright that the most important output is not the client list but whether the
+logging that would produce it is on at all. That is this collector generalised to one
+script. Same discipline applies: a channel whose configuration could not be read is
+reported as unread, never as compliant.
+
+Feeds a new logging control into `Export-SecurityControlEvidencePack.ps1`, and
+`Compare-OpsToolkitRun.ps1` then shows coverage improving run over run without new
+machinery.
+
+## Queued item: coverage reconciliation
+
+Pull an inventory from each independent authority that should know about a device or an
+identity, differential them, and report what only one of them knows about. A machine in
+Active Directory with no EDR agent, an EDR agent on a machine no inventory system lists,
+an IP in the static server range that answers to nothing.
+
+The mechanic already exists in pieces. `Export-SecurityControlEvidencePack.ps1` fans out
+to collectors and rolls up, `Join-ApplicationsWithEndpointSites.ps1` is a working
+matched/unmatched join with duplicate-key handling, and the pack's NotAssessed
+discipline is exactly how a blind spot should be reported. What is missing is a script
+that treats the collectors as authorities to be reconciled against each other rather
+than as separate reports.
+
+Authorities readable today: AD computer and user accounts, Entra through Graph, Azure IP
+space through `Export-AzNetworkInventory.ps1`, and which machines actually answered a
+pack fan-out. Authorities with no reader: EDR, VPN, and the log pipeline.
+
+Those three are covered two ways, decided 2026-08-17. Both are wanted, not one or the
+other.
+
+1. An operator-supplied CSV export from whatever EDR, VPN, or SIEM console is in use.
+   Product-agnostic, no new API surface, works on day one against any vendor.
+2. The Defender for Endpoint collector below, for the Microsoft case natively.
+
+Any authority with neither a CSV nor a collector reports NotAssessed for its leg. A
+reconciliation that quietly drops the authority it could not read reports a clean
+estate, which is the same failure mode as an evidence pack folding "we did not check"
+into "we are fine."
+
+## Queued item: Defender for Endpoint device collector
+
+A read-only device-list collector against Defender for Endpoint: the enrolled devices,
+their onboarding and health state, and last check-in time. It is the missing EDR
+authority for the reconciliation above, and it is also what makes the EDR silence delta
+check possible, so build that into the same script rather than filing it separately.
+
+Two cautions from this repo's own history. Check every field against the installed SDK
+model type before reading it: two beta-only Graph fields have already shipped as
+confidently empty columns because a beta field returns null instead of erroring. And
+plant the null shapes in the fixtures, a device that has never checked in, a device with
+no onboarding state, because a fully-populated fixture proves only the happy path and
+that is how both Azure collectors shipped scanning nothing.
 
 ## Queued item: hard-coded absolute paths
 

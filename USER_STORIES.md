@@ -412,6 +412,36 @@ Acceptance criteria:
 - Given `-UpdateBaseline`, When the baseline is overwritten, Then a warning states
   that it now records current state whatever that state is.
 
+## Epic: Telemetry posture
+
+### Story: Know whether anything would have recorded it
+
+As a security-conscious operator, I want to know which security logging is switched on
+across the estate and how many days of it actually survive, so that a hunt or an
+investigation is not run against a channel that was never enabled or that rolled over
+this morning.
+
+Status: shipped 2026-08-17 (`scripts/logging/Export-EndpointTelemetryPosture.ps1`)
+
+Acceptance criteria:
+
+- Given a machine, When its telemetry posture is read, Then PowerShell script-block
+  logging, command-line process auditing, the required audit subcategories, Sysmon,
+  and event forwarding are each reported Enabled, Disabled, NotRequired, or
+  Undetermined, with the reason the setting matters carried into the report.
+- Given a setting that could not be read, such as audit policy in an unelevated
+  session, When it is graded, Then it is Undetermined and never Enabled, and the
+  machine verdict is Undetermined even where other settings were read cleanly.
+- Given a channel, When its retention is reported, Then it is measured from the oldest
+  record still present rather than from the configured maximum size, and a channel
+  with no measurable history is Unmeasured rather than sufficient.
+- Given a channel holding less than the required window, When it is graded, Then it is
+  Insufficient only if it is full, and Building if it is simply younger than the
+  window, so a newly built machine is not reported as misconfigured.
+- Given Sysmon or event forwarding is absent, When the run is graded, Then their
+  absence is not counted as a gap unless `-RequireSysmon` or `-RequireEventForwarding`
+  was passed, because an estate that does not run them is not thereby non-compliant.
+
 ## Epic: Compliance evidence
 
 ### Story: Answer the questions insurers and assessors actually ask

@@ -141,3 +141,95 @@ Describe 'Test-WindowsHardeningState against this machine' {
         $checkedAndUnchecked | Should -BeGreaterThan 0
     }
 }
+
+Describe 'Export-EndpointTelemetryPosture against this machine' {
+    BeforeAll {
+        $script:telemetry = & (Get-RepositoryScriptPath -RelativePath 'scripts\logging\Export-EndpointTelemetryPosture.ps1') `
+            -OutputDirectory (Join-Path $script:workRoot 'telemetry')
+        $script:checks = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-checks.csv'))
+        $script:channels = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'log-channels.csv'))
+        $script:posture = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-posture.csv'))
+    }
+
+    It 'writes the run-directory layout the comparison tool needs' {
+        (Split-Path $script:telemetry.OutputDirectory -Leaf) | Should -Match '^endpoint-telemetry-posture-\d{8}_\d{6}$'
+        foreach ($name in @('telemetry-checks', 'log-channels', 'telemetry-posture')) {
+            Test-Path (Join-Path $script:telemetry.OutputDirectory "$name.csv") | Should -BeTrue -Because "$name.csv should exist"
+            Test-Path (Join-Path $script:telemetry.OutputDirectory "$name.json") | Should -BeTrue -Because "$name.json should exist"
+        }
+        Test-Path (Join-Path $script:telemetry.OutputDirectory 'summary.json') | Should -BeTrue
+    }
+
+    It 'grades every setting and channel to a defined outcome' {
+        $script:checks.Count | Should -BeGreaterThan 0
+        $script:channels.Count | Should -BeGreaterThan 0
+        foreach ($check in $script:checks) {
+            $check.Status | Should -BeIn @('Enabled', 'Disabled', 'NotRequired', 'Undetermined')
+            $check.Requirement | Should -BeIn @('Required', 'Recommended', 'Conditional')
+            # A finding with no stated reason cannot be acted on by the operator who
+            # reads the CSV six weeks from now.
+            $check.Why | Should -Not -BeNullOrEmpty
+        }
+        foreach ($channel in $script:channels) {
+            $channel.Status | Should -BeIn @('Enabled', 'Disabled', 'NotRequired', 'Undetermined', 'Absent')
+            $channel.RetentionStatus | Should -BeIn @('Sufficient', 'Insufficient', 'Building', 'Unmeasured')
+        }
+    }
+
+    It 'never reports a setting it could not read as compliant' {
+        # The load-bearing rule, and the reason this collector exists. Its own summary
+        # counts must reconcile against the rows, or an Undetermined setting could be
+        # quietly absent from the totals a reader actually looks at.
+        $script:telemetry.ChecksGraded | Should -Be $script:checks.Count
+        $script:telemetry.ChannelsGraded | Should -Be $script:channels.Count
+        $script:telemetry.SettingsUndetermined |
+            Should -Be @($script:checks | Where-Object { $_.Status -eq 'Undetermined' }).Count
+        $script:telemetry.RequiredSettingsDisabled |
+            Should -Be @($script:checks | Where-Object { $_.Requirement -eq 'Required' -and $_.Status -eq 'Disabled' }).Count
+    }
+
+    It 'measures retention from records rather than from configured size' {
+        # A 4 GB Security log on a busy machine can hold hours. Any channel claiming
+        # sufficient retention has to have produced a real oldest-record timestamp to
+        # claim it from.
+        foreach ($channel in @($script:channels | Where-Object { $_.RetentionStatus -eq 'Sufficient' })) {
+            $channel.OldestRecord | Should -Not -BeNullOrEmpty -Because "$($channel.LogName) claims sufficient retention"
+            [double]$channel.RetentionDays | Should -BeGreaterOrEqual ([double]$channel.MinimumRetentionDays)
+        }
+        # And a channel with no measurable history must not have been graded at all.
+        foreach ($channel in @($script:channels | Where-Object { $_.RetentionStatus -eq 'Unmeasured' })) {
+            $channel.RetentionDays | Should -BeNullOrEmpty -Because "$($channel.LogName) reported no measurable history"
+        }
+    }
+
+    It 'does not report a machine as covered while anything is unread' {
+        $verdict = $script:posture[0].Verdict
+        $verdict | Should -BeIn @('Covered', 'Partial', 'NotCovered', 'Undetermined', 'Unreachable')
+        if ($verdict -eq 'Covered') {
+            [int]$script:posture[0].RequiredGapCount | Should -Be 0
+            [int]$script:posture[0].UndeterminedCount | Should -Be 0
+            [int]$script:posture[0].InsufficientRetentionCount | Should -Be 0
+            [int]$script:posture[0].ChecksGraded | Should -BeGreaterThan 0
+        }
+        if ([int]$script:posture[0].UndeterminedCount -gt 0) {
+            $verdict | Should -Be 'Undetermined' -Because 'an unread setting outranks the ones that were read'
+        }
+    }
+
+    It 'names the gaps behind the counts' {
+        # A count with no names cannot be acted on, and cannot be checked either.
+        $gapCount = [int]$script:posture[0].RequiredGapCount + [int]$script:posture[0].InsufficientRetentionCount
+        if ($gapCount -gt 0) {
+            $script:posture[0].Gaps | Should -Not -BeNullOrEmpty
+            @($script:posture[0].Gaps -split ';').Count | Should -Be $gapCount
+        }
+    }
+
+    It 'does not treat an absent optional component as a gap' {
+        # Sysmon and event forwarding are Conditional by default. An estate that runs
+        # neither must not be told it has holes where they would be.
+        foreach ($check in @($script:checks | Where-Object { $_.Requirement -eq 'Conditional' })) {
+            $check.Status | Should -Not -Be 'Disabled'
+        }
+    }
+}

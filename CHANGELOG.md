@@ -7,8 +7,52 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-08-17
 
-Full script coverage, a validation gate that catches the suite changing the machine, and
-`-WhatIf` on the last two scripts that lacked it.
+Full script coverage, a validation gate that catches the suite changing the machine,
+`-WhatIf` on the last two scripts that lacked it, and a new collector answering whether
+the logging a hunt would need is switched on at all.
+
+### Added: endpoint telemetry posture
+
+- **`scripts\logging\Export-EndpointTelemetryPosture.ps1`.** Reports whether PowerShell
+  script-block, module, and transcription logging are on, whether process creation
+  events include the command line, which of nine audit subcategories are auditing,
+  whether Sysmon is running and under which config, whether an event-forwarding
+  subscription manager is configured, and the state of eleven security-relevant event
+  channels.
+- **Retention is measured, not inferred.** Each channel's retention comes from the
+  oldest record still in it, not from its configured maximum size. On the development
+  workstation that distinction is the whole finding: the Security log is capped at
+  20 MB, sits at 100% of it, and holds six hours. A report reading configured size
+  would have called that 20 MB of coverage.
+- A channel below the required window is Insufficient only when it is full. One that is
+  simply younger than the window is Building, so a machine built last week is not
+  reported as misconfigured. Unknown fullness is treated as full, because assuming the
+  generous case is how a rolling log gets reported as fine.
+- Audit subcategories are matched by GUID rather than by display name. The names are
+  localized, so a name match on a non-English Windows silently finds nothing and every
+  subcategory reads as absent.
+- Sysmon is found by service image path rather than by service name, because the name
+  is chosen at install time.
+- Sysmon and event forwarding are Conditional by default, so an estate that runs
+  neither is not reported as having holes where they would be. `-RequireSysmon` and
+  `-RequireEventForwarding` make their absence a finding.
+
+### Added: two evidence pack controls
+
+- **LOG-01 and LOG-02** in `Export-SecurityControlEvidencePack.ps1`, covering whether
+  security-relevant activity is logged and whether it is retained long enough to
+  investigate an incident found late. They are asked separately because they fail
+  separately: a machine can be generating everything and keeping six hours of it. Any
+  setting the collector could not read takes LOG-01 to NotAssessed outright rather
+  than to a verdict drawn from the settings that were read.
+
+### Coverage note on the telemetry collector
+
+- The paths where a reading is null, meaning audit policy or the Security log could not
+  be read, occur only in an unelevated session, and the validation suite is normally
+  run elevated. They are therefore covered by unit specs over the grading functions
+  rather than by the live run. If those paths were wrong the script would report a
+  clean posture for a machine it never read, and no elevated run here would show it.
 
 ### Added: the machine-state gate
 

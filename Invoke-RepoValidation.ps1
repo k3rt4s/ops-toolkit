@@ -34,8 +34,8 @@ Active script kept in the reorganized ops-toolkit repo.
 [CmdletBinding()]
 param(
     [Parameter()]
-    [ValidateSet('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test')]
-    [string[]]$Gate = @('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test'),
+    [ValidateSet('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test', 'MachineState')]
+    [string[]]$Gate = @('Parser', 'Analyzer', 'Help', 'Shell', 'StaleReference', 'Module', 'Test', 'MachineState'),
 
     [Parameter()]
     [switch]$IncludeArchive,
@@ -62,6 +62,121 @@ $helpExempt = @{}
 $findings = [System.Collections.Generic.List[object]]::new()
 $gateResults = [System.Collections.Generic.List[object]]::new()
 $script:MissingTool = @()
+
+function Get-MachineStateSnapshot {
+    <#
+    .SYNOPSIS
+    Capture the machine settings this repository's scripts are capable of changing.
+
+    .DESCRIPTION
+    Taken before and after the test run so the MachineState gate can prove the suite
+    changed nothing. This exists because the suite once did: an isolation gap let a run
+    disable four real scheduled tasks and add three real Defender path exclusions, and
+    every test passed while it happened. Checking afterwards is the only thing that
+    would have caught it, so it is no longer left to whoever remembers.
+
+    A probe that cannot run records the reason rather than an empty value, because an
+    unreadable setting comparing equal to an unreadable setting is honest, while an
+    unreadable setting comparing equal to "none" would hide a real change.
+
+    .PARAMETER ScriptRoot
+    Directory of the repository's scripts, scanned for the scheduled tasks they name.
+
+    .OUTPUTS
+    Hashtable of probe name to a stable string.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ScriptRoot
+    )
+
+    $snapshot = @{}
+
+    try {
+        $preference = Get-MpPreference -ErrorAction Stop
+        $snapshot['DefenderExclusionPath'] = (@($preference.ExclusionPath) | Sort-Object) -join '|'
+        $snapshot['DefenderExclusionProcess'] = (@($preference.ExclusionProcess) | Sort-Object) -join '|'
+    } catch {
+        $snapshot['DefenderExclusionPath'] = "unreadable: $($_.Exception.Message)"
+        $snapshot['DefenderExclusionProcess'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    # Only the tasks this repository's own scripts name. Snapshotting every task on the
+    # machine would be slow and would flag Windows changing its own state mid-run.
+    $taskNames = @()
+    if (Test-Path -LiteralPath $ScriptRoot) {
+        $taskNames = @(Get-ChildItem -LiteralPath $ScriptRoot -Recurse -Filter *.ps1 |
+                Select-String -Pattern "-TaskName\s+'([^']+)'" -AllMatches |
+                ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
+                Sort-Object -Unique)
+    }
+
+    $taskStates = foreach ($name in $taskNames) {
+        $state = try {
+            $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
+            if ($task) { ($task | ForEach-Object { $_.State }) -join ',' } else { 'absent' }
+        } catch {
+            'absent'
+        }
+        "$name=$state"
+    }
+    $snapshot['ScheduledTasks'] = (@($taskStates) | Sort-Object) -join '|'
+
+    try {
+        $snapshot['Printers'] = (@(Get-Printer -ErrorAction Stop | ForEach-Object { $_.Name }) | Sort-Object) -join '|'
+    } catch {
+        $snapshot['Printers'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $snapshot['PSDrives'] = (@(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop | ForEach-Object { $_.Name }) | Sort-Object) -join '|'
+    } catch {
+        $snapshot['PSDrives'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    $snapshot
+}
+
+function Compare-MachineStateSnapshot {
+    <#
+    .SYNOPSIS
+    Return one description per machine setting that changed between two snapshots.
+
+    .DESCRIPTION
+    Separate from the gate so it can be tested. A drift detector that has never been
+    shown to detect drift is a green light nobody has checked, which is the failure it
+    exists to prevent.
+
+    A probe present before and missing afterwards counts as drift rather than being
+    skipped, because a probe that stops reporting is itself a change worth seeing.
+
+    .PARAMETER Before
+    Snapshot taken before the run.
+
+    .PARAMETER After
+    Snapshot taken after it.
+
+    .OUTPUTS
+    String descriptions, one per changed probe. Empty when nothing changed.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Before,
+        [Parameter(Mandatory = $true)][hashtable]$After
+    )
+
+    foreach ($probe in ($Before.Keys | Sort-Object)) {
+        $beforeValue = [string]$Before[$probe]
+        $afterValue = if ($After.ContainsKey($probe)) { [string]$After[$probe] } else { '<probe missing>' }
+        if ($beforeValue -ne $afterValue) {
+            "The test run changed $probe on this machine. Before: '$beforeValue'. After: '$afterValue'. A test reached the real system instead of a staged module; see tests\README.md."
+        }
+    }
+}
 
 function Add-Finding {
     param(
@@ -356,6 +471,14 @@ if ($Gate -contains 'Module') {
     Add-GateResult -Name 'Module' -Status $(if ($moduleErrors -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $manifests.Count -ErrorCount $moduleErrors -WarningCount 0
 }
 
+# Taken before the tests run, so the MachineState gate below has something to compare
+# against. Snapshotting even when the Test gate is skipped would compare a state to
+# itself and report a pass that means nothing, so it is tied to the tests running.
+$machineStateBefore = $null
+if ($Gate -contains 'MachineState' -and $Gate -contains 'Test') {
+    $machineStateBefore = Get-MachineStateSnapshot -ScriptRoot $scriptRoot
+}
+
 if ($Gate -contains 'Test') {
     $testRoot = Join-Path $repoRoot 'tests'
     $pester = Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.0.0' } | Sort-Object Version -Descending | Select-Object -First 1
@@ -406,6 +529,27 @@ if ($Gate -contains 'Test') {
         }
 
         Add-GateResult -Name 'Test' -Status $(if ($failedCount -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $totalCount -ErrorCount $failedCount -WarningCount 0 -Note "Pester $($pester.Version)"
+    }
+}
+
+if ($Gate -contains 'MachineState') {
+    if (-not $machineStateBefore) {
+        # No baseline means the tests did not run, so there is nothing to conclude.
+        # Reporting a pass here would be exactly the "we did not check, so we are fine"
+        # this repository refuses everywhere else.
+        Add-GateResult -Name 'MachineState' -Status 'SKIP' -Checked 0 -ErrorCount 0 -WarningCount 0 -Note 'Only meaningful when the Test gate runs.'
+    } else {
+        $machineStateAfter = Get-MachineStateSnapshot -ScriptRoot $scriptRoot
+        $drift = @(Compare-MachineStateSnapshot -Before $machineStateBefore -After $machineStateAfter)
+        $driftCount = $drift.Count
+
+        foreach ($message in $drift) {
+            Add-Finding -Gate 'MachineState' -Severity 'Error' -File 'tests' -Message $message
+        }
+
+        Add-GateResult -Name 'MachineState' -Status $(if ($driftCount -eq 0) { 'PASS' } else { 'FAIL' }) `
+            -Checked $machineStateBefore.Count -ErrorCount $driftCount -WarningCount 0 `
+            -Note 'Defender exclusions, scheduled tasks, printers, drives'
     }
 }
 

@@ -8,6 +8,8 @@ Instructions:
 - Requires the ActiveDirectory PowerShell module.
 - Report generation is the default. Email is sent only when -SendEmail is supplied.
 - Pass SMTP settings explicitly when using -SendEmail.
+- Run with -WhatIf first when sending. Reports are still written on a preview run;
+  only the message is withheld.
 - Use -ReportType PrivilegedGroupMembership for AD group membership reports.
 - Use -ReportType PasswordNeverExpires for user accounts whose passwords never expire.
 
@@ -30,7 +32,7 @@ Active script kept in the reorganized ops-toolkit repo. Replaces
 Send-AdDomainAdminsEmailReport.ps1 and Send-AdPasswordNeverExpiresEmailReport.ps1.
 #>
 #Requires -Modules ActiveDirectory
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter()]
     [ValidateSet('PrivilegedGroupMembership', 'PasswordNeverExpires')]
@@ -85,6 +87,7 @@ Options:
   -From             Sender address required with -SendEmail.
   -To               Recipient address list required with -SendEmail.
   -ContactEmail     Optional contact mailbox included in the report text.
+  -WhatIf           Write the reports but do not send the message.
 '@
 }
 
@@ -139,7 +142,12 @@ function Format-HtmlReport {
 }
 
 Import-Module ActiveDirectory -ErrorAction Stop
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+
+# -WhatIf:$false throughout the reporting path. Sending the mail is the change being
+# previewed; writing the report is the preview itself, and the summary below resolves
+# these paths. Without this a preview run creates no directory and the Resolve-Path
+# immediately below throws.
+New-Item -ItemType Directory -Path $OutputDirectory -Force -WhatIf:$false | Out-Null
 $resolvedOutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $generatedAt = Get-Date
@@ -157,12 +165,17 @@ $csvPath = Join-Path $resolvedOutputDirectory "ad-security-$slug-$timestamp.csv"
 $jsonPath = Join-Path $resolvedOutputDirectory "ad-security-$slug-$timestamp.json"
 $html = Format-HtmlReport -Title $title -Rows $rows -GeneratedAt $generatedAt -ReportContactEmail $ContactEmail
 
-$html | Set-Content -LiteralPath $htmlPath -Encoding utf8
-$rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8
-Set-Content -LiteralPath $jsonPath -Value (@($rows) | ConvertTo-Json -Depth 4) -Encoding utf8
+$html | Set-Content -LiteralPath $htmlPath -Encoding utf8 -WhatIf:$false
+$rows | Export-Csv -Path $csvPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
+Set-Content -LiteralPath $jsonPath -Value (@($rows) | ConvertTo-Json -Depth 4) -Encoding utf8 -WhatIf:$false
 
-if ($SendEmail) {
+$emailResult = if (-not $SendEmail) {
+    'NotRequested'
+} elseif ($PSCmdlet.ShouldProcess(($To -join ', '), "Send $title")) {
     Send-MailMessage -SmtpServer $SmtpServer -From $From -To $To -Subject "$title $generatedAt" -Body $html -BodyAsHtml
+    'Sent'
+} else {
+    'Previewed'
 }
 
 [pscustomobject]@{
@@ -172,5 +185,8 @@ if ($SendEmail) {
     HtmlPath = (Resolve-Path -LiteralPath $htmlPath).Path
     CsvPath = (Resolve-Path -LiteralPath $csvPath).Path
     JsonPath = (Resolve-Path -LiteralPath $jsonPath).Path
-    EmailSent = [bool]$SendEmail
+    # EmailSent stays a boolean for anything already reading it, and is only true when
+    # a message really went out. EmailResult tells the three cases apart.
+    EmailSent = ($emailResult -eq 'Sent')
+    EmailResult = $emailResult
 }

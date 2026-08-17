@@ -6,6 +6,8 @@ Run a sequence of disk maintenance operations on a specified drive.
 Instructions:
 - Run as Administrator. chkdsk /f /r /x requires elevation and may schedule
   a reboot if the target volume is in use by Windows.
+- Run with -WhatIf first. Every step is destructive or long-running, and a preview
+  names each one it would perform without touching the drive.
 - Use -SkipChkdsk, -SkipCipherWipe, -SkipDefrag, or -SkipBenchmark to
   exclude individual steps without modifying the script.
 - The cipher free-space wipe (-SkipCipherWipe is NOT set) can take several
@@ -31,7 +33,7 @@ is always cleaned up, even if the benchmark fails mid-run.
 Status:
 Active PowerShell replacement for InsightVault\scripts\original_project\DiskMaintenance.ps1.
 #>
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [Parameter()]
     [ValidatePattern('^[A-Za-z]$')]
@@ -80,6 +82,8 @@ if ($logicalDisk.DriveType -ne 3) {
 # ---------------------------------------------------------------------------
 if ($SkipChkdsk) {
     Write-Information "[$driveLetter] Skipping chkdsk (SkipChkdsk set)." -InformationAction Continue
+} elseif (-not $PSCmdlet.ShouldProcess("$driveLetter`:", 'Run chkdsk /f /r /x')) {
+    Write-Information "[$driveLetter] Previewed chkdsk /f /r /x." -InformationAction Continue
 } else {
     Write-Information "[$driveLetter] Running chkdsk /f /r /x — requires elevation. If the volume is in use, Windows will schedule the check on the next reboot and exit 0 now." -InformationAction Continue
     try {
@@ -103,6 +107,8 @@ if ($SkipChkdsk) {
 # ---------------------------------------------------------------------------
 if ($SkipCipherWipe) {
     Write-Information "[$driveLetter] Skipping cipher free-space wipe (SkipCipherWipe set)." -InformationAction Continue
+} elseif (-not $PSCmdlet.ShouldProcess("$driveLetter`:", 'Wipe free space with cipher /w')) {
+    Write-Information "[$driveLetter] Previewed cipher free-space wipe." -InformationAction Continue
 } else {
     Write-Information "[$driveLetter] Wiping free space with cipher.exe /w — this can take several hours on large drives." -InformationAction Continue
     try {
@@ -122,6 +128,8 @@ if ($SkipCipherWipe) {
 # ---------------------------------------------------------------------------
 if ($SkipDefrag) {
     Write-Information "[$driveLetter] Skipping defrag/optimise (SkipDefrag set)." -InformationAction Continue
+} elseif (-not $PSCmdlet.ShouldProcess("$driveLetter`:", 'Run defrag /U /V')) {
+    Write-Information "[$driveLetter] Previewed defrag/optimise." -InformationAction Continue
 } else {
     Write-Information "[$driveLetter] Running defrag /U /V — Windows skips SSDs automatically." -InformationAction Continue
     try {
@@ -141,6 +149,10 @@ if ($SkipDefrag) {
 # ---------------------------------------------------------------------------
 if ($SkipBenchmark) {
     Write-Information "[$driveLetter] Skipping benchmark (SkipBenchmark set)." -InformationAction Continue
+} elseif (-not $PSCmdlet.ShouldProcess("$driveLetter`:", 'Write and read a 10 MB benchmark file')) {
+    # The benchmark writes a real file to the root of the drive, so it is a change
+    # like any other and is withheld on a preview run.
+    Write-Information "[$driveLetter] Previewed 10 MB write/read benchmark." -InformationAction Continue
 } else {
     $testFile = "$driveLetter`:\speedtest.tmp"
     $bufferSize = 10MB

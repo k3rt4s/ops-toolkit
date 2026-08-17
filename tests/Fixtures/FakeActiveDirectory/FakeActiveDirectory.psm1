@@ -141,13 +141,21 @@ function Get-ADComputer {
     # Honour the enabled filter. The stale-computer script relies on the directory
     # excluding disabled accounts unless it asks for them, so a fixture that returned
     # everything regardless would have the test assert behaviour the real cmdlet does
-    # not have. Other filter forms are not interpreted; add one here when a script
-    # under test depends on it rather than letting it quietly match everything.
-    if ($Filter -and [string]$Filter -replace '\s', '' -eq 'Enabled-eq$true') {
+    # not have.
+    $normalized = ([string]$Filter) -replace '\s', ''
+    if (-not $Filter -or $normalized -eq '*') {
+        return $computers
+    }
+
+    if ($normalized -in @('Enabled-eq$true', 'Enabled-eq$True')) {
         return @($computers | Where-Object { $_.Enabled })
     }
 
-    $computers
+    # Throw rather than fall through. Returning everything for a filter this fixture
+    # does not understand is how a test passes while the script asks for something
+    # entirely different, and it fails silently in the direction of looking fine. Add
+    # the filter here when a script under test starts using it.
+    throw "FakeActiveDirectory does not interpret the Get-ADComputer filter '$Filter'. Add it to the fixture rather than letting it match everything."
 }
 
 function Get-ADObject {
@@ -175,6 +183,40 @@ function Get-ADObject {
     }
 
     @(Get-FakeAdData -Name 'Objects')
+}
+
+function Get-ADGroupMember {
+    [CmdletBinding()]
+    param(
+        [Parameter()]$Identity, [Parameter()][switch]$Recursive,
+        [Parameter()]$Server, [Parameter()][pscredential]$Credential
+    )
+
+    $membership = Get-FakeAdData -Name 'GroupMembers'
+    if ($membership -is [System.Collections.IDictionary] -and $membership.Contains([string]$Identity)) {
+        return @($membership[[string]$Identity])
+    }
+
+    # The real cmdlet throws for a group that does not exist rather than returning
+    # nothing, and a report that silently comes back empty for a typo'd group name is
+    # worse than one that fails.
+    throw "Cannot find an object with identity: '$Identity' under: 'fake'."
+}
+
+function Search-ADAccount {
+    [CmdletBinding()]
+    param(
+        [Parameter()][switch]$PasswordNeverExpires, [Parameter()][switch]$UsersOnly,
+        [Parameter()][switch]$AccountDisabled, [Parameter()][switch]$AccountExpired,
+        [Parameter()]$Server, [Parameter()][pscredential]$Credential
+    )
+
+    $users = @(Get-FakeAdData -Name 'Users')
+    if ($PasswordNeverExpires) {
+        return @($users | Where-Object { $_.PasswordNeverExpires })
+    }
+
+    $users
 }
 
 # ---------------------------------------------------------------------------
@@ -213,4 +255,5 @@ function Set-ADUser {
 }
 
 Export-ModuleMember -Function 'Get-ADDomain', 'Get-ADForest', 'Get-ADGroup', 'Get-ADUser',
-'Get-ADComputer', 'Get-ADObject', 'Disable-ADAccount', 'Enable-ADAccount', 'Move-ADObject', 'Set-ADUser'
+'Get-ADComputer', 'Get-ADObject', 'Get-ADGroupMember', 'Search-ADAccount',
+'Disable-ADAccount', 'Enable-ADAccount', 'Move-ADObject', 'Set-ADUser'

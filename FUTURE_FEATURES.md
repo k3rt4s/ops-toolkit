@@ -78,11 +78,9 @@ scheduled task path for no functional gain. Raised here rather than decided.
 
 ## Residual risk, not a backlog item
 
-41 of the 48 scripts have automated coverage, including all 22 that change something.
-The seven without it are read-only or trivial utilities, and three of those seven run
-inside the evidence pack's own tested path. The two that do change something,
-`Send-AdSecurityEmailReport` and `Invoke-DiskMaintenance`, have no `-WhatIf` at all,
-which is why they were out of scope for a pass built on rehearsing changes.
+All 48 scripts have automated coverage, including all 24 that change something.
+`Send-AdSecurityEmailReport` and `Invoke-DiskMaintenance` gained `-WhatIf` on
+2026-08-17, which is what made the last two coverable.
 
 Every covered script runs end to end in the test suite against a stubbed back end. What
 no test here can establish is that a real Graph endpoint, domain controller, or Exchange

@@ -128,6 +128,27 @@ Nothing is really changed. Write commands record the attempt to a log named by
 `OPSTOOLKIT_TEST_MUTATION_LOG` and return, which is what turns "changed nothing" from
 an assumption into a checkable claim.
 
+The fixtures are configured entirely through environment variables set in the setup
+block, because the staged modules are loaded inside the child process and cannot see
+the test's own variables:
+
+| Variable                              | Read by             | Holds                                                                                             |
+| ------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------- |
+| `OPSTOOLKIT_TEST_MUTATION_LOG`        | every fixture       | File the recorders append to, one JSON object per line. Recording is off when unset.              |
+| `OPSTOOLKIT_TEST_TASKS`               | `ScheduledTasks`    | `<TaskPath>\|<TaskName>\|<State>` entries, semicolon separated. Anything unlisted does not exist. |
+| `OPSTOOLKIT_TEST_MP_EXCLUSIONPATH`    | `Defender`          | Existing path exclusions, semicolon separated.                                                    |
+| `OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS` | `Defender`          | Existing process exclusions, semicolon separated.                                                 |
+| `OPSTOOLKIT_TEST_PRINTERS`            | `PrintManagement`   | `<Name>\|<Type>` entries, semicolon separated.                                                    |
+| `OPSTOOLKIT_TEST_IIS_SITES`           | `WebAdministration` | Site names, semicolon separated.                                                                  |
+| `OPSTOOLKIT_TEST_IIS_HEADERS`         | `WebAdministration` | JSON object keyed by site name, holding the headers that site already has.                        |
+| `OPSTOOLKIT_TEST_IIS_LOGFIELDS`       | `WebAdministration` | JSON array of existing custom log fields.                                                         |
+
+**A fixture throws on input it does not understand rather than matching everything.**
+The fake `Get-ADComputer` interprets `*` and `Enabled -eq $true` and throws on anything
+else. Returning the full set for an unrecognised filter would let a test pass while the
+script asked the directory for something entirely different, and it fails in the
+direction of looking fine. Add the case to the fixture instead.
+
 Fixtures are arranged so exactly one item reaches each decision path: one stale
 computer among fresh ones, one site whose header is wrong among sites that are already
 right, one log field that already exists. A script that rewrote everything indiscriminately

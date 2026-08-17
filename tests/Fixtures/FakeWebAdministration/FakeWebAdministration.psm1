@@ -35,7 +35,10 @@ Active test fixture kept in the reorganized ops-toolkit repo.
 
 Set-StrictMode -Version 3.0
 
-$script:DriveRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakeiis-$([guid]::NewGuid().ToString('N'))"
+# The drive root lives inside the staged module directory, so the caller removing that
+# directory removes this too. A separate temp directory would survive every run and
+# accumulate, since a module has no reliable teardown hook.
+$script:DriveRoot = Join-Path $PSScriptRoot 'iis-drive'
 
 function Write-FakeIisMutation {
     <#

@@ -5,6 +5,52 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-08-17
+
+Full script coverage, a validation gate that catches the suite changing the machine, and
+`-WhatIf` on the last two scripts that lacked it.
+
+### Added: the machine-state gate
+
+- **`Invoke-RepoValidation.ps1` gained a `MachineState` gate.** It snapshots Defender
+  exclusions, the scheduled tasks this repository's scripts name, printers, and drives
+  before and after the test run, and fails on any difference. This exists because the
+  suite once changed all of that while every test reported green, so noticing is no
+  longer left to whoever remembers to look.
+- The gate's own comparison is unit-tested against a synthetic added exclusion, a
+  changed task state, several probes at once, and a probe that stops reporting. A drift
+  detector never shown to detect drift is a green light nobody has checked.
+
+### Added: full coverage
+
+- **Coverage reached 48 of 48 scripts**, and the suite 381 tests. The last seven were
+  the two below plus five read-only utilities, four of which are now run for real
+  against the machine and asserted on invariants rather than on this machine's values.
+
+### Fixed: the last two scripts with no dry run
+
+- **`Send-AdSecurityEmailReport.ps1` sent mail with no way to rehearse it.** It now
+  supports `-WhatIf`, still writes its reports on a preview run, and returns an
+  `EmailResult` of NotRequested, Previewed, or Sent. `EmailSent` stays a boolean for
+  anything already reading it and is true only when a message really went out.
+- **`Invoke-DiskMaintenance.ps1` ran chkdsk, a cipher free-space wipe, a defrag, and a
+  benchmark write with no dry run.** Every step is now behind `ShouldProcess` and named
+  on a preview. The free-space wipe alone can run for hours.
+
+### Fixed: fixture honesty
+
+- The fake `Get-ADComputer` returned every computer for any filter it did not
+  understand, so a script asking the directory for something entirely different would
+  still have passed. It now interprets `*` and `Enabled -eq $true` and throws on
+  anything else.
+- The fake `WebAdministration` module kept its `IIS:` drive root in its own temp
+  directory, which nothing removed. It now lives inside the staged module directory the
+  caller already deletes.
+- `tests/README.md` documents the eight `OPSTOOLKIT_TEST_*` variables the fixtures read.
+
+Both fixture faults were raised by `pre_push_review.py`, run retroactively over the
+2026-08-16 batch.
+
 ## 2026-08-16
 
 Coverage for all 22 state-changing scripts, which had none, and an incident during that

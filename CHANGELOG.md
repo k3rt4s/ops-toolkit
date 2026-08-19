@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 Notable changes to the ops-toolkit. Newest first.
 
@@ -105,6 +105,14 @@ the logging a hunt would need is switched on at all.
   run elevated. They are therefore covered by unit specs over the grading functions
   rather than by the live run. If those paths were wrong the script would report a
   clean posture for a machine it never read, and no elevated run here would show it.
+
+### Fixed: Sysmon detection matched too loosely
+
+- `Export-EndpointTelemetryPosture.ps1` found the Sysmon service by matching `Sysmon`
+  anywhere in the service image path, which also matches a service that merely lives in
+  a directory with Sysmon in its name, such as a log viewer, and would report Sysmon as
+  running on a machine where it is not installed. It now matches the executable,
+  `Sysmon.exe` or `Sysmon64.exe`. Raised by `pre_push_review.py`.
 
 ### Added: the machine-state gate
 

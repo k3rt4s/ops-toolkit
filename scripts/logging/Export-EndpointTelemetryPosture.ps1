@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Report whether the security logging that a hunt or a detection would need is switched on, and how many days of it survive.
 
@@ -429,11 +429,14 @@ $telemetryProbe = {
     }
 
     # Sysmon registers its driver under a service name the operator can change at
-    # install time, so the driver is found by image path rather than by name.
+    # install time, so the driver is found by image path rather than by name. The match
+    # is on the executable, not anywhere in the path: a bare 'Sysmon' also matches a
+    # service that merely lives in a directory with Sysmon in its name, such as a log
+    # viewer, and reports Sysmon as running when it is not installed at all.
     $sysmonService = $null
     try {
         $sysmonService = Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
-            Where-Object { $_.PathName -match 'Sysmon' } | Select-Object -First 1
+            Where-Object { $_.PathName -match '(?i)Sysmon(64)?\.exe' } | Select-Object -First 1
     } catch {
         $sysmonService = $null
     }

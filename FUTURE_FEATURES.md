@@ -1,4 +1,4 @@
-# ops-toolkit Future Features
+﻿# ops-toolkit Future Features
 
 Backlog for the ops-toolkit. Items flow from here onto the work board when picked up,
 and off the board into the repository history when done. Shipped work and its
@@ -224,6 +224,18 @@ board carries as the standing next action.
 ## Known deviations
 
 Things that look like gaps and are not.
+
+- **`Export-EndpointTelemetryPosture.ps1` grades an absent PowerShell policy key as
+  Disabled rather than Undetermined.** `Get-RegValue` returns null both for a value that
+  is not there and for a read that failed, so the two are not distinguished. That looks
+  like it contradicts the script's own Undetermined rule and does not: these are
+  `HKLM\SOFTWARE\Policies` keys, readable by any account, so null means the policy is
+  Not Configured, which is to say the logging really is off. Reporting Undetermined
+  instead would turn every unhardened machine into a shrug and hide the finding the
+  script exists to make. The Undetermined rule applies where it was written for, audit
+  policy and the Security log, which genuinely cannot be read unelevated and which do
+  pass null. Raised by `pre_push_review.py` on 2026-08-19 and rejected with this
+  reasoning; the proposed fix would have been a regression.
 
 - `Page-File-Bleed.ps1` gates on `-Execute` rather than on `-WhatIf` alone, and
   writes no plan or state report. Its header says so. Changing that is a behaviour

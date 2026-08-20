@@ -53,7 +53,10 @@ BeforeAll {
         param(
             [string]$RelativePath,
             [hashtable]$Argument = @{},
-            [string]$Tag
+            [string]$Tag,
+            # Extra setup text appended after the stubs, for a script that needs a stub
+            # or a redirected environment the shared set deliberately does not carry.
+            [string]$ExtraSetup = ''
         )
 
         $whatIfLog = Join-Path $script:workRoot "$Tag-whatif.log"
@@ -76,10 +79,10 @@ BeforeAll {
 
         [pscustomobject]@{
             WhatIf     = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $script:systemModulePath `
-                -Setup ((Get-WindowsMutationStubText -MutationLogPath $whatIfLog) + $fixtureEnvironment) -Argument $whatIfArgument
+                -Setup ((Get-WindowsMutationStubText -MutationLogPath $whatIfLog) + $fixtureEnvironment + $ExtraSetup) -Argument $whatIfArgument
             WhatIfLog  = $whatIfLog
             Execute    = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $script:systemModulePath `
-                -Setup ((Get-WindowsMutationStubText -MutationLogPath $executeLog) + $fixtureEnvironment) -Argument $executeArgument
+                -Setup ((Get-WindowsMutationStubText -MutationLogPath $executeLog) + $fixtureEnvironment + $ExtraSetup) -Argument $executeArgument
             ExecuteLog = $executeLog
         }
     }
@@ -409,6 +412,17 @@ Describe 'Invoke-WindowsFileCleanup' {
         ($removed -join ' ') | Should -Match 'old\.log'
         ($removed -join ' ') | Should -Not -Match 'new\.log'
     }
+
+    It 'leaves the system temp folder out of the default set, and includes it when asked' {
+        # The switch is the whole guardrail. C:\Windows\Temp is machine-wide and services
+        # write to it, so a default set that quietly grew to include it would make every
+        # already-scheduled call of this script a different command than the reviewed one.
+        Import-ScriptFunction -RelativePath 'scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1' `
+            -FunctionName 'Get-DefaultTempPath'
+        $systemTemp = Join-Path $env:windir 'Temp'
+        @(Get-DefaultTempPath) | Should -Not -Contain $systemTemp
+        @(Get-DefaultTempPath -IncludeSystemTemp) | Should -Contain $systemTemp
+    }
 }
 
 Describe 'Invoke-DiskSpaceReclaim' {
@@ -432,5 +446,174 @@ Describe 'Invoke-DiskSpaceReclaim' {
         $mutations = @(Get-MutationRecord -Path $script:reclaim.ExecuteLog)
         @($mutations | Where-Object { $_.Command -eq 'Stop-Service' }).Count |
             Should -Be 0 -Because 'no service target was requested'
+    }
+}
+
+Describe 'Invoke-DiskSpaceReclaim developer cache and Docker targets' {
+    BeforeAll {
+        # Every cache these targets touch is redirected into a sandbox, so a target that
+        # gets past its stub deletes a fixture rather than this machine's real caches.
+        # The two with no override variable of their own, the Codex runtime cache and the
+        # NVIDIA shader cache, are reached through USERPROFILE and LOCALAPPDATA, which is
+        # why both roots are redirected instead of the per-cache variables alone.
+        $script:sandbox = Join-Path $script:workRoot 'reclaim-sandbox'
+        $script:sandboxHome = Join-Path $script:sandbox 'home'
+        $script:sandboxLocal = Join-Path $script:sandbox 'local'
+
+        foreach ($fixture in @(
+                (Join-Path $script:sandboxHome '.cache\torch\hub.bin')
+                (Join-Path $script:sandboxHome '.cache\pre-commit\repo.tar')
+                (Join-Path $script:sandboxHome '.cache\codex-runtimes\node.exe')
+                (Join-Path $script:sandboxLocal 'npm-cache\_cacache\index')
+                (Join-Path $script:sandboxLocal 'ms-playwright\chromium-1000\chrome.exe')
+                (Join-Path $script:sandboxLocal 'NVIDIA\DXCache\shader.bin')
+                (Join-Path $script:sandboxLocal 'NVIDIA\GLCache\shader.bin')
+                (Join-Path $script:sandboxLocal 'Docker\wsl\disk\docker_data.vhdx')
+            )) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $fixture) -Force | Out-Null
+            Set-Content -LiteralPath $fixture -Value 'fixture' -Encoding ascii
+        }
+
+        # repo-a carries three tags and repo-b one, so keeping the newest two per
+        # repository has exactly one right answer here: repo-a:v1 and nothing else. The
+        # untagged row is present because docker lists dangling images the same way and
+        # there is no reference to remove one by.
+        $script:dockerImageFixture = @(
+            'repo-a|v3|2026-08-01 10:00:00 +0000 UTC|100MB'
+            'repo-a|v2|2026-07-01 10:00:00 +0000 UTC|100MB'
+            'repo-a|v1|2026-06-01 10:00:00 +0000 UTC|100MB'
+            'repo-b|latest|2026-08-10 10:00:00 +0000 UTC|50MB'
+            '<none>|<none>|2026-05-01 10:00:00 +0000 UTC|10MB'
+        ) -join ';'
+
+        # Get-Process answering with nothing is what makes the compaction decide Docker
+        # was not running, so it neither asks the real Docker Desktop to quit nor
+        # relaunches it. These three are not in the shared stub set because other scripts
+        # here use them legitimately.
+        $extraSetup = @"
+
+`$env:USERPROFILE = '$script:sandboxHome'
+`$env:LOCALAPPDATA = '$script:sandboxLocal'
+`$env:OPSTOOLKIT_TEST_DOCKER_IMAGES = '$script:dockerImageFixture'
+
+function Get-Process { param(`$Name, `$Id, `$ErrorAction) }
+function Stop-Process { param(`$Name, `$Id, `$InputObject, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Stop-Process' -Target ([string]`$Name) -Detail '' }
+function Start-Process { param(`$FilePath, `$ArgumentList, [switch]`$NoNewWindow, [switch]`$Wait, [switch]`$PassThru, `$RedirectStandardOutput, `$RedirectStandardError) Write-OpsTestMutation -Command 'Start-Process' -Target ([string]`$FilePath) -Detail '' }
+"@
+
+        # DockerVhdxCompact is listed first on purpose, so the ordering rule has
+        # something to correct.
+        $script:cacheReclaim = Invoke-WindowsScriptPair -Tag 'reclaim-cache' `
+            -RelativePath 'scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1' `
+            -ExtraSetup $extraSetup `
+            -Argument @{
+            ReportDirectory              = (Join-Path $script:workRoot 'reclaim-cache')
+            Target                       = @('DockerVhdxCompact', 'PipCache', 'NpmCache', 'TorchCache',
+                'PreCommitCache', 'CodexRuntimeCache', 'NvidiaShaderCache', 'PlaywrightBrowsers',
+                'DockerStoppedContainers', 'DockerUnusedVolumes', 'DockerOldImageTags')
+            KeepTagsPerRepository        = 2
+            DockerShutdownTimeoutSeconds = 30
+        }
+    }
+
+    It 'runs to completion in both modes' {
+        $script:cacheReclaim.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:cacheReclaim.WhatIf.Output)"
+        $script:cacheReclaim.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:cacheReclaim.Execute.Output)"
+    }
+
+    It 'clears no cache and touches no virtual disk under -WhatIf' {
+        # Ten destructive targets at once, including one that stops Docker and every WSL
+        # distro. A single one of them not gated behind ShouldProcess shows up here.
+        Assert-NoChangeUnderWhatIf -Pair $script:cacheReclaim
+    }
+
+    It 'reaches each kind of target when executing' {
+        # A target that quietly reported "unavailable" would leave this list short while
+        # the run still exited 0 with a plausible report.
+        $commands = @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                ForEach-Object { $_.Command } | Sort-Object -Unique)
+        $commands | Should -Contain 'pip'
+        $commands | Should -Contain 'npm'
+        $commands | Should -Contain 'docker'
+        $commands | Should -Contain 'Remove-Item'
+    }
+
+    It 'prefers the npm CLI over deleting its cache directory' {
+        # npm keeps an index alongside the content, and deleting the directory behind
+        # npm's back is what leaves a cache npm still believes in.
+        @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                Where-Object { $_.Command -eq 'npm' } | ForEach-Object { $_.Target }) |
+            Should -Contain 'cache clean --force'
+    }
+
+    It 'prunes stopped containers and unused volumes' {
+        $targets = @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                Where-Object { $_.Command -eq 'docker' } | ForEach-Object { $_.Target })
+        $targets | Should -Contain 'container prune -f'
+        $targets | Should -Contain 'volume prune -f'
+    }
+
+    It 'removes only the superseded tags, keeping the newest two per repository' {
+        # The failure this guards against is not removing too few. It is a date sort that
+        # silently falls back to string order and removes the tag still in production.
+        @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                Where-Object { $_.Command -eq 'docker' -and $_.Target -like 'rmi *' } |
+                ForEach-Object { $_.Target }) | Should -Be @('rmi repo-a:v1')
+    }
+
+    It 'never reaches a cache outside the sandbox' {
+        # This is what proves the redirection held. Every other assertion here would pass
+        # just as well while the run was deleting the real caches on this machine.
+        $removed = @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                Where-Object { $_.Command -eq 'Remove-Item' } | ForEach-Object { $_.Target } |
+                Where-Object { $_ })
+        ($removed -join ' ') | Should -BeLike '*reclaim-sandbox*'
+
+        foreach ($real in @(
+                (Join-Path $env:USERPROFILE '.cache')
+                (Join-Path $env:LOCALAPPDATA 'npm-cache')
+                (Join-Path $env:LOCALAPPDATA 'ms-playwright')
+                (Join-Path $env:LOCALAPPDATA 'NVIDIA')
+            )) {
+            foreach ($target in $removed) {
+                $target | Should -Not -BeLike "$real*" -Because "$real is this machine's own cache"
+            }
+        }
+    }
+
+    It 'runs the virtual disk compaction last, whatever order it was asked in' {
+        # Compacting before the prunes compacts a disk that is still full and reports a
+        # successful no-op, which is indistinguishable from a disk with nothing to give.
+        $ordered = @($script:cacheReclaim.Execute.Summary.Targets)
+        $ordered[0] | Should -Not -Be 'DockerVhdxCompact'
+        $ordered[-1] | Should -Be 'DockerVhdxCompact'
+    }
+
+    It 'compacts the virtual disk, or records plainly that it could not' {
+        # What this can prove depends on how the suite was launched, because the script
+        # gates compaction on elevation. Both branches are asserted rather than skipping
+        # the test, so an unelevated run still proves the skip was reported honestly
+        # instead of proving nothing at all.
+        $row = @($script:cacheReclaim.Execute.Summary.Items |
+                Where-Object { $_.Target -eq 'DockerVhdxCompact' })
+        $row.Count | Should -Be 1
+
+        if ($script:cacheReclaim.Execute.Summary.IsElevated) {
+            $commands = @(Get-MutationRecord -Path $script:cacheReclaim.ExecuteLog |
+                    ForEach-Object { $_.Command })
+            $commands | Should -Contain 'wsl' -Because 'the distros have to be down before the disk is attached'
+            $commands | Should -Contain 'diskpart.exe'
+        } else {
+            $row[0].Result | Should -Be 'Skipped: requires elevation'
+        }
+    }
+
+    It 'reports a cache it could not fully clear as Partial, not Reclaimed' {
+        # Remove-Item is a recorder here, so every path cache still has its fixture in
+        # place afterwards. That is exactly the locked-cache case this result exists for,
+        # and counting it as reclaimed is how a disk that is still full gets signed off.
+        $script:cacheReclaim.Execute.Summary.PartialTargets | Should -BeGreaterThan 0
+        @($script:cacheReclaim.Execute.Summary.Items |
+                Where-Object { $_.Target -eq 'TorchCache' })[0].Result | Should -BeLike 'Partial:*'
     }
 }

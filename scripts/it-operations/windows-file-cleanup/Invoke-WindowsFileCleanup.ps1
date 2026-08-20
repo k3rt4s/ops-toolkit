@@ -9,6 +9,8 @@ Instructions:
 - Use -Mode Temp to remove immediate children of approved temp folders.
 - Use -Mode OlderThan to remove files older than -OlderThanDays under explicit paths.
 - Use -IncludeEmptyDirectories only after reviewing the plan because directory cleanup is recursive.
+- Add -IncludeWindowsTemp from an elevated shell to also clean C:\Windows\Temp, which the
+  default temp set deliberately leaves out.
 - Generated reports are written under reports\it-operations\windows-file-cleanup by default.
 
 Purpose:
@@ -46,6 +48,13 @@ param(
     [Parameter()]
     [switch]$IncludeEmptyDirectories,
 
+    # Opt-in because C:\Windows\Temp is a machine-wide folder that services write to,
+    # and clearing it needs elevation. It is not in the default set: a script that
+    # quietly widened from the user's temp folder to the system's would be a different
+    # command than the one existing callers scheduled.
+    [Parameter()]
+    [switch]$IncludeWindowsTemp,
+
     [Parameter()]
     [ValidateRange(0, 3650)]
     [int]$MinimumAgeDaysForTemp = 0,
@@ -71,6 +80,7 @@ Options:
   -Path                    Folder path(s). Optional for Temp; required for OlderThan.
   -OlderThanDays           Required with -Mode OlderThan.
   -IncludeEmptyDirectories Remove empty directories after file cleanup.
+  -IncludeWindowsTemp      Also clean C:\Windows\Temp. Opt-in; requires elevation.
   -MinimumAgeDaysForTemp   Only remove temp items older than this many days. Default: 0.
   -ReportDirectory         Plan and state output directory.
   -WhatIf                  Write reports and preview deletions.
@@ -78,6 +88,11 @@ Options:
 }
 
 function Get-DefaultTempPath {
+    param(
+        [Parameter()]
+        [switch]$IncludeSystemTemp
+    )
+
     @(
         $env:TEMP
         $env:TMP
@@ -85,6 +100,7 @@ function Get-DefaultTempPath {
         'D:\Temp'
         'E:\Temp'
         'I:\Temp'
+        if ($IncludeSystemTemp) { Join-Path $env:windir 'Temp' }
     ) | Where-Object { $_ } | Select-Object -Unique
 }
 
@@ -149,10 +165,15 @@ function Assert-CleanupArgument {
 function Get-CleanupRoot {
     param(
         [Parameter()]
-        [string[]]$RequestedPath
+        [string[]]$RequestedPath,
+
+        [Parameter()]
+        [switch]$IncludeSystemTemp
     )
 
-    $candidate = if ($RequestedPath) { $RequestedPath } else { Get-DefaultTempPath }
+    # Passed in rather than read from the script parameter, so the function still works
+    # when the tests lift it out of the script and call it on its own.
+    $candidate = if ($RequestedPath) { $RequestedPath } else { Get-DefaultTempPath -IncludeSystemTemp:$IncludeSystemTemp }
     foreach ($item in $candidate) {
         if (-not $item) {
             continue
@@ -229,7 +250,7 @@ $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-Null
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
-$roots = @(Get-CleanupRoot -RequestedPath $Path | Select-Object -Unique)
+$roots = @(Get-CleanupRoot -RequestedPath $Path -IncludeSystemTemp:$IncludeWindowsTemp | Select-Object -Unique)
 if (-not $roots) {
     throw 'No cleanup roots were found after reading the supplied arguments.'
 }

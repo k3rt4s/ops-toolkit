@@ -292,6 +292,12 @@ function Get-WindowsMutationStubText {
     real cmdlet, because the scripts use it to create their own report directories, and
     a report that cannot be written is not the change under test.
 
+    Get-Process, Start-Process, and Stop-Process are deliberately absent. Several
+    scripts here use them legitimately, to find their own interpreter or to run reg.exe
+    and read its exit code, and stubbing them globally would break those scripts rather
+    than protect the machine. The one test that needs them stubbed, the Docker virtual
+    disk compaction, defines them in its own setup instead.
+
     .PARAMETER MutationLogPath
     File the stubs append to, one JSON record per line.
 
@@ -374,6 +380,31 @@ function Remove-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switc
 function reg.exe { Write-OpsTestMutation -Command 'reg.exe' -Target (`$args -join ' ') -Detail '' }
 function powercfg.exe { Write-OpsTestMutation -Command 'powercfg.exe' -Target (`$args -join ' ') -Detail '' }
 function powercfg { Write-OpsTestMutation -Command 'powercfg' -Target (`$args -join ' ') -Detail '' }
+
+# The tool CLIs the disk-reclaim script shells out to. pip and npm are stubbed for the
+# same reason as the cmdlets above: unstubbed, a run purges this machine's real package
+# caches, which is a change to the machine even though no test asserts on it. wsl and
+# diskpart.exe matter more still, because between them they stop every WSL distro and
+# attach a virtual disk.
+function pip { Write-OpsTestMutation -Command 'pip' -Target (`$args -join ' ') -Detail '' }
+function npm { Write-OpsTestMutation -Command 'npm' -Target (`$args -join ' ') -Detail '' }
+function wsl { Write-OpsTestMutation -Command 'wsl' -Target (`$args -join ' ') -Detail '' }
+function wsl.exe { Write-OpsTestMutation -Command 'wsl.exe' -Target (`$args -join ' ') -Detail '' }
+function diskpart.exe { Write-OpsTestMutation -Command 'diskpart.exe' -Target (`$args -join ' ') -Detail '' }
+function Dism.exe { Write-OpsTestMutation -Command 'Dism.exe' -Target (`$args -join ' ') -Detail '' }
+
+# docker both reads and changes, so it cannot be a pure recorder. The tag-retention
+# logic decides what to remove from what "image ls" answers, and a stub that answered
+# nothing would make that logic look correct by removing nothing. It replays the
+# fixture in OPSTOOLKIT_TEST_DOCKER_IMAGES, one image per semicolon-separated entry in
+# docker's own Repository|Tag|CreatedAt|Size format, and records every other call.
+function docker {
+    if ((`$args -join ' ') -like 'image ls*') {
+        @(`$env:OPSTOOLKIT_TEST_DOCKER_IMAGES -split ';') | Where-Object { `$_ }
+        return
+    }
+    Write-OpsTestMutation -Command 'docker' -Target (`$args -join ' ') -Detail ''
+}
 "@
 }
 

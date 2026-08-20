@@ -5,6 +5,64 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-08-20
+
+Ten new reclaim targets covering the developer caches and Docker layers that a manual
+cleanup session actually recovered space from, an opt-in switch for the one temp folder
+the cleanup script never reached, and the test stubs that let any of it be tested.
+
+### Added: developer cache and Docker targets in `Invoke-DiskSpaceReclaim.ps1`
+
+- **Seven cache targets.** `NpmCache`, `TorchCache`, `PreCommitCache`,
+  `CodexRuntimeCache`, `NvidiaShaderCache`, `PlaywrightBrowsers`, and the existing
+  `HuggingFaceCache` are now all reachable by name. Each honours the tool's own override
+  variable (`npm_config_cache`, `TORCH_HOME`, `PRE_COMMIT_HOME`,
+  `PLAYWRIGHT_BROWSERS_PATH`, `HF_HOME`) before falling back to the platform default, so
+  a redirected cache is cleaned where it actually lives rather than reported as absent.
+- **Three Docker targets.** `DockerStoppedContainers`, `DockerUnusedVolumes`, and
+  `DockerOldImageTags`. The last keeps the newest `-KeepTagsPerRepository` tags per
+  repository, default two: two keeps the shipped tag and the one before it, which is
+  what a rollback needs, and one leaves nothing to roll back to.
+- **`DockerVhdxCompact`, opt-in and elevated.** Pruning inside Docker frees space within
+  the virtual disk without shrinking the file, so the host volume sees nothing back
+  until the disk is compacted; on the machine this was built from, that was 4.76 GB the
+  prunes alone did not return. It is never in the default target set, it runs last
+  whatever order it was asked in so it compacts a disk the other targets have already
+  emptied, and it proves the file is released with an exclusive open before handing it
+  to `diskpart`, because `diskpart` reports success on a no-op.
+- **Partial is counted apart from Reclaimed.** A path cache that still has bytes in it
+  afterwards reports `Partial:` with the residue, and the summary carries its own
+  `PartialTargets` count. A locked cache silently counted as cleared is how a disk that
+  is still full gets signed off as cleaned.
+- **The default target set is unchanged.** All ten are selected explicitly, so every
+  existing caller and scheduled task does exactly what it did before.
+- **`Get-CommandPath` no longer reports a resolved command as missing.** It returned
+  `.Source`, which is empty for anything that is not an external file, so a command
+  resolved as a function or an alias read as not installed.
+
+### Added: `-IncludeWindowsTemp` in `Invoke-WindowsFileCleanup.ps1`
+
+- `C:\Windows\Temp` is now reachable, opt-in and requiring elevation. It stays out of
+  the default temp set because it is machine-wide and services write to it, and a
+  default that quietly grew to include it would make every already-scheduled call of
+  this script a different command than the reviewed one.
+
+### Added: test stubs for the tool CLIs
+
+- `pip`, `npm`, `docker`, `wsl`, `diskpart.exe`, and `Dism.exe` are stubbed in the
+  shared Windows mutation stub set. Unstubbed, a test run purges this machine's real
+  package caches, stops every WSL distro, and attaches a virtual disk. `docker` is not
+  a pure recorder: the tag-retention logic decides what to remove from what `image ls`
+  answers, so it replays a fixture, and a stub answering nothing would have made that
+  logic look correct by removing nothing.
+- `Get-Process`, `Start-Process`, and `Stop-Process` are deliberately not in the shared
+  set, because other scripts use them legitimately; the one test that needs them stubs
+  them itself.
+- The new coverage runs every cache target against a redirected `USERPROFILE` and
+  `LOCALAPPDATA` sandbox, and asserts no removal ever reached a real cache path. Every
+  other assertion in that block would pass just as well while the run deleted the real
+  caches on the machine.
+
 ## 2026-08-17
 
 Full script coverage, a validation gate that catches the suite changing the machine,

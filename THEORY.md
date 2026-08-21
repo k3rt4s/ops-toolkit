@@ -1,72 +1,60 @@
-# ops-toolkit Theory
+# ops-toolkit theory
 
-Constraints that look arbitrary until you know why, and traps a fresh thread would
-otherwise re-derive the hard way. Read before changing anything structural.
+What a session needs to believe before it changes this repo's scripts or tests.
+
+## Invariants
+
+- Every state-changing script writes `<prefix>-yyyyMMdd_HHmmss\` with a CSV and JSON
+  per report plus `summary.json`. `scripts\reporting\Compare-OpsToolkitRun.ps1` can
+  only diff that exact layout; changing it breaks the diff tool silently.
+- A check that could not run is never folded into a pass. `Export-CoverageReconciliation.ps1`
+  and `Export-SecurityControlEvidencePack.ps1` report `NotAssessed` separately from
+  `NotMet`: "we did not check" presented as "we are fine" is worse than no report.
+- Every state-changing script is tested as a pair, `-WhatIf` and executing
+  (`tests\Integration.StateChanging.*.Tests.ps1`); "`-WhatIf` changed nothing" is
+  unfalsifiable alone, a broken script passes it too.
 
 ## Load-bearing constraints
 
-**Never invent a comment-based help keyword.** One unrecognised keyword such as
-`.INSTRUCTIONS` silently invalidates the whole block, as was true of 30 of 31 scripts.
+- The scheduled-task host is Windows PowerShell 5.1, which reads a BOM-less file as
+  the ANSI code page and fails to parse it silently, so the task still reports
+  success. `Invoke-RepoValidation.ps1`'s Encoding gate (~line 252) fails any script
+  with non-ASCII bytes and no BOM; `??` and `?.` are pwsh-7-only for the same reason.
+- One non-standard comment-based-help keyword silently invalidates the entire help
+  block; `Get-Help` falls back to generated syntax with no error. The Help gate
+  (~line 300) catches this now; `.INSTRUCTIONS` hit 30 of 31 scripts before it did.
+- Report and rollback writes, and the run directory itself, carry `-WhatIf:$false` on
+  purpose: writing the plan *is* the preview, not the change being previewed. Without
+  it, `Resolve-Path` throws and a `-WhatIf` run produces nothing to review.
+- A Graph field that exists only in beta returns `$null`, not an error, as
+  `servicePrincipalCredentialKeyId` and `defaultMfaMethod` (`scripts\entra\`) both
+  did. Check a new field against the installed SDK model type before trusting it.
 
-**Non-ASCII needs a BOM.** The scheduled-task host is Windows PowerShell 5.1, which
-reads a BOM-less file as the ANSI code page and fails to parse it, so the script does
-nothing while the task reports success; an em-dash is enough, and `Set-Content -Encoding
-utf8`in pwsh 7 strips the BOM. Likewise`??`and`?.` are pwsh-7 only.
+## Decisions that look wrong
 
-**Run directories are not cosmetic.** Every script writes `<prefix>-yyyyMMdd_HHmmss\`
-with a CSV and JSON per report plus `summary.json`, the only layout
-`Compare-OpsToolkitRun.ps1` can diff. Report writes and the directory itself carry
-`-WhatIf:$false`: writing the plan is the preview, not the change being previewed, and
-without it `Resolve-Path` throws and the script cannot be rehearsed at all.
+- The shared test stub (`tests\TestHelpers.psm1` ~line 295) shadows
+  `Microsoft.PowerShell.Management` cmdlets but deliberately excludes `Get-Process`,
+  `Start-Process`, `Stop-Process`: scripts use them to find their own interpreter or
+  read `reg.exe`'s exit code, and a global stub would break them, not protect the
+  machine. Real-process tests stage a local fixture instead.
+- `ScheduledTasks`, `Defender`, and `PrintManagement` cmdlets are not covered by that
+  stub trick, because a same-named function only shadows commands from its own
+  module. Trusting it once disabled four real scheduled tasks and added three real
+  Defender exclusions on the dev machine. Fixed with staged fake modules at
+  `tests\Fixtures\FakeSystemModules\`, loaded ahead of the real ones, plus a
+  `MachineState` gate in `Invoke-RepoValidation.ps1` that snapshots Defender
+  exclusions, tasks, printers, and drives around the test run and fails on drift.
 
-**Undetermined is never folded into a pass.** A check that could not run is reported as
-not having run: the evidence pack counts NotAssessed separately from NotMet, because "we
-did not check" presented as "we are fine" is worse than no pack at all. Same for
-unelevated reads, unreachable machines, and missing modules.
+## Known soft spots
 
-## Traps that have already cost time
-
-**A Graph field that exists only in beta returns null, it does not error.** Both
-`servicePrincipalCredentialKeyId` and `defaultMfaMethod` did this, producing confidently
-wrong reports. Check any Graph field against the installed SDK model type.
-
-**Emptiness is the blind spot.** Seven shipped bugs, one cause: fixtures with data in
-every field, against an estate whose ordinary case is a null. Each produced a clean,
-plausible, wrong report rather than an error.
-
-- `@($null)` is a **one-element** array and an unbound `[string[]]` parameter is
-  `$null`, so `@($Param)` has `Count` 1 when nothing was passed and a `Count -eq 0`
-  guard never fires. Filter with `| Where-Object { $_ }` first.
-- An `if` emits its result down the **pipeline, which unrolls it**, so
-  `$x = if (...) { } else { @($null) }` leaves a bare `$null`, and `foreach ($i in
-  $null)`runs **zero** times where`@($null)` runs once. Both Azure collectors were
-  written this way and scanned nothing when given no resource group. A function's
-  return unrolls the same way, so a `[byte[]]` becomes `[object[]]`.
-- Strict mode throws reading a property **through** a null (`$subnet.RouteTable.Id`)
-  and on member enumeration over an **empty** collection while a populated one works
-  (`$nsg.NetworkInterfaces.Id`). Use `Get-OpsPropertyValue` and `ForEach-Object`.
-- `@($x) | Sort-Object` wraps the **input**, so zero rows gives `$null`;
-  `@($rows | Select -First 1).PSObject.Properties.Name` returns the array's members.
-
-**A shelled-out tool lies in two directions.** `Get-Command ... .Source` is empty for a
-function or an alias, so a presence check on it reads a perfectly resolvable command as
-not installed. And `$LASTEXITCODE = 0` inside a function creates a shadowing **local**
-that a native call never updates, so the exit code being checked afterwards is a constant.
-Reset it with `Set-Variable -Scope Global`. Docker also prints `CreatedAt` as
-`2026-06-01 10:00:00 +0000 UTC`, which `[datetime]::TryParse` **rejects**; a string sort
-fallback is chronological only while every row shares an offset, and being wrong there
-deletes the tag in production instead of the one before it.
-
-## Testing
-
-Every state-changing script is tested as a pair, `-WhatIf` and executing, because
-"`-WhatIf` changed nothing" is unfalsifiable alone: a broken script passes it too.
-**A function stub does not isolate every command.** It shadows the
-`Microsoft.PowerShell.Management` cmdlets, but not commands from `ScheduledTasks`,
-`Defender`, or `PrintManagement`; trusting it disabled four real scheduled tasks and
-added three real Defender exclusions on the build machine. Stage a replacement module
-ahead of the real one. `Get-Process`, `Start-Process`, and `Stop-Process` are
-deliberately **not** in the shared stub set: several scripts use them to find their own
-interpreter or to read `reg.exe`'s exit code, so stubbing them globally breaks scripts
-rather than protecting the machine. The `MachineState` gate snapshots the machine around the test run
-and fails on drift, because the test result was green throughout. See `tests\README.md`.
+- Emptiness, not malformed data, is where scripts break: seven shipped bugs traced to
+  fixtures with data in every field against an estate whose ordinary case is null.
+  `@($null)` is a one-element array, so `@($Param)` on an unbound `[string[]]` has
+  `Count` 1 and a `Count -eq 0` guard never fires. An `if` without a matching branch
+  unrolls a function's return down the pipeline, so `[byte[]]` can silently become
+  `[object[]]`; both Azure collectors did this and scanned nothing on an empty
+  resource group. Strict mode throws on a property read through a null; use
+  `Get-OpsPropertyValue` (`modules\OpsToolkit.Reporting\`) instead of dotted access.
+- `$LASTEXITCODE = 0` inside a function creates a shadowing local a later native
+  call never updates, so the exit code checked afterward reads as a constant;
+  reset with `Set-Variable -Scope Global` (`Invoke-DiskSpaceReclaim.ps1`).

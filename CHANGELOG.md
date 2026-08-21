@@ -70,6 +70,17 @@ the cleanup script never reached, and the test stubs that let any of it be teste
   other assertion in that block would pass just as well while the run deleted the real
   caches on the machine.
 
+### Changed: documentation caught up with the new targets
+
+- The root README capability table, the README example, and the it-operations README
+  all described the original five-target script. They now name the default set and the
+  opt-in targets separately, because the distinction is the whole safety property here:
+  a reader who believes the new targets are in the default set will schedule this
+  script expecting it to compact a virtual disk unattended.
+- The shipped user story for this script now carries acceptance criteria for tag
+  retention, partial results, and the elevated compaction path, and lists
+  `DockerVhdxCompact` among the targets that need elevation.
+
 ## 2026-08-17
 
 Full script coverage, a validation gate that catches the suite changing the machine,

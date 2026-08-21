@@ -34,15 +34,33 @@ to a healthy free-space margin without deleting source code or data.
 
 Status: shipped 2026-06-06 (`scripts/it-operations/windows-file-cleanup/Invoke-DiskSpaceReclaim.ps1`)
 
+Extended 2026-08-20 with ten further targets, all opt-in; the default set is unchanged.
+
 Acceptance criteria:
 
 - Given the script is run with `-WhatIf`, When it executes, Then it writes plan and
   state CSV/JSON and previews every target without deleting anything.
-- Given a target requires elevation (ComponentStore, WindowsUpdateCache) and the
-  shell is not elevated, When the script runs, Then that target is skipped with a
+- Given a target requires elevation (ComponentStore, WindowsUpdateCache,
+  DockerVhdxCompact) and the shell is not elevated, When the script runs, Then that
+  target is skipped with a
   "requires elevation" result and other targets still run.
 - Given the HuggingFace model cache, When the default target set is used, Then it is
   not touched unless explicitly requested via `-Target HuggingFaceCache`.
+- Given any cache outside the default set (npm, torch, pre-commit, Codex runtimes,
+  NVIDIA shaders, Playwright browsers, Hugging Face, stopped containers, unused volumes,
+  superseded image tags, Windows Update cache, Docker virtual-disk compaction), When the
+  default target set is used, Then it is not touched unless named in `-Target`.
+- Given a repository with more image tags than `-KeepTagsPerRepository`, When the
+  `DockerOldImageTags` target runs, Then only tags outside the newest N by creation date
+  are removed, and a tag a container still references is left in place and reported as
+  a partial result rather than a removal.
+- Given a cache whose files are locked by a running process, When that target runs, Then
+  the freed portion is reported as a partial result naming the bytes left in place, not
+  as a clean reclaim.
+- Given `-Target DockerVhdxCompact` and an elevated shell, When the target runs, Then
+  Docker Desktop and every WSL distro are stopped first, the virtual disk is confirmed
+  to be held by nothing else, and Docker Desktop is restarted afterwards only if it was
+  running beforehand.
 - Given a live run, When it completes, Then a state CSV/JSON records each target's
   result and a system-drive free-space before/after delta.
 

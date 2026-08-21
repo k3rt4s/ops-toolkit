@@ -247,3 +247,9 @@ Things that look like gaps and are not.
 - `Test-WindowsHardeningState.ps1` reads desired state locally even when checking
   remote machines, because desired state comes from the hardening scripts rather than
   from any machine. Remote targets therefore do not need a copy of this repo.
+
+## Ingested 2026-08-21: public talk and summit digests
+
+- Internal MCP servers in Go with the tool-ladder pattern; treat agent-reachable endpoints as new unvetted employees, least-privilege scopes and deterministic gates on mutating verbs. Source: Infosec Age of AI Summit 2026, talks 11 and AMA, digest_infosec_age_of_ai_summit_2026.md
+- EDR coverage differential hunt, diff EDR endpoint count vs inventory vs AD vs IP space, as a coverage-gap-report script. Source: Threat Hunting Summit 2026, Hartman 04:10:20-04:12:00, digest_threat_hunting_summit_2026.md
+- RITA-style network hygiene self-audit (direct-IP HTTP, abnormal subdomain-count DNS). Source: Threat Hunting Summit 2026, Kidane 03:44:00-03:50:00, digest_threat_hunting_summit_2026.md

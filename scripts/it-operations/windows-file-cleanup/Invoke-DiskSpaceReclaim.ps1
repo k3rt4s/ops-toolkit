@@ -230,6 +230,33 @@ function Get-DockerDataVhdxPath {
     @($candidate | Sort-Object { (Get-Item -LiteralPath $_).Length } -Descending)[0]
 }
 
+function Get-DockerCreatedAtSortKey {
+    <#
+    .SYNOPSIS
+    Turn one docker CreatedAt string into a value that sorts chronologically.
+
+    .DESCRIPTION
+    Docker prints CreatedAt as "2026-06-01 10:00:00 +0000 UTC", which [datetime]::TryParse
+    rejects outright because of the trailing zone name. Falling back to a string sort on
+    that happens to be chronological only while every row carries the same offset, and the
+    cost of being wrong here is deleting the tag still in production rather than the one
+    before it. The leading 19 characters are a fixed layout and locale-independent, so
+    parse those exactly and let anything else sort last.
+    #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$CreatedAt)
+
+    $parsed = [datetime]::MinValue
+    $stamp = if ($CreatedAt.Length -ge 19) { $CreatedAt.Substring(0, 19) } else { '' }
+    if ([datetime]::TryParseExact($stamp, 'yyyy-MM-dd HH:mm:ss',
+            [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$parsed)) {
+        return $parsed
+    }
+
+    # An unreadable date sorts oldest, so it lands outside the keep window and is offered
+    # for removal rather than silently displacing a tag whose date did parse.
+    [datetime]::MinValue
+}
+
 function Get-SupersededImageTag {
     <#
     .SYNOPSIS
@@ -263,12 +290,8 @@ function Get-SupersededImageTag {
     if ($parsed.Count -eq 0) { return @() }
 
     $superseded = foreach ($group in ($parsed | Group-Object Repository)) {
-        # Docker prints CreatedAt in its own format, so sort on a parsed value where that
-        # succeeds and fall back to the string, which is still monotonic for a single repo.
-        @($group.Group | Sort-Object {
-                $parsedDate = [datetime]::MinValue
-                if ([datetime]::TryParse($_.CreatedAt, [ref]$parsedDate)) { $parsedDate } else { $_.CreatedAt }
-            } -Descending) | Select-Object -Skip $KeepCount
+        @($group.Group | Sort-Object { Get-DockerCreatedAtSortKey -CreatedAt $_.CreatedAt } -Descending) |
+            Select-Object -Skip $KeepCount
     }
 
     @($superseded | Where-Object { $_ })
@@ -504,7 +527,10 @@ function Invoke-DockerVhdxCompaction {
     $releaseDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (-not $released -and (Get-Date) -lt $releaseDeadline) {
         try {
-            $stream = [System.IO.File]::Open($vhdx, 'Open', 'ReadWrite', 'None')
+            # Read access with FileShare.None: the share mode is what makes this a test of
+            # exclusivity, and asking for write as well would fail on a read-only file for
+            # a reason that has nothing to do with anyone else holding it.
+            $stream = [System.IO.File]::Open($vhdx, 'Open', 'Read', 'None')
             $stream.Close()
             $released = $true
         } catch {
@@ -563,6 +589,8 @@ function Invoke-ReclaimTarget {
     }
 
     $before = Get-FreeBytesSystemDrive
+    # Set by a target that did part of what it promised, and folded into the result below.
+    $partialNote = $null
     try {
         switch ($Plan.Target) {
             'PipCache' { & $PipExecutable cache purge *>$null }
@@ -599,10 +627,21 @@ function Invoke-ReclaimTarget {
             'DockerStoppedContainers' { docker container prune -f *>$null }
             'DockerUnusedVolumes' { docker volume prune -f *>$null }
             'DockerOldImageTags' {
+                $attempted = 0
+                $refused = 0
                 foreach ($image in (Get-SupersededImageTag -KeepCount $KeepTagsPerRepository)) {
                     # Docker refuses to remove an image a container still references. That is the
-                    # correct outcome, not an error to abort the whole target on.
+                    # correct outcome, not an error to abort the whole target on, but it is also
+                    # not a removal and must not be reported as one.
+                    $attempted++
+                    # Reset first, or a stale code left by whatever ran before this loop reads
+                    # as a refusal on the first image.
+                    Set-Variable -Name LASTEXITCODE -Value 0 -Scope Global
                     docker rmi $image.Reference *>$null
+                    if ($LASTEXITCODE -ne 0) { $refused++ }
+                }
+                if ($refused -gt 0) {
+                    $partialNote = "$refused of $attempted superseded tag(s) still referenced and left in place"
                 }
             }
             'DockerVhdxCompact' { Invoke-DockerVhdxCompaction -TimeoutSeconds $DockerShutdownTimeoutSeconds }
@@ -638,6 +677,9 @@ function Invoke-ReclaimTarget {
     # rather than Reclaimed: a locked cache silently counted as cleared is how a disk that is
     # still full gets signed off as cleaned.
     $result = 'Reclaimed'
+    if ($partialNote) {
+        $result = "Partial: $partialNote"
+    }
     if ($Plan.Target -in @('NpmCache', 'TorchCache', 'PreCommitCache', 'CodexRuntimeCache', 'PlaywrightBrowsers')) {
         $residualBytes = Get-FolderSize -Path (Get-CacheDirectoryPath -Name $Plan.Target)
         if ($residualBytes -gt 0) {

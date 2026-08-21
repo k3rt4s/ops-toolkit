@@ -23,6 +23,13 @@ the cleanup script never reached, and the test stubs that let any of it be teste
   `DockerOldImageTags`. The last keeps the newest `-KeepTagsPerRepository` tags per
   repository, default two: two keeps the shipped tag and the one before it, which is
   what a rollback needs, and one leaves nothing to roll back to.
+- **Tag retention sorts on a parsed date, not on the printed string.** Docker prints
+  `CreatedAt` as `2026-06-01 10:00:00 +0000 UTC`, which `[datetime]::TryParse` rejects
+  outright over the trailing zone name, so a fallback to string order is chronological
+  only while every row carries the same offset. The cost of being wrong is deleting the
+  tag still in production rather than the one before it. A tag docker refuses to remove
+  because a container still references it is now reported as `Partial` with a count,
+  rather than counted as a removal.
 - **`DockerVhdxCompact`, opt-in and elevated.** Pruning inside Docker frees space within
   the virtual disk without shrinking the file, so the host volume sees nothing back
   until the disk is compacted; on the machine this was built from, that was 4.76 GB the

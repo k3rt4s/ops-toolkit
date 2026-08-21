@@ -561,6 +561,24 @@ function Start-Process { param(`$FilePath, `$ArgumentList, [switch]`$NoNewWindow
                 ForEach-Object { $_.Target }) | Should -Be @('rmi repo-a:v1')
     }
 
+    It 'sorts docker CreatedAt chronologically rather than by string order' {
+        Import-ScriptFunction -RelativePath 'scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1' `
+            -FunctionName 'Get-DockerCreatedAtSortKey'
+
+        # This is the format docker actually prints, and TryParse rejects it outright over
+        # the trailing zone name. Falling back to string order is chronological only while
+        # every row carries the same offset, and the whole retention decision rides on it.
+        $parsed = [datetime]::MinValue
+        [datetime]::TryParse('2026-06-01 10:00:00 +0000 UTC', [ref]$parsed) |
+            Should -BeFalse -Because 'the fallback path is the one that has to be avoided'
+
+        Get-DockerCreatedAtSortKey -CreatedAt '2026-06-01 10:00:00 +0000 UTC' |
+            Should -Be ([datetime]'2026-06-01 10:00:00')
+        # An unreadable date sorts oldest, so it falls outside the keep window rather than
+        # displacing a tag whose date did parse.
+        Get-DockerCreatedAtSortKey -CreatedAt 'not a date' | Should -Be ([datetime]::MinValue)
+    }
+
     It 'never reaches a cache outside the sandbox' {
         # This is what proves the redirection held. Every other assertion here would pass
         # just as well while the run was deleting the real caches on this machine.

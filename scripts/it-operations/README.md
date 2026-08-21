@@ -58,10 +58,22 @@ Show current Windows user and network context:
 pwsh -File .\scripts\it-operations\utilities\Get-CurrentUserContext.ps1 -OutputDirectory .\reports\it-operations\user-context
 ```
 
-Preview reclaiming developer and Windows caches (pip, Docker, Recycle Bin, WinSxS):
+Preview reclaiming developer and Windows caches. The default set is pip, Docker build
+cache and dangling images, Recycle Bin, and WinSxS:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
+```
+
+Other caches are reachable by name and none of them is in the default set: npm, torch,
+pre-commit, Codex runtimes, NVIDIA shaders, Playwright browsers, Hugging Face, stopped
+containers, unused volumes, superseded image tags, and the Windows Update cache. Pruning
+inside Docker frees space within its virtual disk without shrinking the file, so
+`DockerVhdxCompact` is what returns that space to the host volume. It needs an elevated
+shell and stops Docker Desktop and every WSL distro for several minutes:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target DockerVhdxCompact -WhatIf
 ```
 
 ## Inventory a Windows drive

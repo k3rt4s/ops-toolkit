@@ -48,6 +48,15 @@ plausible, wrong report rather than an error.
 - `@($x) | Sort-Object` wraps the **input**, so zero rows gives `$null`;
   `@($rows | Select -First 1).PSObject.Properties.Name` returns the array's members.
 
+**A shelled-out tool lies in two directions.** `Get-Command ... .Source` is empty for a
+function or an alias, so a presence check on it reads a perfectly resolvable command as
+not installed. And `$LASTEXITCODE = 0` inside a function creates a shadowing **local**
+that a native call never updates, so the exit code being checked afterwards is a constant.
+Reset it with `Set-Variable -Scope Global`. Docker also prints `CreatedAt` as
+`2026-06-01 10:00:00 +0000 UTC`, which `[datetime]::TryParse` **rejects**; a string sort
+fallback is chronological only while every row shares an offset, and being wrong there
+deletes the tag in production instead of the one before it.
+
 ## Testing
 
 Every state-changing script is tested as a pair, `-WhatIf` and executing, because
@@ -56,5 +65,8 @@ Every state-changing script is tested as a pair, `-WhatIf` and executing, becaus
 `Microsoft.PowerShell.Management` cmdlets, but not commands from `ScheduledTasks`,
 `Defender`, or `PrintManagement`; trusting it disabled four real scheduled tasks and
 added three real Defender exclusions on the build machine. Stage a replacement module
-ahead of the real one. The `MachineState` gate snapshots the machine around the test run
+ahead of the real one. `Get-Process`, `Start-Process`, and `Stop-Process` are
+deliberately **not** in the shared stub set: several scripts use them to find their own
+interpreter or to read `reg.exe`'s exit code, so stubbing them globally breaks scripts
+rather than protecting the machine. The `MachineState` gate snapshots the machine around the test run
 and fails on drift, because the test result was green throughout. See `tests\README.md`.

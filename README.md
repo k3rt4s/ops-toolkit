@@ -19,7 +19,7 @@ Hardened operations and security administration scripts for Active Directory, Az
 - [FUTURE_FEATURES.md](FUTURE_FEATURES.md): Backlog for the ops-toolkit.
 - [Invoke-RepoValidation.ps1](Invoke-RepoValidation.ps1): Run the ops-toolkit repository validation suite: parser, analyzer, help, shell syntax, and stale references.
 - [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)
-- [THEORY.md](THEORY.md): Constraints that look arbitrary until you know why, and traps a fresh thread would otherwise re-derive the hard way.
+- [THEORY.md](THEORY.md): What a session needs to believe before it changes this repo's scripts or tests.
 - [USER_STORIES.md](USER_STORIES.md): User-value master for the ops-toolkit scripts.
 
 <!-- END CONTENTS -->

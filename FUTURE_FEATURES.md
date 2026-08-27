@@ -6,8 +6,9 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-One item: the hard-coded absolute paths, described in its own section below. There is
-also one open question for the developer, further down.
+Two items: the hard-coded absolute paths and the Certified Information Security
+assessment value check, each described in its own section below. There is also one open
+question for the developer, further down.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
 built the same day and are shipped: the endpoint telemetry and audit-logging posture
@@ -176,6 +177,18 @@ Not done in the same pass that found them, because changing a default changes be
 for anyone already running these, and what the replacement should be is a product
 decision rather than a cleanup: an environment variable, a required parameter, or a
 per-install config file. The Defender one is the sharpest and could reasonably go first.
+
+## Queued item: Certified Information Security assessment value check
+
+Investigate whether the Certified Information Security open assessment platform adds
+value to ops-toolkit's evidence-pack and reporting scripts. Use synthetic/sample data
+or a deliberately sanitized local run only. Compare its NIST CSF 2.0 and ISO 27001
+assessment/report expectations against `Export-SecurityControlEvidencePack.ps1`, the
+logging and endpoint posture collectors, coverage reconciliation, and NotAssessed
+discipline. The output should be a feasibility note naming independent evidence gaps,
+candidate controls to report, and any report-language improvements worth building. Do
+not copy or adapt CIS's proprietary methodology, mappings, scoring, prompts, or report
+format.
 
 ## Open question for the developer
 

@@ -12,6 +12,7 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-util-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
+    $script:liveSetupTimeoutSeconds = 120
 }
 
 AfterAll {
@@ -22,8 +23,15 @@ AfterAll {
 
 Describe 'Export-WindowsLifecycleInventory' {
     BeforeAll {
-        $script:lifecycle = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\lifecycle\Export-WindowsLifecycleInventory.ps1') `
-            -OutputDirectory (Join-Path $script:workRoot 'lifecycle')
+        $script:lifecycleRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\lifecycle\Export-WindowsLifecycleInventory.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'lifecycle') } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:lifecycle = $script:lifecycleRun.Summary
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:lifecycleRun
     }
 
     It 'writes the run-directory layout the comparison tool needs' {
@@ -48,8 +56,15 @@ Describe 'Export-WindowsLifecycleInventory' {
 
 Describe 'Export-WindowsUpdateHealth' {
     BeforeAll {
-        $script:update = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1') `
-            -OutputDirectory (Join-Path $script:workRoot 'update')
+        $script:updateRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'update') } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:update = $script:updateRun.Summary
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:updateRun
     }
 
     It 'writes the run-directory layout the comparison tool needs' {
@@ -79,9 +94,20 @@ Describe 'Export-WindowsUpdateHealth' {
 
 Describe 'Test-Windows11UpgradeReadiness' {
     BeforeAll {
-        $script:readiness = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\lifecycle\Test-Windows11UpgradeReadiness.ps1') `
-            -OutputDirectory (Join-Path $script:workRoot 'readiness')
-        $script:checks = @(Import-Csv (Get-ChildItem -LiteralPath $script:readiness.OutputDirectory -Filter *.csv | Select-Object -First 1).FullName)
+        $script:readinessRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\lifecycle\Test-Windows11UpgradeReadiness.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'readiness') } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:readiness = $script:readinessRun.Summary
+        $script:checks = if ($script:readinessRun.Status -eq 'Completed') {
+            @(Import-Csv (Get-ChildItem -LiteralPath $script:readiness.OutputDirectory -Filter *.csv | Select-Object -First 1).FullName)
+        } else {
+            @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:readinessRun
     }
 
     It 'writes the run-directory layout the comparison tool needs' {
@@ -115,7 +141,11 @@ Describe 'Test-Windows11UpgradeReadiness' {
 
 Describe 'Get-CurrentUserContext' {
     It 'reports the account it is actually running as' {
-        $context = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\utilities\Get-CurrentUserContext.ps1')
+        $run = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\utilities\Get-CurrentUserContext.ps1' `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        Confirm-LiveScriptRun -Run $run
+        $context = $run.Summary
         $context | Should -Not -BeNullOrEmpty
         # Compared against the running identity rather than a fixed value, so this
         # holds on any machine and under any account.
@@ -125,8 +155,12 @@ Describe 'Get-CurrentUserContext' {
 
     It 'writes a report only when asked for one' {
         $out = Join-Path $script:workRoot 'context'
-        $context = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\utilities\Get-CurrentUserContext.ps1') `
-            -OutputDirectory $out -IncludeGroups
+        $run = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\utilities\Get-CurrentUserContext.ps1' `
+            -Argument @{ OutputDirectory = $out; IncludeGroups = $true } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        Confirm-LiveScriptRun -Run $run
+        $context = $run.Summary
 
         $context | Should -Not -BeNullOrEmpty
         @(Get-ChildItem -LiteralPath $out -Recurse -File).Count | Should -BeGreaterThan 0

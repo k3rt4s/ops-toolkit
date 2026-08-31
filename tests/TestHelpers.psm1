@@ -530,9 +530,15 @@ function Invoke-ScriptUnderTest {
     .PARAMETER ModulePath
     Optional directory prepended to PSModulePath, from Use-FakeActiveDirectory.
 
+    .PARAMETER TimeoutSeconds
+    Maximum time to let the child process run. Zero, the default for synthetic tests,
+    waits without a limit. Live integration tests must pass a positive timeout so a
+    blocked operating-system API cannot stall the entire validation run.
+
     .OUTPUTS
     PSCustomObject with Summary (the script's returned object, round-tripped through
-    JSON), ExitCode, and Output.
+    JSON), ExitCode, Output, Status, TimedOut, and TimeoutSeconds. Status is NotRun
+    when the timeout expires because the script produced no testable result.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -541,9 +547,9 @@ function Invoke-ScriptUnderTest {
         [ValidateNotNullOrEmpty()]
         [string]$RelativePath,
 
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Setup,
+        [Parameter()]
+        [AllowEmptyString()]
+        [string]$Setup = '',
 
         [Parameter()]
         [AllowEmptyCollection()]
@@ -555,7 +561,11 @@ function Invoke-ScriptUnderTest {
 
         [Parameter()]
         [AllowEmptyString()]
-        [string]$ModulePath = ''
+        [string]$ModulePath = '',
+
+        [Parameter()]
+        [ValidateRange(0, 86400)]
+        [int]$TimeoutSeconds = 0
     )
 
     $scriptPath = Get-RepositoryScriptPath -RelativePath $RelativePath
@@ -594,10 +604,30 @@ $splat
         $env:PSModulePath = $ModulePath + [System.IO.Path]::PathSeparator + $env:PSModulePath
     }
 
+    $timedOut = $false
+    $exitCode = $null
     try {
         $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments `
-            -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        $exitCode = $process.ExitCode
+            -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+        if ($TimeoutSeconds -eq 0) {
+            $process.WaitForExit()
+        } elseif (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            $timedOut = $true
+            try {
+                # Kill the whole descendant tree. Several collectors launch their own
+                # child processes, so stopping only the runner would leave the blocked
+                # WMI/WUA read alive after Pester moved on.
+                $process.Kill($true)
+            } catch [System.InvalidOperationException] {
+                # The process exited in the race between WaitForExit and Kill.
+            }
+            $process.WaitForExit()
+        }
+
+        if (-not $timedOut) {
+            $exitCode = $process.ExitCode
+        }
     } finally {
         $env:PSModulePath = $previousModulePath
     }
@@ -615,6 +645,45 @@ $splat
                 if (Test-Path $stderr) { Get-Content -LiteralPath $stderr -Raw }
             ) -join "`n")
         WorkDirectory = $work
+        Status = if ($timedOut) { 'NotRun' } elseif ($exitCode -eq 0) { 'Completed' } else { 'Failed' }
+        TimedOut = $timedOut
+        TimeoutSeconds = $TimeoutSeconds
+        Note = if ($timedOut) {
+            "Timed out after $TimeoutSeconds seconds; the child process tree was stopped."
+        } elseif ($exitCode -ne 0) {
+            "Child process exited with code $exitCode."
+        } else {
+            ''
+        }
+    }
+}
+
+function Confirm-LiveScriptRun {
+    <#
+    .SYNOPSIS
+    Translate a bounded live-script result into the corresponding Pester outcome.
+
+    .DESCRIPTION
+    Call from an It block or its BeforeEach. A timeout is skipped at the Pester layer
+    and retains Status NotRun in the child result; an actual script failure fails the
+    test. This keeps "could not run" distinct from both pass and failure.
+
+    .PARAMETER Run
+    Result returned by Invoke-ScriptUnderTest.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNull()]
+        [object]$Run
+    )
+
+    if ($Run.Status -eq 'NotRun') {
+        Set-ItResult -Skipped -Because $Run.Note
+    }
+
+    if ($Run.Status -eq 'Failed') {
+        throw "Live integration setup failed. $($Run.Note) $($Run.Output)".Trim()
     }
 }
 
@@ -630,4 +699,5 @@ Export-ModuleMember -Function @(
     'Use-FakeWebAdministration'
     'Use-FakePlaceholderModule'
     'Invoke-ScriptUnderTest'
+    'Confirm-LiveScriptRun'
 )

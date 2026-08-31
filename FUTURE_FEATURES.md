@@ -209,6 +209,22 @@ need a named data source and operator need before they become stories.
 - Add a regression test for reconciliation gaps with the Defender inventory absent
   from the manifest. The display fix shipped 2026-08-30.
 
+## Backlog: Export-WindowsUpdateHealth hangs on a busy update stack
+
+Proven 2026-08-31 by a bounded standalone run, no Pester involved: the collector hung
+past a 15-minute cap with zero output while MoUsoCoreWorker held an active update
+orchestration session on the workstation. The hang site is the script's unbounded
+synchronous live calls, `Get-HotFix` (WMI QFE) and the WUA COM chain
+(`Microsoft.Update.Session`, `CreateUpdateSearcher`, `GetTotalHistoryCount`,
+`QueryHistory`); none can be interrupted by try/catch. A health check that hangs on
+exactly the unhealthy condition it measures reports nothing. Fix shape: bound those
+calls (run them in a child with a timeout, or move to an interruptible pattern) and
+report the update-history section `Unmeasured` on timeout, per the standing rule that
+a check that could not run is reported as not having run. Evidence:
+`C:\Code_data\ops-toolkit\wu-health-diagnostic-2026-08-31\run.log`. The separate
+test-harness side, bounding live-integration setups, was completed on 2026-08-31; it
+does not resolve this collector-level defect.
+
 ## Open question for the developer
 
 **`windows-hardening` and `utilities` each exist at two levels of `scripts\`**, once at

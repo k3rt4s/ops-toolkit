@@ -11,7 +11,39 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     Import-ScriptFunction -RelativePath 'Invoke-RepoValidation.ps1' `
-        -FunctionName @('Get-MachineStateSnapshot', 'Compare-MachineStateSnapshot')
+        -FunctionName @('Get-MachineStateSnapshot', 'Compare-MachineStateSnapshot', 'Get-PesterResultSummary')
+}
+
+Describe 'Get-PesterResultSummary' {
+    It 'reports an unexecuted test as NotRun instead of a failure' {
+        $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) "ops-pester-result-$([guid]::NewGuid().ToString('N')).xml"
+        try {
+            @'
+<?xml version="1.0" encoding="utf-8"?>
+<test-results total="3" errors="0" failures="1" not-run="0" skipped="1">
+  <test-suite>
+    <results>
+      <test-case name="passed" success="True" result="Success" executed="True" />
+      <test-case name="failed" success="False" result="Failure" executed="True">
+        <failure><message>expected failure</message></failure>
+      </test-case>
+      <test-case name="timed-out" success="False" result="Ignored" executed="False" />
+    </results>
+  </test-suite>
+</test-results>
+'@ | Set-Content -LiteralPath $resultPath -Encoding utf8
+
+            $summary = Get-PesterResultSummary -Path $resultPath
+            $summary.TotalCount | Should -Be 3
+            $summary.FailedCount | Should -Be 1
+            $summary.NotRunCount | Should -Be 1
+            @($summary.FailedTests).Name | Should -Contain 'failed'
+            @($summary.FailedTests).Name | Should -Not -Contain 'timed-out'
+            @($summary.NotRunTests).Name | Should -Contain 'timed-out'
+        } finally {
+            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Compare-MachineStateSnapshot' {

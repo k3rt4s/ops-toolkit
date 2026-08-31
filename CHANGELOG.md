@@ -5,6 +5,21 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-08-31
+
+### Fixed: bounded live-integration validation
+
+- Moved every live-machine integration setup into a bounded child process and stopped
+  the whole descendant tree when its limit expires, preventing blocked WMI or WUA
+  calls from hanging the repository validation run indefinitely.
+- Added an explicit `NotRun` result for timed-out setups. Pester assertions fed by an
+  unavailable setup are skipped, and the validator reports their count separately
+  from both executed checks and failures.
+- Added regression coverage for completed child runs, timeout classification,
+  descendant cleanup, and Pester XML failure-versus-NotRun parsing.
+- Recorded the separate collector-level Windows Update hang as backlog work; no
+  collector script was changed.
+
 ## 2026-08-30
 
 ### Added: evidence scope and traceability

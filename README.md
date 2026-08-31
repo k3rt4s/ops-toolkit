@@ -636,7 +636,9 @@ It runs seven gates:
   specs over the decision logic, and integration specs that run whole scripts end to
   end against stubbed back ends, including the Graph, Exchange and Active Directory
   scripts that cannot reach a live system from a build workstation. See
-  [tests/README.md](tests/README.md).
+  [tests/README.md](tests/README.md). Live-machine integrations run in bounded child
+  process trees; a timeout is reported as `NotRun`, never as a pass or a failed
+  assertion.
 
 Exit code 0 means the gates passed, 1 means a gate failed, 2 means a required tool
 is missing. Analyzer warnings do not fail the run unless `-Strict` is used.

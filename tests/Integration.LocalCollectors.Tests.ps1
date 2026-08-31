@@ -15,6 +15,10 @@ BeforeAll {
 
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-local-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
+    $script:liveSetupTimeoutSeconds = 120
+    # The evidence pack runs seven already-bounded collectors in sequence, so its
+    # outer bound has to exceed the sum of the individual 60-second limits.
+    $script:evidencePackTimeoutSeconds = 600
 }
 
 AfterAll {
@@ -52,15 +56,31 @@ Describe 'Export-SecurityControlEvidencePack against this machine' {
         ) | ConvertTo-Json -Depth 5 -AsArray |
             Set-Content -LiteralPath $manifestPath -Encoding utf8
 
-        $script:packSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
-            -ComputerName @($env:COMPUTERNAME, 'EXCLUDED01') `
-            -ScopeExclusion @(@{ Target = 'EXCLUDED01'; Reason = 'Retired synthetic test asset' }) `
-            -DefenderDeviceInventoryPath $defenderPath -CoverageManifestPath $manifestPath `
-            -CollectorTimeoutSeconds 60 `
-            -OutputDirectory (Join-Path $script:workRoot 'pack')
-        $script:controls = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'control-assessment.csv'))
-        $script:collectorRuns = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'collector-runs.csv'))
-        $script:manifest = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'evidence-manifest.csv'))
+        $script:packRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1' `
+            -Argument @{
+            ComputerName = @($env:COMPUTERNAME, 'EXCLUDED01')
+            DefenderDeviceInventoryPath = $defenderPath
+            CoverageManifestPath = $manifestPath
+            CollectorTimeoutSeconds = 60
+            OutputDirectory = (Join-Path $script:workRoot 'pack')
+        } -RawArgument @{
+            ScopeExclusion = "@(@{ Target = 'EXCLUDED01'; Reason = 'Retired synthetic test asset' })"
+        } -TimeoutSeconds $script:evidencePackTimeoutSeconds
+        $script:packSummary = $script:packRun.Summary
+        if ($script:packRun.Status -eq 'Completed') {
+            $script:controls = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'control-assessment.csv'))
+            $script:collectorRuns = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'collector-runs.csv'))
+            $script:manifest = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'evidence-manifest.csv'))
+        } else {
+            $script:controls = @()
+            $script:collectorRuns = @()
+            $script:manifest = @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:packRun
     }
 
     It 'produces a pack with every report the layout promises' {
@@ -216,10 +236,19 @@ Describe 'Export-SecurityControlEvidencePack against this machine' {
 
 Describe 'Export-SecurityControlEvidencePack NotAssessed population accounting' {
     BeforeAll {
-        $script:noInputSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
-            -ComputerName $env:COMPUTERNAME -CollectorTimeoutSeconds 60 `
-            -OutputDirectory (Join-Path $script:workRoot 'pack-no-inputs')
-        $script:noInputControls = @(Import-Csv (Join-Path $script:noInputSummary.PackDirectory 'control-assessment.csv'))
+        $script:noInputRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1' `
+            -Argument @{
+            ComputerName = @($env:COMPUTERNAME)
+            CollectorTimeoutSeconds = 60
+            OutputDirectory = (Join-Path $script:workRoot 'pack-no-inputs')
+        } -TimeoutSeconds $script:evidencePackTimeoutSeconds
+        $script:noInputSummary = $script:noInputRun.Summary
+        $script:noInputControls = if ($script:noInputRun.Status -eq 'Completed') {
+            @(Import-Csv (Join-Path $script:noInputSummary.PackDirectory 'control-assessment.csv'))
+        } else {
+            @()
+        }
 
         $defenderOnlyPath = Join-Path $script:workRoot 'defender-only.csv'
         @([pscustomobject]@{
@@ -228,10 +257,25 @@ Describe 'Export-SecurityControlEvidencePack NotAssessed population accounting' 
                 CoverageStatus = 'Onboarded'
                 ContactStatus = 'Reporting'
             }) | Export-Csv -LiteralPath $defenderOnlyPath -NoTypeInformation -Encoding utf8
-        $script:defenderOnlySummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
-            -ComputerName $env:COMPUTERNAME -DefenderDeviceInventoryPath $defenderOnlyPath `
-            -CollectorTimeoutSeconds 60 -OutputDirectory (Join-Path $script:workRoot 'pack-defender-only')
-        $script:defenderOnlyControls = @(Import-Csv (Join-Path $script:defenderOnlySummary.PackDirectory 'control-assessment.csv'))
+        $script:defenderOnlyRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1' `
+            -Argument @{
+            ComputerName = @($env:COMPUTERNAME)
+            DefenderDeviceInventoryPath = $defenderOnlyPath
+            CollectorTimeoutSeconds = 60
+            OutputDirectory = (Join-Path $script:workRoot 'pack-defender-only')
+        } -TimeoutSeconds $script:evidencePackTimeoutSeconds
+        $script:defenderOnlySummary = $script:defenderOnlyRun.Summary
+        $script:defenderOnlyControls = if ($script:defenderOnlyRun.Status -eq 'Completed') {
+            @(Import-Csv (Join-Path $script:defenderOnlySummary.PackDirectory 'control-assessment.csv'))
+        } else {
+            @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:noInputRun
+        Confirm-LiveScriptRun -Run $script:defenderOnlyRun
     }
 
     It 'does not claim estate endpoints were observed when no management evidence was supplied' {
@@ -285,9 +329,20 @@ Describe 'Test-WindowsHardeningState against this machine' {
         # Note the path: Test-WindowsHardeningState lives in scripts\windows-hardening,
         # while Export-BitLockerEscrowStatus and Export-LocalAdminAndLapsPosture live in
         # scripts\it-operations\windows-hardening. The category exists at both levels.
-        $script:hardening = & (Get-RepositoryScriptPath -RelativePath 'scripts\windows-hardening\Test-WindowsHardeningState.ps1') `
-            -OutputDirectory (Join-Path $script:workRoot 'hardening')
-        $script:items = @(Import-Csv (Join-Path $script:hardening.OutputDirectory 'hardening-compliance.csv'))
+        $script:hardeningRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\windows-hardening\Test-WindowsHardeningState.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'hardening') } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:hardening = $script:hardeningRun.Summary
+        $script:items = if ($script:hardeningRun.Status -eq 'Completed') {
+            @(Import-Csv (Join-Path $script:hardening.OutputDirectory 'hardening-compliance.csv'))
+        } else {
+            @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:hardeningRun
     }
 
     It 'writes the run-directory layout the comparison tool needs' {
@@ -332,11 +387,24 @@ Describe 'Test-WindowsHardeningState against this machine' {
 
 Describe 'Export-EndpointTelemetryPosture against this machine' {
     BeforeAll {
-        $script:telemetry = & (Get-RepositoryScriptPath -RelativePath 'scripts\logging\Export-EndpointTelemetryPosture.ps1') `
-            -OutputDirectory (Join-Path $script:workRoot 'telemetry')
-        $script:checks = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-checks.csv'))
-        $script:channels = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'log-channels.csv'))
-        $script:posture = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-posture.csv'))
+        $script:telemetryRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\logging\Export-EndpointTelemetryPosture.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'telemetry') } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:telemetry = $script:telemetryRun.Summary
+        if ($script:telemetryRun.Status -eq 'Completed') {
+            $script:checks = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-checks.csv'))
+            $script:channels = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'log-channels.csv'))
+            $script:posture = @(Import-Csv (Join-Path $script:telemetry.OutputDirectory 'telemetry-posture.csv'))
+        } else {
+            $script:checks = @()
+            $script:channels = @()
+            $script:posture = @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:telemetryRun
     }
 
     It 'writes the run-directory layout the comparison tool needs' {

@@ -23,6 +23,9 @@ What a session needs to believe before it changes this repo's scripts or tests.
 - One non-standard comment-based-help keyword silently invalidates the entire help
   block; `Get-Help` falls back to generated syntax with no error. The Help gate
   (~line 300) catches this now; `.INSTRUCTIONS` hit 30 of 31 scripts before it did.
+- Live WMI and WUA reads can block indefinitely while Windows Update orchestration is
+  busy. Live integration setups use `Invoke-ScriptUnderTest -TimeoutSeconds`; expiry
+  tree-kills the child and reports `NotRun`, because an absent result is not a pass.
 - Report and rollback writes, and the run directory itself, carry `-WhatIf:$false` on
   purpose: writing the plan *is* the preview, not the change being previewed. Without
   it, `Resolve-Path` throws and a `-WhatIf` run produces nothing to review.

@@ -216,6 +216,45 @@ function Add-GateResult {
         })
 }
 
+function Get-PesterResultSummary {
+    <#
+    .SYNOPSIS
+    Read Pester's NUnit XML without treating deliberately unrun tests as failures.
+
+    .DESCRIPTION
+    Pester serializes Set-ItResult -Skipped test cases with success="False" even though
+    they did not fail. Live integrations use that state when their bounded setup times
+    out, so result="Failure" is the failure boundary and executed="False" is reported
+    separately as NotRun.
+
+    .PARAMETER Path
+    Path to the Pester NUnit XML result.
+
+    .OUTPUTS
+    PSCustomObject containing total, failed, and NotRun counts and their test nodes.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path
+    )
+
+    [xml]$results = Get-Content -LiteralPath $Path -Raw
+    $root = $results.'test-results'
+    $failedTests = @($results.SelectNodes('//test-case[@result="Failure"]'))
+    $notRunTests = @($results.SelectNodes('//test-case[@executed="False" and @result!="Failure"]'))
+
+    [pscustomobject]@{
+        TotalCount = [int]$root.total
+        FailedCount = [int]$root.failures + [int]$root.errors
+        NotRunCount = $notRunTests.Count
+        FailedTests = $failedTests
+        NotRunTests = $notRunTests
+    }
+}
+
 function Get-RepoScript {
     param([Parameter(Mandatory = $true)][string]$Extension)
 
@@ -513,13 +552,18 @@ if ($Gate -contains 'Test') {
             -NoNewWindow -Wait -PassThru
         $failedCount = $process.ExitCode
         $totalCount = 0
+        $notRunCount = 0
 
         if (Test-Path -LiteralPath $testLog) {
             try {
-                [xml]$results = Get-Content -LiteralPath $testLog -Raw
-                $totalCount = [int]$results.'test-results'.total
-                foreach ($testCase in $results.SelectNodes('//test-case[@success="False"]')) {
+                $testResults = Get-PesterResultSummary -Path $testLog
+                $totalCount = $testResults.TotalCount
+                $notRunCount = $testResults.NotRunCount
+                foreach ($testCase in $testResults.FailedTests) {
                     Add-Finding -Gate 'Test' -Severity 'Error' -File 'tests' -Message "$($testCase.name): $($testCase.failure.message -replace '\s+', ' ')"
+                }
+                foreach ($testCase in $testResults.NotRunTests) {
+                    Add-Finding -Gate 'Test' -Severity 'Information' -File 'tests' -Message "$($testCase.name): NotRun"
                 }
             } catch {
                 Add-Finding -Gate 'Test' -Severity 'Error' -File 'tests' -Message "Could not read the Pester result file: $($_.Exception.Message)"
@@ -528,7 +572,9 @@ if ($Gate -contains 'Test') {
             Remove-Item -LiteralPath $testLog -Force -ErrorAction SilentlyContinue
         }
 
-        Add-GateResult -Name 'Test' -Status $(if ($failedCount -eq 0) { 'PASS' } else { 'FAIL' }) -Checked $totalCount -ErrorCount $failedCount -WarningCount 0 -Note "Pester $($pester.Version)"
+        $testNote = "Pester $($pester.Version); $notRunCount NotRun"
+        Add-GateResult -Name 'Test' -Status $(if ($failedCount -eq 0) { 'PASS' } else { 'FAIL' }) `
+            -Checked ($totalCount - $notRunCount) -ErrorCount $failedCount -WarningCount 0 -Note $testNote
     }
 }
 

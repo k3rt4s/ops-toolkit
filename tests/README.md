@@ -156,10 +156,14 @@ would then fail rather than merely look busy in a summary count.
 
 ### Running against the real machine
 
-`Integration.LocalCollectors.Tests.ps1` is the exception to all of the above: it runs
-`Export-SecurityControlEvidencePack.ps1` and `Test-WindowsHardeningState.ps1` against
-this actual machine, with no stub anywhere. It is the slowest spec in the suite,
-because the evidence pack runs six collectors.
+`Integration.LocalCollectors.Tests.ps1` and the live reads in
+`Integration.RemainingUtilities.Tests.ps1` are the exception to all of the above:
+they run against this actual machine, with no stub anywhere. Every live script runs
+in a bounded child process. If an operating-system API blocks past that bound, the
+entire descendant process tree is stopped and the affected assertions are reported
+`NotRun`; absence of a result is never converted into either a pass or a collector
+failure. The evidence-pack setup has a larger outer bound because it runs seven
+collectors whose own limits apply sequentially.
 
 It asserts invariants, never values. How many volumes are encrypted or what Defender
 reports is a property of whichever machine runs the suite. What has to hold everywhere
@@ -170,10 +174,11 @@ have previously got exactly that wrong, in the same direction.
 
 ## What is and is not proven
 
-Proven: the full pipeline of every script, including the six that cannot reach a live
-system from this machine. Planted faults are detected, planted non-faults are not, and
-the reports and summary counts agree. For the two local collectors, proven against the
-real system rather than a stub.
+Proven when its setup completes: the full pipeline of every script, including the six
+that cannot reach a live system from this machine. Planted faults are detected,
+planted non-faults are not, and the reports and summary counts agree. A live setup
+that times out is named `NotRun` in the validator output and proves nothing about that
+collector on that run.
 
 Not proven: that a real Graph endpoint, domain controller, or Exchange Online tenant
 returns the shapes the stubs return. That is the residual risk, and it is narrowed

@@ -25,21 +25,52 @@ AfterAll {
 
 Describe 'Export-SecurityControlEvidencePack against this machine' {
     BeforeAll {
-        # Six collectors, so this is the slowest spec in the suite. It runs once and
+        # Seven collectors, so this is the slowest spec in the suite. It runs once and
         # every test below reads the same pack.
+        $expectedPath = Join-Path $script:workRoot 'expected-endpoints.csv'
+        @(
+            [pscustomobject]@{ Name = $env:COMPUTERNAME }
+            [pscustomobject]@{ Name = 'MISSING-EDR' }
+            [pscustomobject]@{ Name = 'EXCLUDED01' }
+        ) | Export-Csv -LiteralPath $expectedPath -NoTypeInformation -Encoding utf8
+
+        $defenderPath = Join-Path $script:workRoot 'defender-devices.csv'
+        @(
+            [pscustomobject]@{
+                ComputerDnsName = $env:COMPUTERNAME
+                Verdict = 'Protected'
+                CoverageStatus = 'Onboarded'
+                ContactStatus = 'Reporting'
+            }
+        ) | Export-Csv -LiteralPath $defenderPath -NoTypeInformation -Encoding utf8
+        (Get-Item -LiteralPath $defenderPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddDays(-60)
+
+        $manifestPath = Join-Path $script:workRoot 'coverage-manifest.json'
+        @(
+            @{ Name = 'ExpectedInventory'; Path = $expectedPath; KeyColumn = 'Name'; Required = $true }
+            @{ Name = 'Defender'; Path = $defenderPath; KeyColumn = 'ComputerDnsName'; Required = $true }
+        ) | ConvertTo-Json -Depth 5 -AsArray |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8
+
         $script:packSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+            -ComputerName @($env:COMPUTERNAME, 'EXCLUDED01') `
+            -ScopeExclusion @(@{ Target = 'EXCLUDED01'; Reason = 'Retired synthetic test asset' }) `
+            -DefenderDeviceInventoryPath $defenderPath -CoverageManifestPath $manifestPath `
+            -CollectorTimeoutSeconds 60 `
             -OutputDirectory (Join-Path $script:workRoot 'pack')
         $script:controls = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'control-assessment.csv'))
         $script:collectorRuns = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'collector-runs.csv'))
+        $script:manifest = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'evidence-manifest.csv'))
     }
 
     It 'produces a pack with every report the layout promises' {
         (Split-Path $script:packSummary.PackDirectory -Leaf) | Should -Match '^security-control-evidence-\d{8}_\d{6}$'
-        foreach ($name in @('control-assessment', 'collector-runs', 'status-rollup')) {
+        foreach ($name in @('control-assessment', 'collector-runs', 'status-rollup', 'input-sources', 'evidence-manifest')) {
             Test-Path (Join-Path $script:packSummary.PackDirectory "$name.csv") | Should -BeTrue -Because "$name.csv should exist"
             Test-Path (Join-Path $script:packSummary.PackDirectory "$name.json") | Should -BeTrue -Because "$name.json should exist"
         }
         Test-Path (Join-Path $script:packSummary.PackDirectory 'summary.json') | Should -BeTrue
+        Test-Path (Join-Path $script:packSummary.PackDirectory 'run-context.json') | Should -BeTrue
     }
 
     It 'assesses every control to one of the four defined outcomes' {
@@ -89,6 +120,163 @@ Describe 'Export-SecurityControlEvidencePack against this machine' {
         # machine it ran on unless told otherwise, and has to say so.
         $script:packSummary.EndpointScope | Should -Not -BeNullOrEmpty
         $script:packSummary.Elevated | Should -BeOfType [bool]
+        $script:packSummary.RequestedTargetCount | Should -Be 2
+        $script:packSummary.TargetCount | Should -Be 1
+        $script:packSummary.ExcludedTargetCount | Should -Be 1
+    }
+
+    It 'records traceability and limitations for every control' {
+        foreach ($control in $script:controls) {
+            $control.Conclusion | Should -Not -BeNullOrEmpty
+            $control.IntendedScope | Should -Not -BeNullOrEmpty
+            $control.AttemptedCount | Should -Match '^\d+$'
+            $control.ObservedCount | Should -Match '^\d+$'
+            $control.FailedCount | Should -Match '^\d+$'
+            $control.Limitations | Should -Not -BeNullOrEmpty
+            if ($control.EvidenceArtifacts) {
+                $control.EvidenceHashes | Should -Match 'SHA256=[A-Fa-f0-9]{64}'
+            }
+            $attemptedNames = @($control.AttemptedPopulation -split ';' | Where-Object { $_ })
+            [int]$control.AttemptedCount | Should -Be $attemptedNames.Count
+            ([int]$control.ObservedCount + [int]$control.FailedCount) | Should -Be ([int]$control.AttemptedCount)
+            foreach ($excluded in @($control.ExcludedPopulation -split ';' | Where-Object { $_ })) {
+                $attemptedNames | Should -Not -Contain $excluded
+            }
+        }
+    }
+
+    It 'uses management-plane inventory and reconciliation for estate endpoint coverage' {
+        $edr = $script:controls | Where-Object { $_.ControlId -eq 'EDR-01' }
+        $edr.Status | Should -Be 'NotMet' -Because 'the synthetic expected inventory contains one device absent from Defender'
+        $edr.Collector | Should -Match 'Export-DefenderEndpointDeviceInventory'
+        $edr.Collector | Should -Match 'Export-CoverageReconciliation'
+        $edr.EvidenceArtifacts | Should -Match 'defender-device-inventory.csv'
+        $edr.EvidenceArtifacts | Should -Match 'inputs\\authorities'
+        $edr.EvidenceArtifacts | Should -Match 'coverage-reconciliation'
+        $edr.AttemptedPopulation | Should -Match 'MISSING-EDR'
+        $edr.AttemptedPopulation | Should -Not -Match 'EXCLUDED01'
+        [int]$edr.EvidenceAgeDays | Should -BeGreaterOrEqual 59
+        $coverageRun = $script:collectorRuns | Where-Object { $_.Collector -eq 'coverage-reconciliation' }
+        $coverageRun.Scope | Should -Be 'InputDefined'
+        $coverageRun.Note | Should -Not -Match 'only the machine'
+    }
+
+    It 'records valid hashes for every artifact in the evidence manifest' {
+        $script:manifest.Count | Should -BeGreaterThan 0
+        foreach ($artifact in $script:manifest) {
+            $path = Join-Path $script:packSummary.PackDirectory $artifact.Path
+            Test-Path -LiteralPath $path -PathType Leaf | Should -BeTrue
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash | Should -Be $artifact.SHA256
+        }
+        $manifestPaths = @($script:manifest.Path)
+        $allPackFiles = @(Get-ChildItem -LiteralPath $script:packSummary.PackDirectory -File -Recurse |
+            ForEach-Object { [System.IO.Path]::GetRelativePath($script:packSummary.PackDirectory, $_.FullName) } |
+            Where-Object { $_ -notin @('summary.json', 'evidence-manifest.csv', 'evidence-manifest.json') })
+        foreach ($path in $allPackFiles) {
+            $manifestPaths | Should -Contain $path
+        }
+        $manifestPaths | Should -Contain 'summary.md'
+        $manifestPaths | Should -Not -Contain 'summary.json'
+    }
+
+    It 'snapshots authority inputs without recording absolute source paths' {
+        $inputs = @(Import-Csv (Join-Path $script:packSummary.PackDirectory 'input-sources.csv'))
+        $inputs.Count | Should -BeGreaterOrEqual 4
+        foreach ($input in $inputs) {
+            [System.IO.Path]::IsPathRooted($input.SourcePath) | Should -BeFalse
+            if ($input.Status -eq 'Read') {
+                $input.SHA256 | Should -Match '^[A-Fa-f0-9]{64}$'
+                Test-Path -LiteralPath (Join-Path $script:packSummary.PackDirectory $input.SnapshotPath) |
+                    Should -BeTrue
+            }
+        }
+        $authorityRunsPath = Get-ChildItem -LiteralPath $script:packSummary.PackDirectory `
+            -Filter 'authority-runs.csv' -File -Recurse | Select-Object -First 1
+        $authorityRunsPath | Should -Not -BeNullOrEmpty
+        foreach ($run in @(Import-Csv -LiteralPath $authorityRunsPath.FullName)) {
+            [System.IO.Path]::IsPathRooted($run.Path) | Should -BeFalse
+        }
+        foreach ($run in $script:collectorRuns) {
+            $run.Script | Should -Not -Match '[/\\]'
+            $run.ScriptSha256 | Should -Match '^[A-Fa-f0-9]{64}$'
+        }
+        $savedSummary = Get-Content -LiteralPath (Join-Path $script:packSummary.PackDirectory 'summary.json') -Raw |
+            ConvertFrom-Json
+        $savedSummary.PackDirectory | Should -Be '.'
+        [System.IO.Path]::IsPathRooted($savedSummary.EvidenceManifestPath) | Should -BeFalse
+    }
+
+    It 'states that the pack is technical evidence and not an audit or conformity decision' {
+        $summaryText = Get-Content -LiteralPath (Join-Path $script:packSummary.PackDirectory 'summary.md') -Raw
+        $script:packSummary.TechnicalEvidenceOnly | Should -BeTrue
+        $summaryText | Should -Match 'not a NIST maturity rating'
+        $summaryText | Should -Match 'ISO conformity decision'
+    }
+}
+
+Describe 'Export-SecurityControlEvidencePack NotAssessed population accounting' {
+    BeforeAll {
+        $script:noInputSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+            -ComputerName $env:COMPUTERNAME -CollectorTimeoutSeconds 60 `
+            -OutputDirectory (Join-Path $script:workRoot 'pack-no-inputs')
+        $script:noInputControls = @(Import-Csv (Join-Path $script:noInputSummary.PackDirectory 'control-assessment.csv'))
+
+        $defenderOnlyPath = Join-Path $script:workRoot 'defender-only.csv'
+        @([pscustomobject]@{
+                ComputerDnsName = $env:COMPUTERNAME
+                Verdict = 'Protected'
+                CoverageStatus = 'Onboarded'
+                ContactStatus = 'Reporting'
+            }) | Export-Csv -LiteralPath $defenderOnlyPath -NoTypeInformation -Encoding utf8
+        $script:defenderOnlySummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+            -ComputerName $env:COMPUTERNAME -DefenderDeviceInventoryPath $defenderOnlyPath `
+            -CollectorTimeoutSeconds 60 -OutputDirectory (Join-Path $script:workRoot 'pack-defender-only')
+        $script:defenderOnlyControls = @(Import-Csv (Join-Path $script:defenderOnlySummary.PackDirectory 'control-assessment.csv'))
+    }
+
+    It 'does not claim estate endpoints were observed when no management evidence was supplied' {
+        $edr = $script:noInputControls | Where-Object { $_.ControlId -eq 'EDR-01' }
+        $edr.Status | Should -Be 'NotAssessed'
+        [int]$edr.AttemptedCount | Should -Be 1
+        [int]$edr.ObservedCount | Should -Be 0
+        [int]$edr.FailedCount | Should -Be 1
+    }
+
+    It 'names a missing coverage manifest instead of inventing an unread authority' {
+        $edr = $script:defenderOnlyControls | Where-Object { $_.ControlId -eq 'EDR-01' }
+        $edr.Status | Should -Be 'NotAssessed'
+        $edr.Finding | Should -Match 'Coverage manifest: not supplied'
+        $edr.FailedReads | Should -Match 'Coverage manifest: not supplied'
+        [int]$edr.ObservedCount | Should -Be 0
+        [int]$edr.FailedCount | Should -Be ([int]$edr.AttemptedCount)
+    }
+}
+
+Describe 'Export-SecurityControlEvidencePack scope exclusion validation' {
+    It 'rejects an unknown target' {
+        {
+            & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+                -ComputerName 'PC01' -ScopeExclusion @(@{ Target = 'PC02'; Reason = 'Not requested' }) `
+                -OutputDirectory (Join-Path $script:workRoot 'invalid-unknown')
+        } | Should -Throw '*not in -ComputerName*'
+    }
+
+    It 'rejects a duplicate target regardless of case' {
+        {
+            & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+                -ComputerName 'PC01' -ScopeExclusion @(
+                @{ Target = 'PC01'; Reason = 'First reason' }
+                @{ Target = 'pc01'; Reason = 'Second reason' }
+            ) -OutputDirectory (Join-Path $script:workRoot 'invalid-duplicate')
+        } | Should -Throw '*more than once*'
+    }
+
+    It 'rejects a whitespace-only reason' {
+        {
+            & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+                -ComputerName 'PC01' -ScopeExclusion @(@{ Target = 'PC01'; Reason = '   ' }) `
+                -OutputDirectory (Join-Path $script:workRoot 'invalid-reason')
+        } | Should -Throw '*non-empty Target and Reason*'
     }
 }
 

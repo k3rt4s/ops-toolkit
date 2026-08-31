@@ -6,8 +6,7 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Ready to pick up
 
-Two items: the hard-coded absolute paths and the Certified Information Security
-assessment value check, each described in its own section below. There is also one open
+One item, the hard-coded absolute paths described below. There is also one open
 question for the developer, further down.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
@@ -178,17 +177,37 @@ for anyone already running these, and what the replacement should be is a produc
 decision rather than a cleanup: an environment variable, a required parameter, or a
 per-install config file. The Defender one is the sharpest and could reasonably go first.
 
-## Queued item: Certified Information Security assessment value check
+## Implemented 2026-08-30: evidence scope and traceability
 
-Investigate whether the Certified Information Security open assessment platform adds
-value to ops-toolkit's evidence-pack and reporting scripts. Use synthetic/sample data
-or a deliberately sanitized local run only. Compare its NIST CSF 2.0 and ISO 27001
-assessment/report expectations against `Export-SecurityControlEvidencePack.ps1`, the
-logging and endpoint posture collectors, coverage reconciliation, and NotAssessed
-discipline. The output should be a feasibility note naming independent evidence gaps,
-candidate controls to report, and any report-language improvements worth building. Do
-not copy or adapt CIS's proprietary methodology, mappings, scoring, prompts, or report
-format.
+The investigation is complete. The platform added value as a comparison point for
+evidence scope, provenance, coverage, and report language, not as a methodology or
+integration target. The feasibility note is
+[docs/certified-information-security-assessment-value-check.md](docs/certified-information-security-assessment-value-check.md).
+
+Jon approved the note's evidence scope and traceability story on 2026-08-30. The
+evidence pack now records actual population and exclusions, exact evidence artifacts,
+observation time, freshness, limitations, hashes, toolkit revision, and collection
+context. Estate endpoint-protection coverage can use both Defender management-plane
+inventory and the existing two-authority reconciliation report. Unread required sources
+remain `NotAssessed`, and the summary explicitly disclaims maturity, conformity, audit,
+and certification conclusions.
+
+An independent read-only review was applied before closeout. Its confirmed population,
+scope, freshness, portability, PowerShell-version, and manifest-completeness findings
+were corrected and covered by regression tests.
+
+The deferred `LOG-03`, `LOG-04`, and `VULN-01` ideas remain candidates only. They still
+need a named data source and operator need before they become stories.
+
+## Backlog: evidence-pack follow-ups
+
+- Allow `-ScopeExclusion` when scope comes only from management-plane inputs. Today,
+  any exclusion without `-ComputerName` throws at the target-validation gate.
+- Note in the input-sources row that the coverage-manifest snapshot is rewritten with
+  pack-relative paths, so the `SourceSHA256`/`SHA256` difference is explained, and
+  document that the sanitized manifest re-runs only from the pack root.
+- Add a regression test for reconciliation gaps with the Defender inventory absent
+  from the manifest. The display fix shipped 2026-08-30.
 
 ## Open question for the developer
 

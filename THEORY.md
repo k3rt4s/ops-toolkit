@@ -7,9 +7,9 @@ What a session needs to believe before it changes this repo's scripts or tests.
 - Every state-changing script writes `<prefix>-yyyyMMdd_HHmmss\` with a CSV and JSON
   per report plus `summary.json`. `scripts\reporting\Compare-OpsToolkitRun.ps1` can
   only diff that exact layout; changing it breaks the diff tool silently.
-- A check that could not run is never folded into a pass. `Export-CoverageReconciliation.ps1`
-  and `Export-SecurityControlEvidencePack.ps1` report `NotAssessed` separately from
-  `NotMet`: "we did not check" presented as "we are fine" is worse than no report.
+- A check that could not run is never folded into a pass. The evidence pack records
+  actual populations, exclusions, artifacts, freshness, and limitations; source-read
+  failures never masquerade as endpoint counts or framework conformity.
 - Every state-changing script is tested as a pair, `-WhatIf` and executing
   (`tests\Integration.StateChanging.*.Tests.ps1`); "`-WhatIf` changed nothing" is
   unfalsifiable alone, a broken script passes it too.

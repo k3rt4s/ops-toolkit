@@ -537,6 +537,30 @@ Acceptance criteria:
 - Given one collector fails, When the run continues, Then the remaining collectors
   still run, because each runs isolated in its own process with a timeout.
 
+### Story: State evidence scope and traceability
+
+As an operator assembling a security evidence pack, I want every control result to
+state its actual population, evidence provenance, freshness, and limitations, so that
+a reviewer can distinguish a supported technical observation from a partial or
+unassessed estate claim.
+
+Status: implemented 2026-08-30 (`scripts/reporting/Export-SecurityControlEvidencePack.ps1`)
+
+Acceptance criteria:
+
+- Given synthetic collector output, When a pack is built, Then each control records
+  intended scope, attempted and observed population, failed reads, exclusions with
+  reasons, exact evidence artifacts, observation time, limitations, and integrity
+  hashes.
+- Given an unread required source, When the pack is summarized, Then the affected
+  result remains `NotAssessed` and no score or wording presents it as a pass.
+- Given Defender management-plane output and at least two required inventory
+  authorities, When endpoint coverage is reported, Then the result uses those sources
+  rather than a local Defender reading alone.
+- Given a completed pack, When a reviewer opens the summary, Then it explicitly states
+  that it is technical evidence and makes no NIST maturity, ISO conformity, audit, or
+  certification claim.
+
 ## Epic: Repository quality
 
 ### Story: Run the validation ritual as one command

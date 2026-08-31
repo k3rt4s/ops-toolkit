@@ -5,6 +5,42 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-08-30
+
+### Added: evidence scope and traceability
+
+- Extended `Export-SecurityControlEvidencePack.ps1` with per-control intended,
+  attempted, observed, failed, and explicitly excluded populations; evidence-language
+  conclusions; limitations; exact artifact paths; observation times; freshness; and
+  SHA-256 hashes.
+- Added an evidence manifest, operator-input inventory, and redacted run context with
+  the assembly script hash and toolkit revision.
+- Added optional Defender management-plane inventory and coverage-manifest inputs so
+  estate endpoint protection is based on reconciled evidence instead of one local
+  Defender reading. Unread required sources remain `NotAssessed`.
+- Added synthetic decision tests and end-to-end bundle assertions for exclusions,
+  provenance, artifact integrity, reconciliation, and non-conformity report language.
+- Corrected the independent-review findings before closeout: population failures no
+  longer mix endpoints with unread authorities, excluded endpoints are removed before
+  EDR grading, freshness uses the oldest supporting artifact, and local-only evidence
+  cannot produce an estate-wide `Met`.
+- The pack now requires PowerShell 7, snapshots and hashes sanitized authority inputs,
+  requires two readable required authorities including Defender for a clean EDR result,
+  records input-driven collector scope accurately, and includes `summary.md` plus every
+  nested collector summary in the evidence manifest.
+
+## 2026-08-29
+
+### Added: evidence-pack feasibility review
+
+- Investigated the Certified Information Security assessment platform using anonymous
+  synthetic NIST CSF 2.0 and ISO 27001 sessions and public documentation only.
+- Recorded independent evidence gaps, candidate controls, report-language improvements,
+  rejected directions, and a proposed evidence scope and traceability user story in
+  `docs\certified-information-security-assessment-value-check.md`.
+- No proprietary methodology, mapping, scoring model, question set, UI, or report
+  format was copied or adapted.
+
 ## 2026-08-20
 
 Ten new reclaim targets covering the developer caches and Docker layers that a manual

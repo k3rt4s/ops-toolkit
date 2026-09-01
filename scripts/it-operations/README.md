@@ -128,8 +128,9 @@ Roll back the lock posture:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
 ```
 
-Preview hardening the browser credential-theft surface (block authenticator and password-manager
-browser extensions in Chrome and Edge, pin Chrome Application-Bound Encryption on):
+Preview hardening the browser credential-theft surface (block authenticator browser extensions in
+Chrome and Edge by default, add `-IncludePasswordManagerExtensions` to also block password-manager
+extensions, pin Chrome Application-Bound Encryption on):
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf

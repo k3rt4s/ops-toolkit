@@ -16,9 +16,11 @@ anything a browser extension keeps in local storage, which for an authenticator 
 TOTP seed and for a password-manager extension can be the vault. The browser is then the single
 point of compromise for both factors. This script enforces the two browser policies that shrink
 that surface and can be pinned by local machine policy:
-- Block the configured authenticator and password-manager browser extensions in Chrome and Edge,
-  so an enterprise standardizes on a standalone (non-extension) password manager and a hardware or
-  out-of-band authenticator instead.
+- Block the configured authenticator browser extensions in Chrome and Edge by default, and the
+  well-known password-manager extensions as well when -IncludePasswordManagerExtensions is set, so an
+  enterprise standardizes on a standalone (non-extension) password manager and a hardware or
+  out-of-band authenticator instead. Password-manager extensions are opt-in, not a default, because
+  blocking one can push a user back to browser-saved passwords, which is a net loss on its own.
 - Pin Chrome Application-Bound Encryption on, so the cookie and password store is not readable by
   plain file IO from the user's own context.
 
@@ -52,12 +54,11 @@ param(
     [Parameter()]
     [ValidateNotNull()]
     [string[]]$ExtensionBlockId = @(
-        'bhghoamapcdpbohphigoooaddinpkbai', # Authenticator (authenticator.cc) - browser-extension TOTP
-        'nngceckbapebfimnlniiiahkandclblb', # Bitwarden - browser-extension password manager
-        'aeblfdkhhhdcdjpifhhbdiojplfjncoa', # 1Password - browser-extension password manager
-        'hdokiejnpimakedhajhdlcegeplioahd', # LastPass - browser-extension password manager
-        'fdjamakpfbbddfjaooikfcpapjohcfmg'  # Dashlane - browser-extension password manager
+        'bhghoamapcdpbohphigoooaddinpkbai' # Authenticator (authenticator.cc) - browser-extension TOTP
     ),
+
+    [Parameter()]
+    [switch]$IncludePasswordManagerExtensions,
 
     [Parameter()]
     [switch]$SkipExtensionBlock,
@@ -81,6 +82,17 @@ $script:EdgePolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
 $script:SmartScreenPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 
+# Well-known password-manager browser extensions. Not blocked by default: blocking a password-manager
+# extension can push a user back to browser-saved passwords, a net loss on its own, so this set is
+# opt-in via -IncludePasswordManagerExtensions rather than part of the default block list. Verify and
+# extend against the Chrome Web Store and Edge Add-ons for your environment.
+$script:PasswordManagerExtensionId = @(
+    'nngceckbapebfimnlniiiahkandclblb', # Bitwarden
+    'aeblfdkhhhdcdjpifhhbdiojplfjncoa', # 1Password
+    'hdokiejnpimakedhajhdlcegeplioahd', # LastPass
+    'fdjamakpfbbddfjaooikfcpapjohcfmg'  # Dashlane
+)
+
 function Show-Usage {
     Write-Output @'
 Enforce browser policy that removes the infostealer credential-theft surface.
@@ -92,7 +104,11 @@ Usage:
 
 Options:
   -ExtensionBlockId   Extension IDs to block in Chrome and Edge. Default: a documented starting set
-                      of well-known authenticator and password-manager extensions. Verify and extend.
+                      of well-known authenticator extensions. Verify and extend.
+  -IncludePasswordManagerExtensions
+                      Also block the well-known password-manager browser extensions (Bitwarden,
+                      1Password, LastPass, Dashlane). Opt-in, not a default: blocking these can push
+                      a user back to browser-saved passwords.
   -SkipExtensionBlock Do not change the browser ExtensionSettings policy.
   -SkipChromeAbe      Do not pin Chrome Application-Bound Encryption on.
   -ReportDirectory    Plan, state, and rollback output directory.
@@ -188,7 +204,7 @@ function Get-ForwardPlan {
             $action = if ($satisfied) {
                 "No change ($($browser.Name) already blocks every listed extension)"
             } else {
-                "Block $($ExtensionBlockId.Count) authenticator/password-manager extensions in $($browser.Name)"
+                "Block $($ExtensionBlockId.Count) listed credential-theft-surface extension(s) in $($browser.Name)"
             }
             $items.Add([pscustomobject]@{
                     Category = "$($browser.Name)ExtensionBlock"; Setting = 'ExtensionSettings'; RequiresAdmin = $true
@@ -324,10 +340,19 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+
+# Authenticator extensions are blocked by default; the password-manager set is added only when the
+# operator opts in with -IncludePasswordManagerExtensions, because blocking a password-manager
+# extension can push a user back to browser-saved passwords. -ExtensionBlockId still supplies any
+# custom set on top of the default.
+$effectiveBlockId = @($ExtensionBlockId)
+if ($IncludePasswordManagerExtensions) { $effectiveBlockId += $script:PasswordManagerExtensionId }
+$effectiveBlockId = @($effectiveBlockId | Select-Object -Unique)
+
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
-        Get-ForwardPlan -ExtensionBlockId $ExtensionBlockId `
+        Get-ForwardPlan -ExtensionBlockId $effectiveBlockId `
             -SkipExtensionBlock:$SkipExtensionBlock -SkipChromeAbe:$SkipChromeAbe
     })
 
@@ -356,7 +381,7 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     $rollbackPath = Join-Path $resolvedReportDirectory "browser-credential-posture-rollback-$timestamp.json"
     [pscustomobject]@{
         Timestamp = $timestamp
-        ExtensionBlockId = @($ExtensionBlockId)
+        ExtensionBlockId = @($effectiveBlockId)
         ChangedSettings = @($script:ChangedSettings)
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $rollbackPath -Encoding utf8 -WhatIf:$false
 }

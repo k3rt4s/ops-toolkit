@@ -12,9 +12,13 @@ that produced the current layout is described in the README under "What Changed"
 - Added `Set-BrowserCredentialPosture.ps1` under `it-operations\windows-hardening`, which
   reduces the surface an information stealer harvests from a browser in a single pass.
 - Enforces, with a rollback record, the two browser policies that a local machine policy
-  can pin: blocking the configured authenticator and password-manager browser extensions
-  in Chrome and Edge (via `ExtensionSettings`, merged into any existing policy), and
-  pinning Chrome Application-Bound Encryption on (`ApplicationBoundEncryptionEnabled`).
+  can pin: blocking the configured authenticator browser extensions in Chrome and Edge by
+  default (via `ExtensionSettings`, merged into any existing policy), and pinning Chrome
+  Application-Bound Encryption on (`ApplicationBoundEncryptionEnabled`).
+- Blocks the well-known password-manager browser extensions only when the operator opts in
+  with `-IncludePasswordManagerExtensions`; they are not a default because blocking one can
+  push a user back to browser-saved passwords, a net loss on its own. `-ExtensionBlockId`
+  still supplies any custom set on top of the default.
 - Reports, without changing, the talk defenses that are not a single machine-policy value:
   Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local
   administrator rights (deferring the full membership and LAPS view to the companion

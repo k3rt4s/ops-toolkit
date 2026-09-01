@@ -435,8 +435,8 @@ pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
 ```
 
 Harden the browser credential-theft surface an information stealer harvests in one pass (block
-authenticator and password-manager browser extensions in Chrome and Edge, and pin Chrome
-Application-Bound Encryption on). Preview first, then apply from an elevated shell and roll back:
+authenticator browser extensions in Chrome and Edge, and pin Chrome Application-Bound Encryption
+on). Preview first, then apply from an elevated shell and roll back:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
@@ -445,8 +445,11 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPostur
 pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
 ```
 
-The blocked extension IDs are a documented starting set (well-known authenticator and
-password-manager extensions); verify them and extend `-ExtensionBlockId` for your environment. The
+By default the script blocks only the well-known authenticator extensions; add
+`-IncludePasswordManagerExtensions` to also block the password-manager extensions (Bitwarden,
+1Password, LastPass, Dashlane). That set is opt-in, not a default, because blocking a password-manager
+extension can push a user back to browser-saved passwords. The blocked IDs are a documented starting
+set; verify them and extend `-ExtensionBlockId` for your environment. The
 script reports, without changing, the talk defenses that are not a single machine-policy value:
 Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local administrator
 rights (deferring the full membership and LAPS view to `Export-LocalAdminAndLapsPosture.ps1`).

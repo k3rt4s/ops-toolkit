@@ -317,8 +317,12 @@ Source: Flare "How Information Stealers Work" talk, YouTube FmF8cjViSlI.
 - Shipped 2026-09-01 as `Set-BrowserCredentialPosture.ps1` under
   `it-operations\windows-hardening\`; see CHANGELOG. The enforce/report split narrowed to
   what a local machine policy can actually pin (Chrome and Edge extension block, Chrome
-  Application-Bound Encryption), with everything else reported. This item is done; it stays
-  here only as the ingestion record for the talk.
+  Application-Bound Encryption), with everything else reported. The default block list was
+  narrowed from the talk's blanket recommendation: authenticator extensions are blocked by
+  default, but the password-manager extensions are opt-in via `-IncludePasswordManagerExtensions`,
+  because for a public tool a default that blocks a password-manager extension can push a user
+  back to browser-saved passwords (Jon's call, 2026-09-01). This item is done; it stays here only
+  as the ingestion record for the talk.
 
 ## Ingested 2026-08-21: public talk and summit digests
 

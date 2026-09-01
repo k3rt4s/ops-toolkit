@@ -5,6 +5,30 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-01
+
+### Added: browser credential-theft surface hardening
+
+- Added `Set-BrowserCredentialPosture.ps1` under `it-operations\windows-hardening`, which
+  reduces the surface an information stealer harvests from a browser in a single pass.
+- Enforces, with a rollback record, the two browser policies that a local machine policy
+  can pin: blocking the configured authenticator and password-manager browser extensions
+  in Chrome and Edge (via `ExtensionSettings`, merged into any existing policy), and
+  pinning Chrome Application-Bound Encryption on (`ApplicationBoundEncryptionEnabled`).
+- Reports, without changing, the talk defenses that are not a single machine-policy value:
+  Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local
+  administrator rights (deferring the full membership and LAPS view to the companion
+  `Export-LocalAdminAndLapsPosture.ps1` rather than duplicating it).
+- Mirrors the plan/apply/rollback and `ShouldProcess` structure of
+  `Set-WorkstationLockPosture.ps1`: `-WhatIf` writes the plan and previews without
+  touching the registry, and `-Rollback` restores every value a prior run changed.
+- Made the registry read helper robust under `Set-StrictMode 3.0` for the common case of a
+  browser policy key that exists with only some values set, which a bare property access
+  would have thrown on.
+- Added a paired `-WhatIf`/executing Pester block asserting the preview writes nothing and
+  the executing run blocks the extensions and pins ABE; the state-changing Windows suite is
+  now eleven scripts.
+
 ## 2026-08-31
 
 ### Fixed: bounded live-integration validation

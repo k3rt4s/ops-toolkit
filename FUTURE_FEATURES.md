@@ -296,6 +296,30 @@ Things that look like gaps and are not.
   remote machines, because desired state comes from the hardening scripts rather than
   from any machine. Remote targets therefore do not need a copy of this repo.
 
+## Ingested 2026-08-31: Flare info-stealers talk
+
+Source: Flare "How Information Stealers Work" talk, YouTube FmF8cjViSlI.
+
+- Browser and credential hardening posture for workstation endpoints against infostealers.
+  Enforce the blockable defenses the talk names and report the rest: block
+  authenticator and password-manager browser extensions by policy (they live inside the
+  stealer's blast radius, so a browser-extension authenticator is not a second factor),
+  confirm Chrome Application-Bound Encryption is not disabled, and report Device-Bound
+  Session Credentials support, SmartScreen state, and any unnecessary local-admin
+  membership as posture. Enforce/report split follows the repo's own line between
+  `Set-WorkstationLockPosture.ps1` (enforces, `SupportsShouldProcess`) and
+  `Test-WindowsHardeningState.ps1` (reads). Copy the ShouldProcess skeleton from
+  `Set-WorkstationLockPosture.ps1`, write timestamped plan/state CSV plus rollback JSON
+  to `C:\Code_data\ops-toolkit\<domain>`, and pair with a Pester WhatIf-plus-execute test
+  via `Invoke-WindowsScriptPair`. Folder placement, top-level `scripts\windows-hardening\`
+  versus `scripts\it-operations\windows-hardening\`, tied into the standing "Open question
+  for the developer" below; Jon chose `it-operations\windows-hardening\`.
+- Shipped 2026-09-01 as `Set-BrowserCredentialPosture.ps1` under
+  `it-operations\windows-hardening\`; see CHANGELOG. The enforce/report split narrowed to
+  what a local machine policy can actually pin (Chrome and Edge extension block, Chrome
+  Application-Bound Encryption), with everything else reported. This item is done; it stays
+  here only as the ingestion record for the talk.
+
 ## Ingested 2026-08-21: public talk and summit digests
 
 - Internal MCP servers in Go with the tool-ladder pattern; treat agent-reachable endpoints as new unvetted employees, least-privilege scopes and deterministic gates on mutating verbs. Source: Infosec Age of AI Summit 2026, talks 11 and AMA, digest_infosec_age_of_ai_summit_2026.md

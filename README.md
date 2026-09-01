@@ -69,32 +69,32 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 
 ## Script and Data Inventory
 
-| Path                                          | Purpose                                                           |
-| --------------------------------------------- | ----------------------------------------------------------------- |
-| `scripts\active-directory\`                   | AD reports, exports, and password notification scripts            |
-| `scripts\azure\`                              | Azure PowerShell and Azure CLI automation                         |
-| `scripts\entra\`                              | Entra ID identity reporting through Microsoft Graph               |
-| `scripts\iis\`                                | IIS setup and HTTP security header configuration                  |
-| `scripts\it-operations\performance\`          | Workstation performance posture (power plan, exclusions)          |
-| `scripts\it-operations\printers\`             | Windows printer connection helpers                                |
-| `scripts\it-operations\utilities\`            | General endpoint and admin utilities                              |
-| `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers                      |
-| `scripts\it-operations\lifecycle\`            | OS support lifecycle, upgrade readiness, and update health        |
-| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock, sleep, BitLocker, and local admin posture  |
-| `scripts\certificates\`                       | Certificate expiry across stores, IIS bindings, and TLS endpoints |
-| `scripts\logging\`                            | Security logging posture: what is being recorded and for how long |
-| `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline           |
-| `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration                  |
-| `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                            |
-| `scripts\reporting\`                          | Evidence packs assembled from the read-only collectors            |
-| `scripts\utilities\`                          | General utilities, CSV comparison, and folder diff tools          |
-| `scripts\windows-hardening\`                  | Windows telemetry, bloatware, and cipher hardening                |
-| `data\it-operations\printers\`                | Example non-secret printer input files                            |
-| `data\windows-hardening\`                     | Bloatware allow/remove package lists                              |
-| `docs\labs\`                                  | Azure and ELK lab materials                                       |
-| `docs\iis\`                                   | IIS header notes                                                  |
-| `modules\OpsToolkit.Reporting\`               | Shared report-writing helpers imported by scripts                 |
-| `archive\`                                    | Retired material retained inside the ops-toolkit repo             |
+| Path                                          | Purpose                                                                              |
+| --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `scripts\active-directory\`                   | AD reports, exports, and password notification scripts                               |
+| `scripts\azure\`                              | Azure PowerShell and Azure CLI automation                                            |
+| `scripts\entra\`                              | Entra ID identity reporting through Microsoft Graph                                  |
+| `scripts\iis\`                                | IIS setup and HTTP security header configuration                                     |
+| `scripts\it-operations\performance\`          | Workstation performance posture (power plan, exclusions)                             |
+| `scripts\it-operations\printers\`             | Windows printer connection helpers                                                   |
+| `scripts\it-operations\utilities\`            | General endpoint and admin utilities                                                 |
+| `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers                                         |
+| `scripts\it-operations\lifecycle\`            | OS support lifecycle, upgrade readiness, and update health                           |
+| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock, sleep, browser credential, BitLocker, and local admin posture |
+| `scripts\certificates\`                       | Certificate expiry across stores, IIS bindings, and TLS endpoints                    |
+| `scripts\logging\`                            | Security logging posture: what is being recorded and for how long                    |
+| `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline                              |
+| `scripts\microsoft-365\`                      | Exchange Online and Microsoft 365 administration                                     |
+| `scripts\pentesting\`                         | AutoRecon workstation/lab setup helper                                               |
+| `scripts\reporting\`                          | Evidence packs assembled from the read-only collectors                               |
+| `scripts\utilities\`                          | General utilities, CSV comparison, and folder diff tools                             |
+| `scripts\windows-hardening\`                  | Windows telemetry, bloatware, and cipher hardening                                   |
+| `data\it-operations\printers\`                | Example non-secret printer input files                                               |
+| `data\windows-hardening\`                     | Bloatware allow/remove package lists                                                 |
+| `docs\labs\`                                  | Azure and ELK lab materials                                                          |
+| `docs\iis\`                                   | IIS header notes                                                                     |
+| `modules\OpsToolkit.Reporting\`               | Shared report-writing helpers imported by scripts                                    |
+| `archive\`                                    | Retired material retained inside the ops-toolkit repo                                |
 
 ## Examples
 
@@ -434,10 +434,27 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.
 pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
 ```
 
+Harden the browser credential-theft surface an information stealer harvests in one pass (block
+authenticator and password-manager browser extensions in Chrome and Edge, and pin Chrome
+Application-Bound Encryption on). Preview first, then apply from an elevated shell and roll back:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
+# Elevated shell — every enforced setting is an HKLM machine policy
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
+```
+
+The blocked extension IDs are a documented starting set (well-known authenticator and
+password-manager extensions); verify them and extend `-ExtensionBlockId` for your environment. The
+script reports, without changing, the talk defenses that are not a single machine-policy value:
+Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local administrator
+rights (deferring the full membership and LAPS view to `Export-LocalAdminAndLapsPosture.ps1`).
+
 > **Folder note:** this repo has two `windows-hardening` folders that cover different scopes.
 > `scripts\windows-hardening\` contains system-level hardening (TLS cipher policy, Windows 11
 > privacy/telemetry, AppX bloatware removal) and is typically run once at build or provisioning time.
-> `scripts\it-operations\windows-hardening\` contains operator posture scripts (idle-lock, sleep)
+> `scripts\it-operations\windows-hardening\` contains operator posture scripts (idle-lock, sleep, browser credential hardening)
 > that are run and rolled back as workload needs change.
 
 Report OS support lifecycle and how long each machine has left:

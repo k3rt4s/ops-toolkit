@@ -4,15 +4,15 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 ## Contents
 
-| Path                            | Purpose                                          |
-| ------------------------------- | ------------------------------------------------ |
-| `networking\`                   | Network adapter MAC address helpers.             |
-| `performance\`                  | Workstation performance posture helpers.         |
-| `printers\`                     | Windows printer connection helpers.              |
-| `utilities\`                    | General endpoint and admin utilities.            |
-| `windows-file-cleanup\`         | File, temp-folder, and cache reclaim helpers.    |
-| `windows-hardening\`            | Workstation idle-lock and sleep posture helpers. |
-| `..\..\data\it-operations\`     | Example non-secret input data.                   |
+| Path                        | Purpose                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| `networking\`               | Network adapter MAC address helpers.                                                      |
+| `performance\`              | Workstation performance posture helpers.                                                  |
+| `printers\`                 | Windows printer connection helpers.                                                       |
+| `utilities\`                | General endpoint and admin utilities.                                                     |
+| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                             |
+| `windows-hardening\`        | Workstation idle-lock and sleep posture, plus browser credential-theft surface hardening. |
+| `..\..\data\it-operations\` | Example non-secret input data.                                                            |
 
 ## Examples
 
@@ -126,4 +126,23 @@ Roll back the lock posture:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+```
+
+Preview hardening the browser credential-theft surface (block authenticator and password-manager
+browser extensions in Chrome and Edge, pin Chrome Application-Bound Encryption on):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
+```
+
+Apply the browser credential posture (elevated; every enforced setting is an HKLM machine policy):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1
+```
+
+Roll back the browser credential posture:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
 ```

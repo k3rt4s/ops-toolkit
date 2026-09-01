@@ -1,6 +1,6 @@
 #Requires -Modules Pester
 
-# The ten Windows scripts that change this machine: registry values, services,
+# The eleven Windows scripts that change this machine: registry values, services,
 # printers, network adapters, provisioned apps, scheduled tasks, power plans, Defender
 # exclusions, and files.
 #
@@ -241,6 +241,40 @@ Describe 'Set-WorkstationLockPosture' {
         # Expressed in seconds, because the registry value is in seconds and an
         # off-by-sixty here is a lock policy that never fires.
         $timeout[0].Detail | Should -Be '1380'
+    }
+}
+
+Describe 'Set-BrowserCredentialPosture' {
+    BeforeAll {
+        $script:browsercred = Invoke-WindowsScriptPair -Tag 'browsercred' `
+            -RelativePath 'scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1' `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'browsercred') }
+    }
+
+    It 'runs to completion in both modes' {
+        $script:browsercred.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:browsercred.WhatIf.Output)"
+        $script:browsercred.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:browsercred.Execute.Output)"
+    }
+
+    It 'changes nothing under -WhatIf' {
+        # Every enforced setting is an HKLM machine policy gated behind ShouldProcess, so
+        # a preview run has nothing to ignore: it must record no registry write at all.
+        Assert-NoChangeUnderWhatIf -Pair $script:browsercred
+    }
+
+    It 'blocks the browser extensions and pins Chrome ABE when executing' {
+        $mutations = @(Get-MutationRecord -Path $script:browsercred.ExecuteLog)
+        $mutations.Count | Should -BeGreaterThan 0
+        # The extension block is the point of the script: an authenticator or password
+        # manager living as a browser extension is harvested with the browser, so the
+        # ExtensionSettings policy has to actually be written.
+        $extension = @($mutations | Where-Object { $_.Target -match 'ExtensionSettings' })
+        $extension.Count | Should -BeGreaterThan 0
+        # Application-Bound Encryption is the other half: without it the cookie and
+        # password store is readable by plain file IO from the user's own context.
+        $abe = @($mutations | Where-Object { $_.Target -match 'ApplicationBoundEncryptionEnabled' })
+        $abe.Count | Should -BeGreaterThan 0
+        $abe[0].Detail | Should -Be '1'
     }
 }
 

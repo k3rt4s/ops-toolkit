@@ -4,10 +4,62 @@ Backlog for the ops-toolkit. Items flow from here onto the work board when picke
 and off the board into the repository history when done. Shipped work and its
 acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
+## Scored index
+
+Every unshipped feature in this file, one bullet each, with the score and return blocks
+`ai_development/scripts/score_board.py` reads. The prose under the heading each bullet
+names is the item; this index is the scored surface over it. Keep it current: add a
+bullet when a feature is filed, mark it moved when it goes to the work board, and drop
+it when it ships. Scored 2026-09-06. Nothing here has been approved to build.
+
+- **paths-default** Replace the hard-coded absolute paths in five scripts with something
+  a machine other than this one can run. See "Hard-coded absolute paths".
+  `score: kind=debt gain=1/4/24 p=0.3 hours=0.5/1.5/4 ai=2 risk=0.2x1 rev=two-way conf=assessed flags=security,external,shipped id=paths-default`
+  `return: likelihood about 3 in 10 that one of the five scripts runs with its defaults on a machine that is not this workstation within the year, estimated because no external run has ever been observed, with the countable part being 10 hard-coded absolute paths across 5 scripts on 2026-09-06 against 9 across 4 when this item was filed, one new instance arriving with Set-BrowserCredentialPosture.ps1 on 2026-09-01, so the defect reproduces once per new state-changing script; impact 1 to 24 h, the sharpest case being Set-WorkstationPerformance.ps1 adding a Defender path exclusion for C:/Code_data on someone else's machine, a security setting they did not ask for, plus discovery, removal and the explanation, and the mildest being reports written to a directory layout that does not exist there, in a public MIT repository; evidence a grep of scripts/ for the five literals on 2026-09-06, Set-WorkstationPerformance.ps1 line 52 for the exclusion default and lines 59, 70, 71, 90, 99 to 102 and 136 across the other four, and the repository standing rule on the work board that says parameters only`
+  - `worker: sonnet 1.5/3/6 h`
+
+- **wu-hang** Bound the live Windows Update calls in `Export-WindowsUpdateHealth.ps1` and
+  report the update-history section `Unmeasured` on timeout. See
+  "Export-WindowsUpdateHealth hangs on a busy update stack".
+  `score: kind=bug gain=0.5/2/8 p=1 freq=5 hours=0.5/1.5/3 ai=3 risk=0.15x2 rev=two-way conf=tested id=wu-hang`
+  `return: likelihood about 5 hangs a year, from about 30 strict validation runs a year that include this collector times roughly 1 run in 6 landing while MoUsoCoreWorker holds an active orchestration session, with 2 hangs actually observed, on 2026-08-30 through Pester and on 2026-08-31 standalone; impact 0.5 to 8 h, a health check that returns nothing on exactly the busy update stack it exists to measure, plus the run it stalls, where the first occurrence cost a full lane session of isolation runs before the cause was known and a recurrence now costs recognition time; evidence C:/Code_data/ops-toolkit/wu-health-diagnostic-2026-08-31/run.log showing the 900 second cap hit with MoUsoCoreWorker pid 91524 at 66 percent CPU and zero collector output, C:/Code_data/ops-toolkit/strict-stall-full-directory-detailed-2026-08-30.log for the Pester-side stall, and Export-WindowsUpdateHealth.ps1 lines 169 and 178 to 183 for the unbounded Get-HotFix and WUA COM calls`
+  - `worker: sonnet 2/4/8 h`
+
+- **pack-scope-excl** Allow `-ScopeExclusion` when the evidence pack's scope comes only
+  from management-plane inputs. See "Evidence-pack follow-ups".
+  `score: kind=bug gain=0.25/0.75/2 p=0.5 freq=2 hours=0.25/0.75/2 ai=1 rev=two-way conf=assessed id=pack-scope-excl`
+  `return: likelihood about 2 occasions a year on which a pack is run from management-plane inputs only, with about 1 in 2 of those wanting a scope exclusion, estimated because no such run has been made yet, so the count behind it is zero runs rather than a measured rate; impact 0.25 to 2 h, the run throws at the target-validation gate with a message about -ComputerName that does not describe the actual situation, and the only workaround is to invent a -ComputerName list purely so an exclusion can be named; evidence scripts/reporting/Export-SecurityControlEvidencePack.ps1 lines 157 to 168, where requestedTargets is built only from -ComputerName and -TargetListPath and any exclusion not found in it throws, read on 2026-09-06`
+  - `worker: sonnet 1/2/4 h`
+
+- **pack-manifest-doc** Explain the coverage-manifest `SourceSHA256` and `SHA256`
+  difference in the input-sources row and document that the sanitized manifest re-runs
+  only from the pack root. See "Evidence-pack follow-ups".
+  `score: kind=docs gain=0.5/1/4 p=0.3 freq=2 hours=0.25/0.5/1 ai=1 rev=two-way conf=assessed id=pack-manifest-doc`
+  `return: likelihood about 2 packs a year reaching a reader who compares hashes, with about 3 in 10 of those readers noticing the mismatch, estimated with no count behind it because no pack has yet been handed to an outside reader; impact 0.5 to 4 h, a reader of an audit-adjacent artifact sees SourceSHA256 and SHA256 disagree on the coverage manifest and has to be told it is a deliberate path rewrite rather than tampering, which is exactly the doubt the traceability work exists to remove; evidence scripts/reporting/Export-SecurityControlEvidencePack.ps1 lines 415, 435 and 645 to 650, where the manifest is copied and rewritten with pack-relative paths after its source hash is taken, read on 2026-09-06`
+  - `worker: haiku 0.5/1/2 h`
+
+- **pack-recon-test** Add an end-to-end regression test for reconciliation gaps with the
+  Defender inventory absent from the coverage manifest. See "Evidence-pack follow-ups".
+  `score: kind=prevent gain=1/3/8 p=0.25 hours=0.5/1/2.5 ai=2 rev=two-way conf=assessed id=pack-recon-test`
+  `return: likelihood about 1 in 4 that the reconciliation-gap display path regresses again within the year, from one regression already shipped and fixed in that exact path on 2026-08-30, over 27 commits touching scripts in the five weeks to 2026-09-06; impact 1 to 8 h, an evidence pack that renders a reconciliation gap wrongly or drops it, which is the failure the whole NotAssessed discipline exists to prevent, found by a reader rather than by the suite; evidence tests/Export-SecurityControlEvidencePack.Tests.ps1 lines 47 to 58 already cover the grading function with DefenderAuthorityIncluded false, so what is actually missing is narrower than this item as filed, an end-to-end pack run with a coverage manifest that omits the Defender inventory, read on 2026-09-06`
+  - `worker: sonnet 1.5/3/5 h`
+
+- **net-hygiene** A RITA-style network hygiene self-audit, direct-IP HTTP and abnormal
+  subdomain-count DNS. See "Ingested 2026-08-21: public talk and summit digests".
+  `score: kind=feature gain=2/8/20 p=0.3 hours=2/6/16 ai=6 risk=0.1x2 rev=two-way conf=opinion id=net-hygiene`
+  `return: likelihood about 3 in 10 that this lands and is used, estimated with nothing counted, and it is low because the item as filed needs a network event stream over time, which is the exact capability the 2026-08-17 review rejected for this repository; impact what the developer keeps living with is no answer to direct-IP HTTP or abnormal subdomain-count DNS on a machine he is assessing, worth 2 to 20 h of manual work on each engagement that needs it; evidence the Ingested 2026-08-21 section of this file for the item and Considered and rejected for the Behavioural detection signals decision it collides with, both read on 2026-09-06`
+  - `worker: sonnet 6/12/24 h, and not dispatchable until its data source is decided`
+
+- **mcp-tool-ladder** The internal-MCP tool-ladder and least-privilege practice note. See
+  "Ingested 2026-08-21: public talk and summit digests".
+  `score: kind=docs gain=0.5/2/6 p=0.2 hours=1/3/8 ai=2 rev=two-way conf=opinion id=mcp-tool-ladder`
+  `return: likelihood about 1 in 5 that this becomes work in this repository, estimated with no count, because ops-toolkit ships read-only PowerShell collectors and this item is about building internal MCP servers in Go, a different product line; impact none to this toolkit, the cost of leaving it is that a useful practice note about least-privilege scopes and deterministic gates on mutating verbs sits in the wrong backlog where the project that would use it never reads it; evidence the first bullet of Ingested 2026-08-21 in this file, sourced to the Infosec Age of AI Summit 2026 digest, read on 2026-09-06`
+  - `worker: sonnet 3/6/12 h if it is ever built, and not in this repository`
+
 ## Ready to pick up
 
-One item, the hard-coded absolute paths described below. There is also one open
-question for the developer, further down.
+Seven unshipped features, indexed and scored above. There is also one open question for
+the developer, further down, which is a decision rather than work.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
 built the same day and are shipped: the endpoint telemetry and audit-logging posture
@@ -47,7 +99,7 @@ The four items opened on 2026-08-15 were all completed the same day:
 - `Page-File-Bleed.ps1` was kept rather than retired, and given a header. The help
   gate has no exemptions left.
 
-## Considered and not queued
+## Considered and rejected
 
 Recorded so the reasoning is not re-derived later.
 
@@ -163,14 +215,19 @@ plant the null shapes in the fixtures, a device that has never checked in, a dev
 no onboarding state, because a fully-populated fixture proves only the happy path and
 that is how both Azure collectors shipped scanning nothing.
 
-## Queued item: hard-coded absolute paths
+## Hard-coded absolute paths
 
-Nine of them across four scripts, in a repository whose standing rules say parameters
-only. `Invoke-DiskSpaceReclaim`, `Set-WorkstationLockPosture`, and
-`Set-WorkstationPerformance` default their report directory to `C:\Code_data`, and the
-last also defaults a **Defender exclusion** to `C:\Code_data`, which is a security
-setting pointed at one particular machine's layout. `Invoke-WindowsFileCleanup` carries
-`C:\Temp`, `D:\Temp`, `E:\Temp`, `I:\Temp`, and `C:\Code` in its own lists.
+Ten of them across five scripts as of 2026-09-06, in a public repository whose standing
+rules say parameters only. `Invoke-DiskSpaceReclaim`, `Set-WorkstationLockPosture`,
+`Set-WorkstationPerformance`, and now `Set-BrowserCredentialPosture` default their report
+directory to `C:\Code_data`, and `Set-WorkstationPerformance` also defaults a **Defender
+exclusion** to `C:\Code_data`, which is a security setting pointed at one particular
+machine's layout. `Invoke-WindowsFileCleanup` carries `C:\Temp`, `D:\Temp`, `E:\Temp`,
+`I:\Temp`, and `C:\Code` in its own lists.
+
+It was nine across four when this was filed. `Set-BrowserCredentialPosture.ps1` shipped
+on 2026-09-01 with the same `C:\Code_data` default, so the count grows by one with each
+new state-changing script rather than holding still.
 
 Not done in the same pass that found them, because changing a default changes behaviour
 for anyone already running these, and what the replacement should be is a product
@@ -199,7 +256,7 @@ were corrected and covered by regression tests.
 The deferred `LOG-03`, `LOG-04`, and `VULN-01` ideas remain candidates only. They still
 need a named data source and operator need before they become stories.
 
-## Backlog: evidence-pack follow-ups
+## Evidence-pack follow-ups
 
 - Allow `-ScopeExclusion` when scope comes only from management-plane inputs. Today,
   any exclusion without `-ComputerName` throws at the target-validation gate.
@@ -209,7 +266,7 @@ need a named data source and operator need before they become stories.
 - Add a regression test for reconciliation gaps with the Defender inventory absent
   from the manifest. The display fix shipped 2026-08-30.
 
-## Backlog: Export-WindowsUpdateHealth hangs on a busy update stack
+## Export-WindowsUpdateHealth hangs on a busy update stack
 
 Proven 2026-08-31 by a bounded standalone run, no Pester involved: the collector hung
 past a 15-minute cap with zero output while MoUsoCoreWorker held an active update
@@ -327,5 +384,5 @@ Source: Flare "How Information Stealers Work" talk, YouTube FmF8cjViSlI.
 ## Ingested 2026-08-21: public talk and summit digests
 
 - Internal MCP servers in Go with the tool-ladder pattern; treat agent-reachable endpoints as new unvetted employees, least-privilege scopes and deterministic gates on mutating verbs. Source: Infosec Age of AI Summit 2026, talks 11 and AMA, digest_infosec_age_of_ai_summit_2026.md
-- EDR coverage differential hunt, diff EDR endpoint count vs inventory vs AD vs IP space, as a coverage-gap-report script. Source: Threat Hunting Summit 2026, Hartman 04:10:20-04:12:00, digest_threat_hunting_summit_2026.md
+- EDR coverage differential hunt, diff EDR endpoint count vs inventory vs AD vs IP space, as a coverage-gap-report script. Source: Threat Hunting Summit 2026, Hartman 04:10:20-04:12:00, digest_threat_hunting_summit_2026.md. Covered: this is what `Export-CoverageReconciliation.ps1` and the Defender device collector shipped on 2026-08-17 already do, so it is not indexed as unshipped work.
 - RITA-style network hygiene self-audit (direct-IP HTTP, abnormal subdomain-count DNS). Source: Threat Hunting Summit 2026, Kidane 03:44:00-03:50:00, digest_threat_hunting_summit_2026.md

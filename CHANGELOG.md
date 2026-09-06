@@ -5,6 +5,15 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-06
+
+### Changed: board and backlog scored
+
+- Scored every live item on the work board and every unshipped feature in
+  `FUTURE_FEATURES.md` under `ai_development/docs/board-scoring.md`, added a `Scored index`
+  to the top of `FUTURE_FEATURES.md`, and saved the ranked review to
+  `C:\Code_data\ops-toolkit\board_review_2026-09-06.md`. No code changed.
+
 ## 2026-09-01
 
 ### Added: browser credential-theft surface hardening

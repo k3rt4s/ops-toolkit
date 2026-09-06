@@ -6,44 +6,6 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Scored index
 
-Every unshipped feature in this file, one bullet each, with the score and return blocks
-`ai_development/scripts/score_board.py` reads. The prose under the heading each bullet
-names is the item; this index is the scored surface over it. Keep it current: add a
-bullet when a feature is filed, mark it moved when it goes to the work board, and drop
-it when it ships. Scored 2026-09-06. Nothing here has been approved to build.
-
-- **paths-default** Replace the hard-coded absolute paths in five scripts with something
-  a machine other than this one can run. See "Hard-coded absolute paths".
-  `score: kind=debt gain=1/4/24 p=0.3 hours=0.5/1.5/4 ai=2 risk=0.2x1 rev=two-way conf=assessed flags=security,external,shipped id=paths-default`
-  `return: likelihood about 3 in 10 that one of the five scripts runs with its defaults on a machine that is not this workstation within the year, estimated because no external run has ever been observed, with the countable part being 10 hard-coded absolute paths across 5 scripts on 2026-09-06 against 9 across 4 when this item was filed, one new instance arriving with Set-BrowserCredentialPosture.ps1 on 2026-09-01, so the defect reproduces once per new state-changing script; impact 1 to 24 h, the sharpest case being Set-WorkstationPerformance.ps1 adding a Defender path exclusion for C:/Code_data on someone else's machine, a security setting they did not ask for, plus discovery, removal and the explanation, and the mildest being reports written to a directory layout that does not exist there, in a public MIT repository; evidence a grep of scripts/ for the five literals on 2026-09-06, Set-WorkstationPerformance.ps1 line 52 for the exclusion default and lines 59, 70, 71, 90, 99 to 102 and 136 across the other four, and the repository standing rule on the work board that says parameters only`
-  - `worker: sonnet 1.5/3/6 h`
-
-- **wu-hang** Bound the live Windows Update calls in `Export-WindowsUpdateHealth.ps1` and
-  report the update-history section `Unmeasured` on timeout. See
-  "Export-WindowsUpdateHealth hangs on a busy update stack".
-  `score: kind=bug gain=0.5/2/8 p=1 freq=5 hours=0.5/1.5/3 ai=3 risk=0.15x2 rev=two-way conf=tested id=wu-hang`
-  `return: likelihood about 5 hangs a year, from about 30 strict validation runs a year that include this collector times roughly 1 run in 6 landing while MoUsoCoreWorker holds an active orchestration session, with 2 hangs actually observed, on 2026-08-30 through Pester and on 2026-08-31 standalone; impact 0.5 to 8 h, a health check that returns nothing on exactly the busy update stack it exists to measure, plus the run it stalls, where the first occurrence cost a full lane session of isolation runs before the cause was known and a recurrence now costs recognition time; evidence C:/Code_data/ops-toolkit/wu-health-diagnostic-2026-08-31/run.log showing the 900 second cap hit with MoUsoCoreWorker pid 91524 at 66 percent CPU and zero collector output, C:/Code_data/ops-toolkit/strict-stall-full-directory-detailed-2026-08-30.log for the Pester-side stall, and Export-WindowsUpdateHealth.ps1 lines 169 and 178 to 183 for the unbounded Get-HotFix and WUA COM calls`
-  - `worker: sonnet 2/4/8 h`
-
-- **pack-scope-excl** Allow `-ScopeExclusion` when the evidence pack's scope comes only
-  from management-plane inputs. See "Evidence-pack follow-ups".
-  `score: kind=bug gain=0.25/0.75/2 p=0.5 freq=2 hours=0.25/0.75/2 ai=1 rev=two-way conf=assessed id=pack-scope-excl`
-  `return: likelihood about 2 occasions a year on which a pack is run from management-plane inputs only, with about 1 in 2 of those wanting a scope exclusion, estimated because no such run has been made yet, so the count behind it is zero runs rather than a measured rate; impact 0.25 to 2 h, the run throws at the target-validation gate with a message about -ComputerName that does not describe the actual situation, and the only workaround is to invent a -ComputerName list purely so an exclusion can be named; evidence scripts/reporting/Export-SecurityControlEvidencePack.ps1 lines 157 to 168, where requestedTargets is built only from -ComputerName and -TargetListPath and any exclusion not found in it throws, read on 2026-09-06`
-  - `worker: sonnet 1/2/4 h`
-
-- **pack-manifest-doc** Explain the coverage-manifest `SourceSHA256` and `SHA256`
-  difference in the input-sources row and document that the sanitized manifest re-runs
-  only from the pack root. See "Evidence-pack follow-ups".
-  `score: kind=docs gain=0.5/1/4 p=0.3 freq=2 hours=0.25/0.5/1 ai=1 rev=two-way conf=assessed id=pack-manifest-doc`
-  `return: likelihood about 2 packs a year reaching a reader who compares hashes, with about 3 in 10 of those readers noticing the mismatch, estimated with no count behind it because no pack has yet been handed to an outside reader; impact 0.5 to 4 h, a reader of an audit-adjacent artifact sees SourceSHA256 and SHA256 disagree on the coverage manifest and has to be told it is a deliberate path rewrite rather than tampering, which is exactly the doubt the traceability work exists to remove; evidence scripts/reporting/Export-SecurityControlEvidencePack.ps1 lines 415, 435 and 645 to 650, where the manifest is copied and rewritten with pack-relative paths after its source hash is taken, read on 2026-09-06`
-  - `worker: haiku 0.5/1/2 h`
-
-- **pack-recon-test** Add an end-to-end regression test for reconciliation gaps with the
-  Defender inventory absent from the coverage manifest. See "Evidence-pack follow-ups".
-  `score: kind=prevent gain=1/3/8 p=0.25 hours=0.5/1/2.5 ai=2 rev=two-way conf=assessed id=pack-recon-test`
-  `return: likelihood about 1 in 4 that the reconciliation-gap display path regresses again within the year, from one regression already shipped and fixed in that exact path on 2026-08-30, over 27 commits touching scripts in the five weeks to 2026-09-06; impact 1 to 8 h, an evidence pack that renders a reconciliation gap wrongly or drops it, which is the failure the whole NotAssessed discipline exists to prevent, found by a reader rather than by the suite; evidence tests/Export-SecurityControlEvidencePack.Tests.ps1 lines 47 to 58 already cover the grading function with DefenderAuthorityIncluded false, so what is actually missing is narrower than this item as filed, an end-to-end pack run with a coverage manifest that omits the Defender inventory, read on 2026-09-06`
-  - `worker: sonnet 1.5/3/5 h`
-
 - **net-hygiene** A RITA-style network hygiene self-audit, direct-IP HTTP and abnormal
   subdomain-count DNS. See "Ingested 2026-08-21: public talk and summit digests".
   `score: kind=feature gain=2/8/20 p=0.3 hours=2/6/16 ai=6 risk=0.1x2 rev=two-way conf=opinion id=net-hygiene`
@@ -56,9 +18,43 @@ it when it ships. Scored 2026-09-06. Nothing here has been approved to build.
   `return: likelihood about 1 in 5 that this becomes work in this repository, estimated with no count, because ops-toolkit ships read-only PowerShell collectors and this item is about building internal MCP servers in Go, a different product line; impact none to this toolkit, the cost of leaving it is that a useful practice note about least-privilege scopes and deterministic gates on mutating verbs sits in the wrong backlog where the project that would use it never reads it; evidence the first bullet of Ingested 2026-08-21 in this file, sourced to the Infosec Age of AI Summit 2026 digest, read on 2026-09-06`
   - `worker: sonnet 3/6/12 h if it is ever built, and not in this repository`
 
+## Moved to the work board
+
+Five features left this index on 2026-09-06 when the developer approved them. Their
+score and return blocks, and the full build detail, are on the work board under
+Pending. This heading is a record, not a live section; nothing here is scored twice.
+
+- **paths-default** Replace the hard-coded absolute paths in five scripts with something
+  a machine other than this one can run. See "Hard-coded absolute paths".
+  - `worker: sonnet 1.5/3/6 h`
+  Moved to the work board Pending section on 2026-09-06.
+
+- **wu-hang** Bound the live Windows Update calls in `Export-WindowsUpdateHealth.ps1` and
+  report the update-history section `Unmeasured` on timeout. See
+  "Export-WindowsUpdateHealth hangs on a busy update stack".
+  - `worker: sonnet 2/4/8 h`
+  Moved to the work board Pending section on 2026-09-06.
+
+- **pack-scope-excl** Allow `-ScopeExclusion` when the evidence pack's scope comes only
+  from management-plane inputs. See "Evidence-pack follow-ups".
+  - `worker: sonnet 1/2/4 h`
+  Moved to the work board Pending section on 2026-09-06.
+
+- **pack-manifest-doc** Explain the coverage-manifest `SourceSHA256` and `SHA256`
+  difference in the input-sources row and document that the sanitized manifest re-runs
+  only from the pack root. See "Evidence-pack follow-ups".
+  - `worker: haiku 0.5/1/2 h`
+  Moved to the work board Pending section on 2026-09-06.
+
+- **pack-recon-test** Add an end-to-end regression test for reconciliation gaps with the
+  Defender inventory absent from the coverage manifest. See "Evidence-pack follow-ups".
+  - `worker: sonnet 1.5/3/5 h`
+  Moved to the work board Pending section on 2026-09-06.
+
 ## Ready to pick up
 
-Seven unshipped features, indexed and scored above. There is also one open question for
+Two unshipped features are still indexed above; five more moved to the work board on
+2026-09-06. There is also one open question for
 the developer, further down, which is a decision rather than work.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all

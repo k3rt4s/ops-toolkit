@@ -5,6 +5,21 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-07
+
+### Fixed: scope exclusion on a management-plane-only evidence pack
+
+- `Export-SecurityControlEvidencePack.ps1` no longer throws when a
+  `-ScopeExclusion` names a target that is not in `-ComputerName` or
+  `-TargetListPath`, provided the requested target list is empty and either
+  `-DefenderDeviceInventoryPath` or `-CoverageManifestPath` was supplied. The
+  exclusion is carried into the excluded-key set exactly as an endpoint
+  exclusion is today, so the named machine is subtracted from the Defender and
+  reconciled populations and still appears in `summary.md` under "Excluded
+  endpoints" and in every endpoint control's scope fields. The throw remains
+  for the case where no management-plane input was supplied at all, because
+  there an exclusion really would invent scope.
+
 ## 2026-09-06
 
 ### Changed: board and backlog scored

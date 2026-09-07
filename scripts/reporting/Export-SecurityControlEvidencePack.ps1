@@ -164,7 +164,10 @@ foreach ($entry in @($ScopeExclusion | Where-Object { $_ })) {
         throw 'Every -ScopeExclusion entry needs non-empty Target and Reason values.'
     }
     if ($target -notin $requestedTargets) {
-        throw "Scope exclusion '$target' is not in -ComputerName or -TargetListPath. An exclusion cannot widen or invent the requested scope."
+        $managementPlaneScopeOnly = ($requestedTargets.Count -eq 0) -and [bool]($DefenderDeviceInventoryPath -or $CoverageManifestPath)
+        if (-not $managementPlaneScopeOnly) {
+            throw "Scope exclusion '$target' is not in -ComputerName or -TargetListPath. An exclusion cannot widen or invent the requested scope."
+        }
     }
     if (-not $seenExclusions.Add($target)) {
         throw "Scope exclusion '$target' was supplied more than once. Each excluded endpoint needs one unambiguous reason."

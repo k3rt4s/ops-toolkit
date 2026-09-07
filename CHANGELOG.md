@@ -7,6 +7,13 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-07
 
+### Added: end-to-end ungraded reconciliation-gap coverage
+
+- `tests\Integration.LocalCollectors.Tests.ps1` now covers an evidence pack whose
+  coverage manifest finds a reconciliation gap while the Defender inventory is not
+  one of the required reconciliation authorities, asserting that `EDR-01` remains
+  `NotAssessed` while still showing the ungraded gap count and limitation.
+
 ### Changed: evidence-pack input hash explanation
 
 - `Export-SecurityControlEvidencePack.ps1` now explains the one legitimate

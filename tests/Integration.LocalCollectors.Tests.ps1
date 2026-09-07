@@ -296,6 +296,67 @@ Describe 'Export-SecurityControlEvidencePack NotAssessed population accounting' 
     }
 }
 
+Describe 'Export-SecurityControlEvidencePack ungraded reconciliation gaps' {
+    BeforeAll {
+        $expectedPath = Join-Path $script:workRoot 'nograde-expected-endpoints.csv'
+        @(
+            [pscustomobject]@{ Name = $env:COMPUTERNAME }
+            [pscustomobject]@{ Name = 'MISSING-DEFENDER-AUTHORITY' }
+        ) | Export-Csv -LiteralPath $expectedPath -NoTypeInformation -Encoding utf8
+
+        $assetPath = Join-Path $script:workRoot 'nograde-asset-endpoints.csv'
+        @(
+            [pscustomobject]@{ Name = $env:COMPUTERNAME }
+        ) | Export-Csv -LiteralPath $assetPath -NoTypeInformation -Encoding utf8
+
+        $defenderPath = Join-Path $script:workRoot 'nograde-defender-devices.csv'
+        @(
+            [pscustomobject]@{
+                ComputerDnsName = $env:COMPUTERNAME
+                Verdict = 'Protected'
+                CoverageStatus = 'Onboarded'
+                ContactStatus = 'Reporting'
+            }
+        ) | Export-Csv -LiteralPath $defenderPath -NoTypeInformation -Encoding utf8
+
+        $manifestPath = Join-Path $script:workRoot 'nograde-coverage-manifest.json'
+        @(
+            @{ Name = 'ExpectedInventory'; Path = $expectedPath; KeyColumn = 'Name'; Required = $true }
+            @{ Name = 'AssetInventory'; Path = $assetPath; KeyColumn = 'Name'; Required = $true }
+        ) | ConvertTo-Json -Depth 5 -AsArray |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8
+
+        $script:ungradedGapRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1' `
+            -Argument @{
+            DefenderDeviceInventoryPath = $defenderPath
+            CoverageManifestPath = $manifestPath
+            CollectorTimeoutSeconds = 60
+            OutputDirectory = (Join-Path $script:workRoot 'pack-ungraded-gap')
+        } -TimeoutSeconds $script:evidencePackTimeoutSeconds
+        $script:ungradedGapSummary = $script:ungradedGapRun.Summary
+        $script:ungradedGapControls = if ($script:ungradedGapRun.Status -eq 'Completed') {
+            @(Import-Csv (Join-Path $script:ungradedGapSummary.PackDirectory 'control-assessment.csv'))
+        } else {
+            @()
+        }
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:ungradedGapRun
+    }
+
+    It 'keeps reconciliation gaps visible when Defender is not a reconciliation authority' {
+        $edr = $script:ungradedGapControls | Where-Object { $_.ControlId -eq 'EDR-01' }
+        $edr.Status | Should -Be 'NotAssessed'
+        $edr.Finding | Should -Match '\(not graded, the Defender inventory is not a reconciliation authority\)'
+        ($edr.Finding -match 'Reconciliation gaps: (?<GapCount>\d+)') | Should -BeTrue
+        [int]$Matches.GapCount | Should -BeGreaterThan 0
+        "$($edr.Limitations);$($edr.FailedReads)" |
+            Should -Match 'Defender inventory is not a readable required reconciliation authority'
+    }
+}
+
 Describe 'Export-SecurityControlEvidencePack scope exclusion validation' {
     It 'rejects an unknown target' {
         {

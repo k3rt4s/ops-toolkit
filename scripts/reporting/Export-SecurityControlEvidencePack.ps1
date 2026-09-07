@@ -23,6 +23,9 @@ Instructions:
 - -DefenderDeviceInventoryPath accepts the devices.csv written by
   Export-DefenderEndpointDeviceInventory.ps1. Pair it with -CoverageManifestPath to
   grade estate-wide endpoint protection against independent required authorities.
+- The coverage manifest's pack copy is deliberately rewritten with pack-relative
+  authority paths after its source hash is taken, so its SourceSHA256 and SHA256
+  legitimately differ; the Input sources section of summary.md explains why.
 - -IncludeEntra and -IncludeActiveDirectory are off by default because they need
   credentials and modules that a workstation may not have. Controls whose collector
   did not run are reported NotAssessed, never Met.
@@ -447,6 +450,22 @@ function Copy-OpsEvidenceInput {
     $record
 }
 
+function ConvertTo-OpsMarkdownTableValue {
+    <#
+    .SYNOPSIS
+    Normalize a value for one cell in a Markdown table row.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object]$Value
+    )
+
+    ([string]$Value -replace '\|', '/' -replace '\s+', ' ').Trim()
+}
+
 function ConvertTo-OpsEndpointKey {
     <#
     .SYNOPSIS
@@ -703,6 +722,7 @@ if ($CoverageManifestPath) {
             $coverageSnapshotItem = Get-Item -LiteralPath $coverageSnapshot
             $coverageInput.SHA256 = (Get-FileHash -LiteralPath $coverageSnapshot -Algorithm SHA256).Hash
             $coverageInput.ObservedAt = $coverageSnapshotItem.LastWriteTimeUtc
+            $coverageInput.Note = 'SHA256 differs from SourceSHA256 by design: authority paths in the pack copy were rewritten to pack-relative form so the manifest re-runs from the pack root. The source file is unmodified.'
 
             $coverageRun = Invoke-Collector -Name 'coverage-reconciliation' `
                 -RelativePath 'reporting\Export-CoverageReconciliation.ps1' `
@@ -1457,6 +1477,23 @@ $markdown.Add("Toolkit revision: $toolkitRevision")
 $markdown.Add("Assembly script SHA256: $scriptSha256")
 $markdown.Add('Artifact paths, observation times, control associations, and SHA256 hashes are recorded in `evidence-manifest.csv` and `evidence-manifest.json`.')
 $markdown.Add('`summary.json` is written last and is excluded from the manifest to avoid a self-referential hash.')
+$markdown.Add('')
+$markdown.Add("## Input sources")
+$markdown.Add('')
+$markdown.Add("| Name | Status | SourcePath | SnapshotPath | SourceSHA256 | SHA256 | Note |")
+$markdown.Add("| ---- | ------ | ---------- | ------------ | ------------ | ------ | ---- |")
+foreach ($inputSource in $inputSources) {
+    $inputName = ConvertTo-OpsMarkdownTableValue -Value $inputSource.Name
+    $inputStatus = ConvertTo-OpsMarkdownTableValue -Value $inputSource.Status
+    $inputSourcePath = ConvertTo-OpsMarkdownTableValue -Value $inputSource.SourcePath
+    $inputSnapshotPath = ConvertTo-OpsMarkdownTableValue -Value $inputSource.SnapshotPath
+    $inputSourceHash = ConvertTo-OpsMarkdownTableValue -Value $inputSource.SourceSHA256
+    $inputHash = ConvertTo-OpsMarkdownTableValue -Value $inputSource.SHA256
+    $inputNote = ConvertTo-OpsMarkdownTableValue -Value $inputSource.Note
+    $markdown.Add("| $inputName | $inputStatus | $inputSourcePath | $inputSnapshotPath | $inputSourceHash | $inputHash | $inputNote |")
+}
+$markdown.Add('')
+$markdown.Add('A SourceSHA256 that differs from SHA256 means the pack copy was deliberately rewritten; the Note column says why. Every other input is copied byte for byte.')
 $markdown.Add('')
 $markdown.Add("## Controls")
 $markdown.Add('')

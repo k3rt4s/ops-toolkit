@@ -7,6 +7,15 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-07
 
+### Changed: evidence-pack input hash explanation
+
+- `Export-SecurityControlEvidencePack.ps1` now explains the one legitimate
+  `SourceSHA256` versus `SHA256` difference for the coverage manifest input: the
+  pack copy rewrites authority paths to pack-relative form after hashing the
+  source so the manifest can be re-run from the pack root. The note is written
+  to `input-sources.csv` and repeated in the new `summary.md` input sources
+  table without changing either hash calculation.
+
 ### Fixed: scope exclusion on a management-plane-only evidence pack
 
 - `Export-SecurityControlEvidencePack.ps1` no longer throws when a

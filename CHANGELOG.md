@@ -5,6 +5,20 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-07
+
+### Fixed: test harness null ExitCode and missing return
+
+- Cached the process handle immediately after `Start-Process` so `ExitCode` reads back
+  after process exit, preventing spurious `Failed` status on runs that actually succeeded.
+  Without caching, .NET can return null for ExitCode, and null is graded as Failed rather
+  than Completed.
+- Added missing `return` statement after `Set-ItResult -Skipped` in `Confirm-LiveScriptRun`,
+  preventing execution from falling through to the Failed check below.
+- Both changes in `tests/TestHelpers.psm1`. The harness verifies every integration test
+  in the suite, so these fixes prevent false negatives that would mask real issues.
+- Strict validation passes all eight gates with unchanged test count (465 tests).
+
 ## 2026-09-06
 
 ### Changed: board and backlog scored

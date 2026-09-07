@@ -62,7 +62,7 @@ Preview reclaiming developer and Windows caches. The default set is pip, Docker 
 cache and dangling images, Recycle Bin, and WinSxS:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Other caches are reachable by name and none of them is in the default set: npm, torch,
@@ -73,16 +73,17 @@ inside Docker frees space within its virtual disk without shrinking the file, so
 shell and stops Docker Desktop and every WSL distro for several minutes:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target DockerVhdxCompact -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -Target DockerVhdxCompact -WhatIf
 ```
 
 ## Inventory a Windows drive
 
-Writes a junction-safe, detailed path inventory under `C:\Code_data` by
-default. The report contains sensitive full paths, so `--root` is required.
+Writes a junction-safe, detailed path inventory. The report contains sensitive full
+paths, so `--root` is required, and `--output-dir` and `--notindexed-script` are
+required too: this is a public repository, so no workstation path is assumed.
 
 ```powershell
-python .\scripts\it-operations\windows-file-cleanup\Analyze-C.py --root C:\
+python .\scripts\it-operations\windows-file-cleanup\Analyze-C.py --root C:\ --output-dir <dir> --notindexed-script <path>
 ```
 
 ## Temporarily cycle page-file configuration
@@ -101,31 +102,31 @@ pwsh -File .\scripts\it-operations\utilities\Page-File-Bleed.ps1 -Execute -WhatI
 Preview setting the workstation performance posture (power plan plus Defender exclusions):
 
 ```powershell
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -WhatIf
 ```
 
 Roll back the performance posture (restore previous power plan and remove added exclusions):
 
 ```powershell
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
 Preview applying the workstation idle-lock and sleep posture (10-minute screensaver lock, never sleep on AC):
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Apply the lock posture with the optional power-scheme password-on-wake flag (elevated):
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableConsoleLock
 ```
 
 Roll back the lock posture:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
 Preview hardening the browser credential-theft surface (block authenticator browser extensions in
@@ -133,17 +134,17 @@ Chrome and Edge by default, add `-IncludePasswordManagerExtensions` to also bloc
 extensions, pin Chrome Application-Bound Encryption on):
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Apply the browser credential posture (elevated; every enforced setting is an HKLM machine policy):
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir>
 ```
 
 Roll back the browser credential posture:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 ```

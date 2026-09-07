@@ -8,8 +8,11 @@ Instructions:
 - Run elevated to enable the power-scheme password-on-wake flag (-EnableConsoleLock) or the
   machine-wide inactivity lock (-EnableMachineWideLock).
 - Use -Rollback to restore the exact values this script changed.
-- Generated reports are written under C:\Code_data\ops-toolkit\windows-hardening by default,
-  per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
+- -ReportDirectory is mandatory: this is a public repository and a path that defaulted to this
+  developer's workstation must never be applied to someone else's machine. Supply the report
+  directory explicitly on every run. Generated reports belong under a data root outside the
+  repo, per the workspace data-hygiene rule (generated data lives outside the repo, in whatever
+  data root the operator's own workspace uses).
 
 Purpose:
 Puts a workstation into a secure idle posture: never sleep or hibernate on AC power, require a
@@ -28,11 +31,11 @@ Every change is recorded in a rollback JSON so the posture can be precisely reve
 The optional ConsoleLock and machine-wide policy settings require an elevated shell.
 
 Required syntax:
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock      # elevated
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableMachineWideLock  # elevated
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir>
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableConsoleLock      # elevated
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableMachineWideLock  # elevated
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 .OUTPUTS
 Writes plan and state CSV/JSON under the report directory, plus a rollback JSON capturing the
@@ -65,9 +68,9 @@ param(
     [Parameter()]
     [switch]$EnableMachineWideLock,
 
-    [Parameter()]
+    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = 'C:\Code_data\ops-toolkit\windows-hardening',
+    [string]$ReportDirectory,
 
     [Parameter()]
     [switch]$Rollback
@@ -85,11 +88,11 @@ function Show-Usage {
 Set workstation idle-lock and sleep posture for security and performance.
 
 Usage:
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock      # elevated
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableMachineWideLock  # elevated
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir>
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableConsoleLock      # elevated
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableMachineWideLock  # elevated
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 Options:
   -IdleTimeoutMinutes      Screensaver timeout in minutes (1-120). Default: 10.
@@ -99,7 +102,7 @@ Options:
                            to 0 (Never) on AC to prevent S0 Low Power Idle on Modern Standby laptops.
   -EnableConsoleLock       Set the power-scheme password-on-wake flag for AC+DC (requires elevation).
   -EnableMachineWideLock   Set machine-wide inactivity lock via HKLM policy (requires elevation).
-  -ReportDirectory         Plan, state, and rollback output directory.
+  -ReportDirectory         Plan, state, and rollback output directory. Required, no default.
   -Rollback                Restore all settings this script previously changed.
   -WhatIf                  Write reports and preview changes without applying them.
 '@

@@ -25,8 +25,11 @@ Instructions:
   elevated shell. It is the only target that returns space freed by the other Docker targets to
   the host volume, because pruning frees space inside the virtual disk without shrinking the file.
   Run it last, after the other Docker targets, or it compacts a disk that is still full.
-- Generated reports are written under C:\Code_data\ops-toolkit\windows-file-cleanup by default,
-  per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
+- -ReportDirectory is mandatory: this is a public repository and a path that defaulted to this
+  developer's workstation must never be applied to someone else's machine. Supply the report
+  directory explicitly on every run. Generated reports belong under a data root outside the
+  repo, per the workspace data-hygiene rule (generated data lives outside the repo, in whatever
+  data root the operator's own workspace uses).
 
 Purpose:
 This script reclaims space from reclaimable caches that the file/temp cleanup helper does not
@@ -39,13 +42,13 @@ touches source code, the live application database, audit_vault evidence, or the
 cache unless explicitly opted in.
 
 Required syntax:
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target PipCache,RecycleBin
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target ComponentStore  # elevated
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -Target PipCache,RecycleBin
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -Target ComponentStore  # elevated
 
 The developer-workstation cache sweep verified on this machine on 2026-08-20, which reclaimed
 18.3 GB. Run it elevated, and rehearse it with -WhatIf first:
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target PipCache,NpmCache,TorchCache,PreCommitCache,CodexRuntimeCache,NvidiaShaderCache,PlaywrightBrowsers,HuggingFaceCache,DockerBuildCache,DockerDanglingImages,DockerStoppedContainers,DockerUnusedVolumes,DockerOldImageTags,DockerVhdxCompact
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -Target PipCache,NpmCache,TorchCache,PreCommitCache,CodexRuntimeCache,NvidiaShaderCache,PlaywrightBrowsers,HuggingFaceCache,DockerBuildCache,DockerDanglingImages,DockerStoppedContainers,DockerUnusedVolumes,DockerOldImageTags,DockerVhdxCompact
 
 .OUTPUTS
 Writes plan and state CSV/JSON files under the report directory. Returns a summary object with
@@ -85,9 +88,9 @@ param(
     [ValidateRange(30, 900)]
     [int]$DockerShutdownTimeoutSeconds = 180,
 
-    [Parameter()]
+    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = 'C:\Code_data\ops-toolkit\windows-file-cleanup'
+    [string]$ReportDirectory
 )
 
 Set-StrictMode -Version 3.0
@@ -98,8 +101,8 @@ function Show-Usage {
 Reclaim disk space from developer and Windows caches.
 
 Usage:
-  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
-  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -Target PipCache,RecycleBin
+  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -WhatIf
+  pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -Target PipCache,RecycleBin
 
 Options:
   -Target           One or more of:
@@ -120,7 +123,7 @@ Options:
   -DockerShutdownTimeoutSeconds
                     DockerVhdxCompact only. Seconds to wait for Docker to release the virtual
                     disk before abandoning the compaction. Default: 180.
-  -ReportDirectory  Plan and state output directory.
+  -ReportDirectory  Plan and state output directory. Required, no default.
   -WhatIf           Write reports and preview reclaim actions without deleting anything.
 
 Elevation:

@@ -10,8 +10,12 @@ Instructions:
 - Use -Rollback to restore the previous power plan and remove the exclusions this script added.
 - Defender path/process exclusions reduce real-time scanning on the listed items; only exclude
   trusted build/data locations, and keep the list as narrow as the workload needs.
-- Generated reports are written under C:\Code_data\ops-toolkit\windows-performance by default,
-  per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
+- -DefenderPathExclusion and -ReportDirectory are mandatory: this is a public repository and a
+  path that defaulted to this developer's workstation must never be applied to someone else's
+  machine. Supply the exclusion path(s) and a report directory explicitly on every run.
+  Generated reports belong under a data root outside the repo, per the workspace data-hygiene
+  rule (generated data lives outside the repo, in whatever data root the operator's own
+  workspace uses).
 
 Purpose:
 Use this to put a workstation into a sustained-performance posture for heavy local batch work
@@ -23,9 +27,9 @@ OEM (MSI Center) modes, GPU clocks, or any security setting other than the expli
 exclusions, which are fully reversible with -Rollback.
 
 Required syntax:
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1            # elevated for Defender
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir>            # elevated for Defender
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -Rollback -WhatIf
 
 .OUTPUTS
 Writes plan and state CSV/JSON files under the report directory, plus a rollback-state JSON on a
@@ -48,15 +52,16 @@ param(
     [Parameter()]
     [switch]$SkipDefenderExclusions,
 
-    [Parameter()]
-    [string[]]$DefenderPathExclusion = @('C:\Code_data'),
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string[]]$DefenderPathExclusion,
 
     [Parameter()]
     [string[]]$DefenderProcessExclusion = @(),
 
-    [Parameter()]
+    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = 'C:\Code_data\ops-toolkit\windows-performance',
+    [string]$ReportDirectory,
 
     [Parameter()]
     [switch]$Rollback
@@ -77,17 +82,17 @@ function Show-Usage {
 Set workstation performance posture (power plan + Defender exclusions).
 
 Usage:
-  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
-  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
-  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -WhatIf
+  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir>
+  pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -Rollback -WhatIf
 
 Options:
   -PowerPlan                 UltimatePerformance, HighPerformance, or Balanced. Default: UltimatePerformance.
   -SkipPowerPlan             Do not change the active power plan.
   -SkipDefenderExclusions    Do not add Defender exclusions.
-  -DefenderPathExclusion     Path(s) to exclude from real-time scanning. Default: C:\Code_data.
+  -DefenderPathExclusion     Path(s) to exclude from real-time scanning. Required, no default.
   -DefenderProcessExclusion  Process name(s) to exclude (opt-in; empty by default).
-  -ReportDirectory           Plan, state, and rollback output directory.
+  -ReportDirectory           Plan, state, and rollback output directory. Required, no default.
   -Rollback                  Restore the previous power plan and remove exclusions this script added.
   -WhatIf                    Write reports and preview changes without applying them.
 '@

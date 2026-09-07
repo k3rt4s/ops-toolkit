@@ -16,10 +16,11 @@
 #
 # An optional second pass computes SHA-256 for additional verification.
 #
-# Output location: C:\Code_data\ops-toolkit\compare_folders\<label-a>_vs_<label-b>_<YYYYMMDD_HHMMSS>\
+# Output location: <output-dir>\<label-a>_vs_<label-b>_<YYYYMMDD_HHMMSS>\
+# --output-dir is required: this is a public repository, so no workstation path is assumed.
 #
 # Usage:
-#   python compare_folders.py --folder-a <path> --folder-b <path> \
+#   python compare_folders.py --folder-a <path> --folder-b <path> --output-dir <path> \
 #       [--label-a <name>] [--label-b <name>] [--sha256] \
 #       [--exclude <path>] [--workers <n>]
 
@@ -40,8 +41,6 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-OUTPUT_BASE = Path(r"C:\Code_data\ops-toolkit\compare_folders")
 
 JUNK_FRAGMENTS = (
     ".ds_store",
@@ -248,6 +247,13 @@ def main() -> None:
     parser.add_argument("--folder-a", required=True, help="Path to folder A")
     parser.add_argument("--folder-b", required=True, help="Path to folder B")
     parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Directory the run's report subfolder is written under. This is a public "
+             "repository, so no workstation path is assumed.",
+    )
+    parser.add_argument(
         "--label-a",
         default="folder_a",
         help="Label for folder A, used in report filenames and the Source column (default: folder_a)",
@@ -300,7 +306,8 @@ def main() -> None:
     workers: int = max(1, args.workers)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = OUTPUT_BASE / f"{label_a}_vs_{label_b}_{timestamp}"
+    output_base = Path(args.output_dir).resolve()
+    run_dir = output_base / f"{label_a}_vs_{label_b}_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Output directory: {run_dir}")

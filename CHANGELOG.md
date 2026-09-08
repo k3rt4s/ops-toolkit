@@ -7,6 +7,30 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-06
 
+### Changed: hard-coded absolute path defaults replaced with required parameters
+
+- Removed every hard-coded absolute-path default from the five state-changing scripts
+  that carried one: `Set-WorkstationPerformance.ps1` (`-DefenderPathExclusion`,
+  `-ReportDirectory`), `Set-BrowserCredentialPosture.ps1` (`-ReportDirectory`),
+  `Set-WorkstationLockPosture.ps1` (`-ReportDirectory`), `Invoke-DiskSpaceReclaim.ps1`
+  (`-ReportDirectory`), `Analyze-C.py` (`--output-dir`, plus a new required
+  `--notindexed-script`), and `compare_folders.py` (`--output-dir`). Each is now a
+  required parameter with no default: `[Parameter(Mandatory = $true)]` in PowerShell,
+  `required=True` in argparse. This is a public MIT repository, so an unattended run
+  with no arguments now refuses before changing anything, instead of writing into a
+  data tree that does not exist on the operator's machine or, for
+  `Set-WorkstationPerformance.ps1`, silently adding a Defender path exclusion nobody
+  asked for.
+- Updated the `Required syntax` header block in each of the five scripts and
+  `scripts/it-operations/README.md`'s command examples to show the new mandatory
+  arguments; `scripts/it-operations/README.md` no longer names an absolute workstation
+  path.
+- Added `tests/RequiredPathParameters.Tests.ps1`, asserting via `Get-Command` parameter
+  metadata (never by running the script) that each named parameter is mandatory, and
+  that a no-argument run through the existing `Invoke-ScriptUnderTest` harness
+  (`-NonInteractive`, so a missing mandatory parameter fails immediately instead of
+  prompting) makes no mutation.
+
 ### Changed: board and backlog scored
 
 - Scored every live item on the work board and every unshipped feature in

@@ -7,8 +7,11 @@ Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run elevated: every enforced setting is an HKLM machine policy and needs an elevated shell.
 - Use -Rollback to restore the exact values this script changed.
-- Generated reports are written under C:\Code_data\ops-toolkit\windows-hardening by default,
-  per the workspace data-hygiene rule (generated data lives under C:\Code_data, never in the repo).
+- -ReportDirectory is mandatory: this is a public repository and a path that defaulted to this
+  developer's workstation must never be applied to someone else's machine. Supply the report
+  directory explicitly on every run. Generated reports belong under a data root outside the
+  repo, per the workspace data-hygiene rule (generated data lives outside the repo, in whatever
+  data root the operator's own workspace uses).
 
 Purpose:
 An information stealer harvests a browser in one pass: saved passwords, live session cookies, and
@@ -35,9 +38,9 @@ The extension IDs blocked by default are a documented starting set, not an exhau
 them against the Chrome Web Store and Edge Add-ons and extend -ExtensionBlockId for your environment.
 
 Required syntax:
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1            # elevated
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir>            # elevated
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 .OUTPUTS
 Writes plan and state CSV/JSON under the report directory, plus a rollback JSON capturing the prior
@@ -66,9 +69,9 @@ param(
     [Parameter()]
     [switch]$SkipChromeAbe,
 
-    [Parameter()]
+    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = 'C:\Code_data\ops-toolkit\windows-hardening',
+    [string]$ReportDirectory,
 
     [Parameter()]
     [switch]$Rollback
@@ -98,9 +101,9 @@ function Show-Usage {
 Enforce browser policy that removes the infostealer credential-theft surface.
 
 Usage:
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1            # elevated
-  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir>            # elevated
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 Options:
   -ExtensionBlockId   Extension IDs to block in Chrome and Edge. Default: a documented starting set
@@ -111,7 +114,7 @@ Options:
                       a user back to browser-saved passwords.
   -SkipExtensionBlock Do not change the browser ExtensionSettings policy.
   -SkipChromeAbe      Do not pin Chrome Application-Bound Encryption on.
-  -ReportDirectory    Plan, state, and rollback output directory.
+  -ReportDirectory    Plan, state, and rollback output directory. Required, no default.
   -Rollback           Restore all settings this script previously changed.
   -WhatIf             Write reports and preview changes without applying them.
 '@

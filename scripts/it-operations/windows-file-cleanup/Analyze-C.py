@@ -127,7 +127,7 @@ def scan_drive(root_path, out_file):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Stream a junction-safe drive inventory to Code_data."
+        description="Stream a junction-safe drive inventory to the directory you supply."
     )
     parser.add_argument(
         "--root",
@@ -138,7 +138,17 @@ def main(argv=None):
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(r"C:\Code_data\ops-toolkit\windows-file-cleanup\reports"),
+        required=True,
+        help="Directory to write the inventory report to. This is a public repository, so no "
+             "workstation path is assumed; supply a directory outside the repo.",
+    )
+    parser.add_argument(
+        "--notindexed-script",
+        type=Path,
+        required=True,
+        help="Path to set_notindexed.ps1, run against the finished report so it is excluded "
+             "from Windows Search indexing. This is a public repository, so no workstation "
+             "path is assumed.",
     )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
@@ -150,7 +160,8 @@ def main(argv=None):
     
     # Setup safe output structure
     output_dir = os.path.abspath(args.output_dir)
-    code_root = os.path.normcase(os.path.abspath(r"C:\Code"))
+    repository_root = Path(__file__).resolve().parents[3]
+    code_root = os.path.normcase(os.path.abspath(repository_root))
     try:
         under_code = os.path.commonpath((os.path.normcase(output_dir), code_root)) == code_root
     except ValueError:
@@ -194,7 +205,7 @@ def main(argv=None):
 
     # Clean up temporary streaming file
     os.remove(temp_ledger_path)
-    notindexed = Path(r"C:\Code\scripts\set_notindexed.ps1")
+    notindexed = args.notindexed_script
     if notindexed.exists():
         subprocess.run(
             [

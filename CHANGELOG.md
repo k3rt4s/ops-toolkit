@@ -7,6 +7,35 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-07
 
+### Added: end-to-end ungraded reconciliation-gap coverage
+
+- `tests\Integration.LocalCollectors.Tests.ps1` now covers an evidence pack whose
+  coverage manifest finds a reconciliation gap while the Defender inventory is not
+  one of the required reconciliation authorities, asserting that `EDR-01` remains
+  `NotAssessed` while still showing the ungraded gap count and limitation.
+
+### Changed: evidence-pack input hash explanation
+
+- `Export-SecurityControlEvidencePack.ps1` now explains the one legitimate
+  `SourceSHA256` versus `SHA256` difference for the coverage manifest input: the
+  pack copy rewrites authority paths to pack-relative form after hashing the
+  source so the manifest can be re-run from the pack root. The note is written
+  to `input-sources.csv` and repeated in the new `summary.md` input sources
+  table without changing either hash calculation.
+
+### Fixed: scope exclusion on a management-plane-only evidence pack
+
+- `Export-SecurityControlEvidencePack.ps1` no longer throws when a
+  `-ScopeExclusion` names a target that is not in `-ComputerName` or
+  `-TargetListPath`, provided the requested target list is empty and either
+  `-DefenderDeviceInventoryPath` or `-CoverageManifestPath` was supplied. The
+  exclusion is carried into the excluded-key set exactly as an endpoint
+  exclusion is today, so the named machine is subtracted from the Defender and
+  reconciled populations and still appears in `summary.md` under "Excluded
+  endpoints" and in every endpoint control's scope fields. The throw remains
+  for the case where no management-plane input was supplied at all, because
+  there an exclusion really would invent scope.
+
 ### Fixed: test harness null ExitCode and missing return
 
 - Cached the process handle immediately after `Start-Process` so `ExitCode` reads back

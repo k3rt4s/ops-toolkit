@@ -78,6 +78,13 @@ that produced the current layout is described in the README under "What Changed"
   in the suite, so these fixes prevent false negatives that would mask real issues.
 - Strict validation passes all eight gates with unchanged test count (465 tests).
 
+### Fixed: bounded Windows Update health history reads
+
+- `Export-WindowsUpdateHealth.ps1` now bounds the live `Get-HotFix` and Windows
+  Update Agent COM history read with `-HistoryTimeoutSeconds`, returning a
+  degraded report with `Unmeasured` history signals instead of hanging forever
+  when the update stack is busy.
+
 ## 2026-09-06
 
 ### Changed: hard-coded absolute path defaults replaced with required parameters

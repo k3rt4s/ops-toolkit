@@ -14,6 +14,9 @@ Instructions:
   policy and history evidence that a hold produces, and says so, rather than
   claiming to list hold IDs it cannot see.
 - Generated reports are written under reports\it-operations by default.
+- -HistoryTimeoutSeconds bounds the live Get-HotFix and Windows Update Agent COM
+  calls. On a timeout the run still completes and reports LastSuccessfulInstall and
+  RecentFailures as Unmeasured rather than hanging.
 
 Purpose:
 "Why is this box not patching" is a recurring hour-long dig through services,
@@ -27,6 +30,7 @@ Required syntax:
 pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1
 pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1 -ComputerName pc01,pc02
 pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1 -HistoryCount 100 -StaleUpdateDays 60
+pwsh -File .\scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1 -HistoryTimeoutSeconds 5
 
 .OUTPUTS
 Writes a per-machine health verdict, the signal detail, recent update history, and a
@@ -56,6 +60,10 @@ param(
     [int]$LongUptimeDays = 30,
 
     [Parameter()]
+    [ValidateRange(5, 600)]
+    [int]$HistoryTimeoutSeconds = 90,
+
+    [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\it-operations'),
 
@@ -70,7 +78,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 $healthProbe = {
-    param($History, $StaleDays, $UptimeDays)
+    param($History, $StaleDays, $UptimeDays, $HistoryTimeoutSeconds)
 
     function Get-RegValue {
         param($Path, $Name)
@@ -164,67 +172,110 @@ $healthProbe = {
 
     # Last successful install. Get-HotFix misses feature updates and some servicing
     # stack updates, so the update history is read too and the later of the two wins.
-    $lastHotfix = $null
-    try {
-        $lastHotfix = (Get-HotFix -ErrorAction Stop | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn
-    } catch {
-        $lastHotfix = $null
-    }
+    # Both calls are synchronous and can block indefinitely when MoUsoCoreWorker holds
+    # an active orchestration session, so they run together in one dedicated runspace
+    # with a bound wait. A runspace blocked inside a COM call cannot be stopped
+    # cleanly: on a timeout this drops the reference and lets it end with the
+    # process rather than calling .Stop() or otherwise trying to kill it.
+    $historyRunspace = [powershell]::Create()
+    [void]$historyRunspace.AddScript({
+            param($History)
 
+            $probeResult = [pscustomobject]@{
+                LastHotfix = $null
+                HistoryRecords = [System.Collections.Generic.List[object]]::new()
+                LastSuccess = $null
+                HistoryError = ''
+            }
+
+            try {
+                $probeResult.LastHotfix = (Get-HotFix -ErrorAction Stop | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn
+            } catch {
+                $probeResult.LastHotfix = $null
+            }
+
+            try {
+                $session = New-Object -ComObject Microsoft.Update.Session
+                $searcher = $session.CreateUpdateSearcher()
+                $total = $searcher.GetTotalHistoryCount()
+                if ($total -gt 0) {
+                    $take = [math]::Min($History, $total)
+                    foreach ($entry in $searcher.QueryHistory(0, $take)) {
+                        # The COM history Date is UTC but arrives with Kind Unspecified, so
+                        # comparing it against a local Get-Date reports an install that
+                        # happened hours ago as happening in the future.
+                        $entryDate = [datetime]::SpecifyKind($entry.Date, [System.DateTimeKind]::Utc).ToLocalTime()
+
+                        # ResultCode 2 is Succeeded, 3 SucceededWithErrors, 4 Failed, 5 Aborted.
+                        $outcome = switch ([int]$entry.ResultCode) {
+                            1 { 'InProgress' }
+                            2 { 'Succeeded' }
+                            3 { 'SucceededWithErrors' }
+                            4 { 'Failed' }
+                            5 { 'Aborted' }
+                            default { "Unknown($($entry.ResultCode))" }
+                        }
+
+                        $probeResult.HistoryRecords.Add([pscustomobject]@{
+                                Date = $entryDate
+                                Outcome = $outcome
+                                HResult = ('0x{0:X8}' -f [int]$entry.HResult)
+                                Operation = switch ([int]$entry.Operation) { 1 { 'Install' } 2 { 'Uninstall' } default { 'Other' } }
+                                Title = $entry.Title
+                            })
+
+                        if ([int]$entry.ResultCode -in @(2, 3) -and (-not $probeResult.LastSuccess -or $entryDate -gt $probeResult.LastSuccess)) {
+                            $probeResult.LastSuccess = $entryDate
+                        }
+                    }
+                }
+            } catch {
+                $probeResult.HistoryError = $_.Exception.Message
+            }
+
+            return $probeResult
+        }) | Out-Null
+    [void]$historyRunspace.AddParameter('History', $History)
+
+    $lastHotfix = $null
     $historyRecords = [System.Collections.Generic.List[object]]::new()
     $lastSuccess = $null
     $historyError = ''
-    try {
-        $session = New-Object -ComObject Microsoft.Update.Session
-        $searcher = $session.CreateUpdateSearcher()
-        $total = $searcher.GetTotalHistoryCount()
-        if ($total -gt 0) {
-            $take = [math]::Min($History, $total)
-            foreach ($entry in $searcher.QueryHistory(0, $take)) {
-                # The COM history Date is UTC but arrives with Kind Unspecified, so
-                # comparing it against a local Get-Date reports an install that
-                # happened hours ago as happening in the future.
-                $entryDate = [datetime]::SpecifyKind($entry.Date, [System.DateTimeKind]::Utc).ToLocalTime()
+    $historyTimedOut = $false
 
-                # ResultCode 2 is Succeeded, 3 SucceededWithErrors, 4 Failed, 5 Aborted.
-                $outcome = switch ([int]$entry.ResultCode) {
-                    1 { 'InProgress' }
-                    2 { 'Succeeded' }
-                    3 { 'SucceededWithErrors' }
-                    4 { 'Failed' }
-                    5 { 'Aborted' }
-                    default { "Unknown($($entry.ResultCode))" }
-                }
+    $historyHandle = $historyRunspace.BeginInvoke()
+    $historyCompleted = $historyHandle.AsyncWaitHandle.WaitOne($HistoryTimeoutSeconds * 1000)
 
-                $historyRecords.Add([pscustomobject]@{
-                        Date = $entryDate
-                        Outcome = $outcome
-                        HResult = ('0x{0:X8}' -f [int]$entry.HResult)
-                        Operation = switch ([int]$entry.Operation) { 1 { 'Install' } 2 { 'Uninstall' } default { 'Other' } }
-                        Title = $entry.Title
-                    })
-
-                if ([int]$entry.ResultCode -in @(2, 3) -and (-not $lastSuccess -or $entryDate -gt $lastSuccess)) {
-                    $lastSuccess = $entryDate
-                }
-            }
+    if ($historyCompleted) {
+        $probeResult = $historyRunspace.EndInvoke($historyHandle) | Select-Object -First 1
+        $historyRunspace.Dispose()
+        if ($probeResult) {
+            $lastHotfix = $probeResult.LastHotfix
+            $historyRecords = $probeResult.HistoryRecords
+            $lastSuccess = $probeResult.LastSuccess
+            $historyError = $probeResult.HistoryError
         }
-    } catch {
-        $historyError = $_.Exception.Message
+    } else {
+        $historyTimedOut = $true
+        $historyError = "Timed out after $HistoryTimeoutSeconds seconds reading the update history."
+        $historyHandle = $null
+        $historyRunspace = $null
+        [System.GC]::Collect()
+        [System.GC]::WaitForPendingFinalizers()
     }
 
     $lastInstall = @($lastHotfix, $lastSuccess) | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1
     # Clamp at zero. Clock skew between the history timestamp and now must never
     # render as a negative age, which reads as a future install.
     $daysSinceInstall = if ($lastInstall) { [math]::Max(0, [int][math]::Floor(((Get-Date) - $lastInstall).TotalDays)) } else { $null }
-    $installStatus = if ($null -eq $daysSinceInstall) { 'Warn' } elseif ($daysSinceInstall -gt $StaleDays) { 'Fail' } else { 'Pass' }
+    $installStatus = if ($historyTimedOut) { 'Unmeasured' } elseif ($null -eq $daysSinceInstall) { 'Warn' } elseif ($daysSinceInstall -gt $StaleDays) { 'Fail' } else { 'Pass' }
     $installValue = if ($lastInstall) { "$lastInstall ($daysSinceInstall days ago)" } else { 'unknown' }
-    $installNote = if ($historyError) { "Update history unreadable: $historyError" } else { '' }
+    $installNote = if ($historyTimedOut) { $historyError } elseif ($historyError) { "Update history unreadable: $historyError" } else { '' }
     Add-Signal $signals 'LastSuccessfulInstall' $installStatus $installValue $installNote
 
     $recentFailures = @($historyRecords | Where-Object { $_.Outcome -in @('Failed', 'Aborted') })
-    $failureStatus = if ($recentFailures.Count -gt 0) { 'Fail' } else { 'Pass' }
-    $failureNote = if ($recentFailures.Count -gt 0) { "Most recent: $($recentFailures[0].Title) $($recentFailures[0].HResult)" } else { '' }
+    $failureStatus = if ($historyTimedOut) { 'Unmeasured' } elseif ($recentFailures.Count -gt 0) { 'Fail' } else { 'Pass' }
+    $failureNote = if ($historyTimedOut) { $historyError } elseif ($recentFailures.Count -gt 0) { "Most recent: $($recentFailures[0].Title) $($recentFailures[0].HResult)" } else { '' }
     Add-Signal $signals 'RecentFailures' $failureStatus $recentFailures.Count $failureNote
 
     [pscustomobject]@{
@@ -235,6 +286,7 @@ $healthProbe = {
         UptimeDays = $uptimeDays
         LastInstall = $lastInstall
         DaysSinceInstall = $daysSinceInstall
+        HistoryTimedOut = $historyTimedOut
         Signals = @($signals)
         History = @($historyRecords)
     }
@@ -244,15 +296,16 @@ $targets = if ($ComputerName) { $ComputerName } else { @($env:COMPUTERNAME) }
 $verdicts = [System.Collections.Generic.List[object]]::new()
 $signalDetail = [System.Collections.Generic.List[object]]::new()
 $historyDetail = [System.Collections.Generic.List[object]]::new()
+$historyTimeoutOccurred = $false
 
 foreach ($target in $targets) {
     $probe = $null
     try {
         if ($target -eq $env:COMPUTERNAME) {
-            $probe = & $healthProbe $HistoryCount $StaleUpdateDays $LongUptimeDays
+            $probe = & $healthProbe $HistoryCount $StaleUpdateDays $LongUptimeDays $HistoryTimeoutSeconds
         } else {
             $probe = Invoke-Command -ComputerName $target -ScriptBlock $healthProbe `
-                -ArgumentList $HistoryCount, $StaleUpdateDays, $LongUptimeDays -ErrorAction Stop
+                -ArgumentList $HistoryCount, $StaleUpdateDays, $LongUptimeDays, $HistoryTimeoutSeconds -ErrorAction Stop
         }
     } catch {
         Write-Warning "Could not probe $target : $($_.Exception.Message)"
@@ -268,6 +321,7 @@ foreach ($target in $targets) {
         continue
     }
 
+    if ($probe.HistoryTimedOut) { $historyTimeoutOccurred = $true }
     $signals = @(Get-OpsPropertyValue -InputObject $probe -Name 'Signals')
     foreach ($signal in $signals) {
         $signalDetail.Add([pscustomobject]@{
@@ -292,7 +346,8 @@ foreach ($target in $targets) {
 
     $failed = @($signals | Where-Object { $_.Status -eq 'Fail' })
     $warned = @($signals | Where-Object { $_.Status -eq 'Warn' })
-    $verdict = if ($failed.Count -gt 0) { 'Unhealthy' } elseif ($warned.Count -gt 0) { 'Degraded' } else { 'Healthy' }
+    $unmeasured = @($signals | Where-Object { $_.Status -eq 'Unmeasured' })
+    $verdict = if ($failed.Count -gt 0) { 'Unhealthy' } elseif ($warned.Count -gt 0 -or $unmeasured.Count -gt 0) { 'Degraded' } else { 'Healthy' }
 
     $verdicts.Add([pscustomobject]@{
             ComputerName = $probe.ComputerName
@@ -326,7 +381,33 @@ $summary = [pscustomobject]@{
     PendingRebootCount = @($signalDetail | Where-Object { $_.Signal -eq 'PendingReboot' -and $_.Status -eq 'Fail' }).Count
     WsusManagedCount = @($signalDetail | Where-Object { $_.Signal -eq 'WsusServer' -and $_.Status -eq 'Info' }).Count
     HistoryRecordCount = $historyDetail.Count
+    UnmeasuredSignalCount = @($signalDetail | Where-Object { $_.Status -eq 'Unmeasured' }).Count
     Exports = @($exports)
 }
 
 Export-OpsSummary -Summary $summary -Directory $runDirectory
+
+if ($historyTimeoutOccurred -and -not (Get-Variable -Name PSSenderInfo -Scope Global -ErrorAction SilentlyContinue)) {
+    # A timed-out WUA COM call can keep pwsh alive after all reports are written.
+    # Delay the local process exit so harnesses that wrap the script can serialize
+    # the returned summary object before the abandoned COM call dies with pwsh.
+    if (-not ('OpsUpdateHealthTimeoutExit' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+
+public static class OpsUpdateHealthTimeoutExit
+{
+    public static void Exit(object state)
+    {
+        Environment.Exit(0);
+    }
+}
+'@
+    }
+    $script:OpsUpdateHealthTimeoutExitTimer = [System.Threading.Timer]::new(
+        [System.Threading.TimerCallback][OpsUpdateHealthTimeoutExit]::Exit,
+        $null,
+        2000,
+        [System.Threading.Timeout]::Infinite
+    )
+}

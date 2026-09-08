@@ -160,7 +160,8 @@ def main(argv=None):
     
     # Setup safe output structure
     output_dir = os.path.abspath(args.output_dir)
-    code_root = os.path.normcase(os.path.abspath(r"C:\Code"))
+    repository_root = Path(__file__).resolve().parents[3]
+    code_root = os.path.normcase(os.path.abspath(repository_root))
     try:
         under_code = os.path.commonpath((os.path.normcase(output_dir), code_root)) == code_root
     except ValueError:

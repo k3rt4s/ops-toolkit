@@ -110,3 +110,11 @@ Describe 'Invoke-DiskSpaceReclaim path parameters' {
         Assert-NoArgumentRunMakesNoChange -RelativePath 'scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1' -Tag 'reclaim'
     }
 }
+
+Describe 'Analyze-C.py path parameters' {
+    It 'does not carry this workstation path in the script body' {
+        $body = Get-Content -LiteralPath (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-file-cleanup\Analyze-C.py') -Raw
+        $body | Should -Not -Match ([regex]::Escape('C:\Code_data'))
+        $body | Should -Not -Match ([regex]::Escape('C:\Code\'))
+    }
+}

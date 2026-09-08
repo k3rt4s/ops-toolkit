@@ -90,6 +90,50 @@ Describe 'Export-WindowsUpdateHealth' {
             }
         }
     }
+
+    It 'reports completed or explicitly unmeasured history during a normal run on this machine' {
+        $signalsFile = Get-ChildItem -LiteralPath $script:update.OutputDirectory -Filter '*signals*.csv' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $signalsFile | Should -Not -BeNullOrEmpty
+        $signals = @(Import-Csv $signalsFile.FullName)
+        $installRow = $signals | Where-Object { $_.Signal -eq 'LastSuccessfulInstall' } | Select-Object -First 1
+        $failureRow = $signals | Where-Object { $_.Signal -eq 'RecentFailures' } | Select-Object -First 1
+
+        $installRow | Should -Not -BeNullOrEmpty
+        $failureRow | Should -Not -BeNullOrEmpty
+        $installRow.Status | Should -BeIn @('Pass', 'Warn', 'Unmeasured')
+
+        if ($installRow.Status -eq 'Unmeasured') {
+            $failureRow.Status | Should -Be 'Unmeasured'
+            $installRow.Note | Should -Match 'Timed out after \d+ seconds reading the update history'
+            $failureRow.Note | Should -Match 'Timed out after \d+ seconds reading the update history'
+            $script:update.UnmeasuredSignalCount | Should -BeGreaterThan 0
+        } else {
+            $failureRow.Status | Should -BeIn @('Pass', 'Fail')
+            $script:update.UnmeasuredSignalCount | Should -Be 0
+        }
+    }
+}
+
+Describe 'Export-WindowsUpdateHealth, bounded history read' {
+    BeforeAll {
+        $script:updateBoundedRun = Invoke-ScriptUnderTest `
+            -RelativePath 'scripts\it-operations\lifecycle\Export-WindowsUpdateHealth.ps1' `
+            -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'update-bounded'); HistoryTimeoutSeconds = 5 } `
+            -TimeoutSeconds $script:liveSetupTimeoutSeconds
+        $script:updateBounded = $script:updateBoundedRun.Summary
+    }
+
+    BeforeEach {
+        Confirm-LiveScriptRun -Run $script:updateBoundedRun
+    }
+
+    It 'completes inside the harness timeout and writes all three reports with a short history bound' {
+        $script:updateBoundedRun.Status | Should -Be 'Completed'
+        Test-Path (Join-Path $script:updateBounded.OutputDirectory 'update-health-verdict.csv') | Should -BeTrue
+        Test-Path (Join-Path $script:updateBounded.OutputDirectory 'update-health-signals.csv') | Should -BeTrue
+        Test-Path (Join-Path $script:updateBounded.OutputDirectory 'update-history.csv') | Should -BeTrue
+    }
 }
 
 Describe 'Test-Windows11UpgradeReadiness' {

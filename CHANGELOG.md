@@ -81,9 +81,9 @@ that produced the current layout is described in the README under "What Changed"
 ### Fixed: bounded Windows Update health history reads
 
 - `Export-WindowsUpdateHealth.ps1` now bounds the live `Get-HotFix` and Windows
-  Update Agent COM history read with `-HistoryTimeoutSeconds`, returning a
-  degraded report with `Unmeasured` history signals instead of hanging forever
-  when the update stack is busy.
+  Update Agent COM history read in a child `pwsh` probe with
+  `-HistoryTimeoutSeconds`, returning a degraded report with `Unmeasured`
+  history signals instead of hanging forever when the update stack is busy.
 
 ## 2026-09-06
 

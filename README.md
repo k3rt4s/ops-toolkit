@@ -396,27 +396,27 @@ pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps
 Preview reclaiming developer and Windows caches. The default set is the pip cache, the Docker build cache and dangling images, the Recycle Bin, and the WinSxS component store; npm, torch, pre-commit, Codex runtimes, NVIDIA shaders, Playwright browsers, Hugging Face, stopped containers, unused volumes, superseded image tags, the Windows Update cache, and Docker virtual-disk compaction are reachable by name and never run unless asked for:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Preview setting the workstation performance posture, then roll it back:
 
 ```powershell
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -WhatIf
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
 Preview the workstation idle-lock and sleep posture (10-minute screensaver lock, never sleep on AC):
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Apply the lock posture and roll it back:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir>
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
 The above (no elevation) sets AC sleep to Never, enables a 10-minute password-protected screensaver,
@@ -430,8 +430,8 @@ Apply both elevated controls and the Defender exclusion from an elevated shell:
 
 ```powershell
 # Elevated shell — right-click > Run as Administrator
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -EnableConsoleLock -EnableMachineWideLock
-pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1 -ReportDirectory <dir> -EnableConsoleLock -EnableMachineWideLock
+pwsh -File .\scripts\it-operations\performance\Set-WorkstationPerformance.ps1 -DefenderPathExclusion <path> -ReportDirectory <dir>
 ```
 
 Harden the browser credential-theft surface an information stealer harvests in one pass (block
@@ -439,10 +439,10 @@ authenticator browser extensions in Chrome and Edge, and pin Chrome Application-
 on). Preview first, then apply from an elevated shell and roll back:
 
 ```powershell
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -WhatIf
 # Elevated shell — every enforced setting is an HKLM machine policy
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1
-pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir>
+pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
 By default the script blocks only the well-known authenticator extensions; add

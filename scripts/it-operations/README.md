@@ -80,7 +80,9 @@ pwsh -File .\scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.
 
 Writes a junction-safe, detailed path inventory. The report contains sensitive full
 paths, so `--root` is required, and `--output-dir` and `--notindexed-script` are
-required too: this is a public repository, so no workstation path is assumed.
+required too: this is a public repository, so no workstation path is assumed. Point
+`--notindexed-script` only at a trusted local `.ps1` helper, because the inventory
+script executes it after the report is written.
 
 ```powershell
 python .\scripts\it-operations\windows-file-cleanup\Analyze-C.py --root C:\ --output-dir <dir> --notindexed-script <path>

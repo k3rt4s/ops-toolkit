@@ -52,6 +52,16 @@ def _is_reparse(entry):
     return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
 
 
+def _find_repository_root(start):
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists() or (
+            (candidate / "Invoke-RepoValidation.ps1").exists()
+            and (candidate / "README.md").exists()
+        ):
+            return candidate
+    return None
+
+
 def scan_drive(root_path, out_file):
     total_files = 0
     total_dirs = 0
@@ -146,9 +156,9 @@ def main(argv=None):
         "--notindexed-script",
         type=Path,
         required=True,
-        help="Path to set_notindexed.ps1, run against the finished report so it is excluded "
-             "from Windows Search indexing. This is a public repository, so no workstation "
-             "path is assumed.",
+        help="Path to a trusted local .ps1 helper, run against the finished report so it is "
+             "excluded from Windows Search indexing. This is a public repository, so no "
+             "workstation path is assumed.",
     )
     args = parser.parse_args(argv)
     if sys.platform != "win32":
@@ -159,19 +169,21 @@ def main(argv=None):
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Setup safe output structure
-    output_dir = os.path.abspath(args.output_dir)
-    repository_root = Path(__file__).resolve().parents[3]
-    code_root = os.path.normcase(os.path.abspath(repository_root))
+    output_dir = args.output_dir.resolve()
+    repository_root = _find_repository_root(Path(__file__).resolve().parent)
+    if repository_root is None:
+        parser.error("could not identify the repository root; refusing to risk writing under source")
+    source_root = os.path.normcase(os.fspath(repository_root))
     try:
-        under_code = os.path.commonpath((os.path.normcase(output_dir), code_root)) == code_root
+        under_code = os.path.commonpath((os.path.normcase(os.fspath(output_dir)), source_root)) == source_root
     except ValueError:
         under_code = False
     if under_code:
         parser.error(f"refusing generated inventory under source tree: {output_dir}")
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    temp_ledger_path = os.path.join(output_dir, f"temp_ledger_{run_stamp}.md")
-    final_report_path = os.path.join(output_dir, f"c_drive_inventory_{run_stamp}.md")
+    temp_ledger_path = output_dir / f"temp_ledger_{run_stamp}.md"
+    final_report_path = output_dir / f"c_drive_inventory_{run_stamp}.md"
 
     # Phase 1: Stream detailed ledger rows to a temp file
     with open(temp_ledger_path, "w", encoding="utf-8") as temp_file:
@@ -205,17 +217,22 @@ def main(argv=None):
 
     # Clean up temporary streaming file
     os.remove(temp_ledger_path)
-    notindexed = args.notindexed_script
-    if notindexed.exists():
-        subprocess.run(
-            [
-                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(notindexed), "-Path", final_report_path,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+    notindexed = args.notindexed_script.resolve()
+    if notindexed.suffix.lower() != ".ps1" or not notindexed.is_file():
+        parser.error(f"--notindexed-script must point to an existing .ps1 file: {notindexed}")
+    print(f"[INFO] Running trusted not-indexed helper: {notindexed}")
+    result = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile",
+            "-File", str(notindexed), "-Path", str(final_report_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        print(f"[WARN] Not-indexed helper exited with {result.returncode}: {detail}", file=sys.stderr)
     print(f"\n[DONE] Successfully generated: {final_report_path}")
 
 if __name__ == "__main__":

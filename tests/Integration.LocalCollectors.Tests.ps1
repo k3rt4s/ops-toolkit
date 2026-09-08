@@ -350,8 +350,9 @@ Describe 'Export-SecurityControlEvidencePack ungraded reconciliation gaps' {
         $edr = $script:ungradedGapControls | Where-Object { $_.ControlId -eq 'EDR-01' }
         $edr.Status | Should -Be 'NotAssessed'
         $edr.Finding | Should -Match '\(not graded, the Defender inventory is not a reconciliation authority\)'
-        ($edr.Finding -match 'Reconciliation gaps: (?<GapCount>\d+)') | Should -BeTrue
-        [int]$Matches.GapCount | Should -BeGreaterThan 0
+        $gapMatch = [regex]::Match($edr.Finding, 'Reconciliation gaps: (?<GapCount>\d+)')
+        $gapMatch.Success | Should -BeTrue
+        [int]$gapMatch.Groups['GapCount'].Value | Should -BeGreaterThan 0
         "$($edr.Limitations);$($edr.FailedReads)" |
             Should -Match 'Defender inventory is not a readable required reconciliation authority'
     }
@@ -382,6 +383,27 @@ Describe 'Export-SecurityControlEvidencePack scope exclusion validation' {
                 -ComputerName 'PC01' -ScopeExclusion @(@{ Target = 'PC01'; Reason = '   ' }) `
                 -OutputDirectory (Join-Path $script:workRoot 'invalid-reason')
         } | Should -Throw '*non-empty Target and Reason*'
+    }
+
+    It 'rejects exclusions against an explicitly supplied empty target list' {
+        $emptyTargets = Join-Path $script:workRoot 'empty-targets.txt'
+        Set-Content -LiteralPath $emptyTargets -Value @('# no targets') -Encoding utf8
+        $defenderPath = Join-Path $script:workRoot 'empty-targets-defender.csv'
+        @(
+            [pscustomobject]@{
+                ComputerDnsName = 'PC01'
+                Verdict = 'Protected'
+                CoverageStatus = 'Onboarded'
+                ContactStatus = 'Reporting'
+            }
+        ) | Export-Csv -LiteralPath $defenderPath -NoTypeInformation -Encoding utf8
+
+        {
+            & (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1') `
+                -TargetListPath $emptyTargets -DefenderDeviceInventoryPath $defenderPath `
+                -ScopeExclusion @(@{ Target = 'PC01'; Reason = 'Retired asset' }) `
+                -OutputDirectory (Join-Path $script:workRoot 'invalid-empty-target-list')
+        } | Should -Throw '*not in -ComputerName*'
     }
 }
 

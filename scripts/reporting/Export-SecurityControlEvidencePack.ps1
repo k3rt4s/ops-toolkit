@@ -139,6 +139,10 @@ $inputSources = [System.Collections.Generic.List[object]]::new()
 
 # Resolve the target list. A file wins nothing over -ComputerName; the two combine,
 # because an operator will keep a standing list and add a machine for one run.
+$explicitEndpointScopeSupplied = (
+    $PSBoundParameters.ContainsKey('ComputerName') -or
+    $PSBoundParameters.ContainsKey('TargetListPath')
+)
 $targets = [System.Collections.Generic.List[string]]::new()
 foreach ($name in @($ComputerName)) {
     if ($name) { $targets.Add($name) }
@@ -167,7 +171,7 @@ foreach ($entry in @($ScopeExclusion | Where-Object { $_ })) {
         throw 'Every -ScopeExclusion entry needs non-empty Target and Reason values.'
     }
     if ($target -notin $requestedTargets) {
-        $managementPlaneScopeOnly = ($requestedTargets.Count -eq 0) -and [bool]($DefenderDeviceInventoryPath -or $CoverageManifestPath)
+        $managementPlaneScopeOnly = (-not $explicitEndpointScopeSupplied) -and [bool]($DefenderDeviceInventoryPath -or $CoverageManifestPath)
         if (-not $managementPlaneScopeOnly) {
             throw "Scope exclusion '$target' is not in -ComputerName or -TargetListPath. An exclusion cannot widen or invent the requested scope."
         }
@@ -463,7 +467,7 @@ function ConvertTo-OpsMarkdownTableValue {
         [object]$Value
     )
 
-    ([string]$Value -replace '\|', '/' -replace '\s+', ' ').Trim()
+    ([string]$Value -replace '\r?\n', ' ').Trim().Replace('|', '\|')
 }
 
 function ConvertTo-OpsEndpointKey {

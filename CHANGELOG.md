@@ -5,6 +5,28 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-08
+
+### Fixed: drive inventory source-tree guard portability
+
+- `Analyze-C.py` now derives the repository root from its own file location instead
+  of hard-coding `C:\Code` when refusing to write generated inventory under the
+  source tree, passes string paths to the optional not-indexed helper, and reports
+  helper failures instead of swallowing them. If the repository root cannot be
+  identified, the script refuses to run rather than risk writing under source. The
+  required not-indexed helper must now be a trusted, existing `.ps1` file and its
+  resolved path is printed before execution. `tests\RequiredPathParameters.Tests.ps1`
+  covers the absence of this workstation-specific path in that script body.
+- `Export-SecurityControlEvidencePack.ps1` now normalizes newlines in input-source
+  table cells and escapes literal pipes before writing `summary.md`, so a source-read
+  note cannot split a Markdown row without losing the pipe character.
+- Management-plane-only scope exclusions now stay relaxed only when no explicit
+  endpoint scope was supplied; an explicitly supplied but empty target list still
+  rejects exclusions as out of scope. The reconciliation-gap test now reads its
+  gap count through a local regex match instead of `$Matches`.
+- The top-level README examples now include the required path arguments for the
+  scripts whose workstation-specific defaults were removed.
+
 ## 2026-09-07
 
 ### Added: end-to-end ungraded reconciliation-gap coverage

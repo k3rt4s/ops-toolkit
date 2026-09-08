@@ -609,6 +609,7 @@ $splat
     try {
         $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments `
             -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $null = $process.Handle  # Cache handle so ExitCode reads back after exit
 
         if ($TimeoutSeconds -eq 0) {
             $process.WaitForExit()
@@ -680,6 +681,7 @@ function Confirm-LiveScriptRun {
 
     if ($Run.Status -eq 'NotRun') {
         Set-ItResult -Skipped -Because $Run.Note
+        return
     }
 
     if ($Run.Status -eq 'Failed') {

@@ -7,6 +7,14 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-08
 
+### Changed: backlog cut to repo-fit work
+
+- Removed `net-hygiene` and `mcp-tool-ladder` from the live scored index in
+  `FUTURE_FEATURES.md` after review. The network hygiene item needs a time-series
+  network event stream outside OpsToolkit's point-in-time reporting scope, and the
+  MCP tool-ladder note belongs to framework or internal tooling material rather than
+  this PowerShell operations toolkit.
+
 ### Fixed: drive inventory source-tree guard portability
 
 - `Analyze-C.py` now derives the repository root from its own file location instead

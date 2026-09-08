@@ -6,17 +6,9 @@ acceptance criteria live in [USER_STORIES.md](USER_STORIES.md), not here.
 
 ## Scored index
 
-- **net-hygiene** A RITA-style network hygiene self-audit, direct-IP HTTP and abnormal
-  subdomain-count DNS. See "Ingested 2026-08-21: public talk and summit digests".
-  `score: kind=feature gain=2/8/20 p=0.3 hours=2/6/16 ai=6 risk=0.1x2 rev=two-way conf=opinion id=net-hygiene`
-  `return: likelihood about 3 in 10 that this lands and is used, estimated with nothing counted, and it is low because the item as filed needs a network event stream over time, which is the exact capability the 2026-08-17 review rejected for this repository; impact what the developer keeps living with is no answer to direct-IP HTTP or abnormal subdomain-count DNS on a machine he is assessing, worth 2 to 20 h of manual work on each engagement that needs it; evidence the Ingested 2026-08-21 section of this file for the item and Considered and rejected for the Behavioural detection signals decision it collides with, both read on 2026-09-06`
-  - `worker: sonnet 6/12/24 h, and not dispatchable until its data source is decided`
-
-- **mcp-tool-ladder** The internal-MCP tool-ladder and least-privilege practice note. See
-  "Ingested 2026-08-21: public talk and summit digests".
-  `score: kind=docs gain=0.5/2/6 p=0.2 hours=1/3/8 ai=2 rev=two-way conf=opinion id=mcp-tool-ladder`
-  `return: likelihood about 1 in 5 that this becomes work in this repository, estimated with no count, because ops-toolkit ships read-only PowerShell collectors and this item is about building internal MCP servers in Go, a different product line; impact none to this toolkit, the cost of leaving it is that a useful practice note about least-privilege scopes and deterministic gates on mutating verbs sits in the wrong backlog where the project that would use it never reads it; evidence the first bullet of Ingested 2026-08-21 in this file, sourced to the Infosec Age of AI Summit 2026 digest, read on 2026-09-06`
-  - `worker: sonnet 3/6/12 h if it is ever built, and not in this repository`
+No live repo-fit backlog item remains here as of 2026-09-08. The two scored items that
+were still indexed, `net-hygiene` and `mcp-tool-ladder`, were cut on the developer's
+approval because they do not belong in this repo.
 
 ## Moved to the work board
 
@@ -53,9 +45,10 @@ Pending. This heading is a record, not a live section; nothing here is scored tw
 
 ## Ready to pick up
 
-Two unshipped features are still indexed above; five more moved to the work board on
-2026-09-06. There is also one open question for
-the developer, further down, which is a decision rather than work.
+No unshipped feature is ready to pick up from this backlog. Five features moved to the
+work board on 2026-09-06; four have since shipped, and the remaining one is tracked on
+the work board as lane A. There is also one open question for the developer, further
+down, which is a decision rather than work.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
 built the same day and are shipped: the endpoint telemetry and audit-logging posture
@@ -99,6 +92,15 @@ The four items opened on 2026-08-15 were all completed the same day:
 
 Recorded so the reasoning is not re-derived later.
 
+- **RITA-style network hygiene self-audit.** Cut from the scored index on 2026-09-08.
+  Direct-IP HTTP and abnormal subdomain-count DNS require a network event stream over
+  time. That collides with the standing 2026-08-17 decision that OpsToolkit reads
+  point-in-time configuration and report data rather than becoming a detection engine
+  or SIEM competitor.
+- **Internal-MCP tool ladder.** Cut from the scored index on 2026-09-08. The practice
+  note about internal MCP servers, least-privilege scopes, and deterministic gates on
+  mutating verbs is useful, but it belongs in framework or internal tooling material,
+  not in this PowerShell operations toolkit.
 - **Scheduling.** Every collector is run by hand. Scheduling them is what makes the
   change detection in `Compare-OpsToolkitRun.ps1` worth having, since comparing two
   runs needs two runs. Not queued because it should follow the live verification, not
@@ -379,6 +381,6 @@ Source: Flare "How Information Stealers Work" talk, YouTube FmF8cjViSlI.
 
 ## Ingested 2026-08-21: public talk and summit digests
 
-- Internal MCP servers in Go with the tool-ladder pattern; treat agent-reachable endpoints as new unvetted employees, least-privilege scopes and deterministic gates on mutating verbs. Source: Infosec Age of AI Summit 2026, talks 11 and AMA, digest_infosec_age_of_ai_summit_2026.md
+- Internal MCP servers in Go with the tool-ladder pattern; treat agent-reachable endpoints as new unvetted employees, least-privilege scopes and deterministic gates on mutating verbs. Source: Infosec Age of AI Summit 2026, talks 11 and AMA, digest_infosec_age_of_ai_summit_2026.md. Cut from the OpsToolkit scored index on 2026-09-08 because it belongs to framework or internal tooling material, not this repo.
 - EDR coverage differential hunt, diff EDR endpoint count vs inventory vs AD vs IP space, as a coverage-gap-report script. Source: Threat Hunting Summit 2026, Hartman 04:10:20-04:12:00, digest_threat_hunting_summit_2026.md. Covered: this is what `Export-CoverageReconciliation.ps1` and the Defender device collector shipped on 2026-08-17 already do, so it is not indexed as unshipped work.
-- RITA-style network hygiene self-audit (direct-IP HTTP, abnormal subdomain-count DNS). Source: Threat Hunting Summit 2026, Kidane 03:44:00-03:50:00, digest_threat_hunting_summit_2026.md
+- RITA-style network hygiene self-audit (direct-IP HTTP, abnormal subdomain-count DNS). Source: Threat Hunting Summit 2026, Kidane 03:44:00-03:50:00, digest_threat_hunting_summit_2026.md. Cut from the OpsToolkit scored index on 2026-09-08 because it requires a time-series network event stream, outside this repo's point-in-time reporting scope.

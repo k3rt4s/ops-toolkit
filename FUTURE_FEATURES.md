@@ -232,6 +232,14 @@ for anyone already running these, and what the replacement should be is a produc
 decision rather than a cleanup: an environment variable, a required parameter, or a
 per-install config file. The Defender one is the sharpest and could reasonably go first.
 
+**Shipped 2026-09-07 as `59b9237`.** Every path parameter that carried a hard-coded
+default (`Set-WorkstationPerformance.ps1`, `Set-BrowserCredentialPosture.ps1`,
+`Set-WorkstationLockPosture.ps1`, `Invoke-DiskSpaceReclaim.ps1`, `Analyze-C.py`, and
+`compare_folders.py`) is now a required parameter with no default, including the
+Defender exclusion default in `Set-WorkstationPerformance.ps1`. A no-argument run now
+refuses before changing anything. This paragraph and the two above are the original
+finding, kept as the record of what was wrong; the fix is done, not queued.
+
 ## Implemented 2026-08-30: evidence scope and traceability
 
 The investigation is complete. The platform added value as a comparison point for
@@ -256,13 +264,17 @@ need a named data source and operator need before they become stories.
 
 ## Evidence-pack follow-ups
 
+**Shipped 2026-09-07.** All three items below are done:
+
 - Allow `-ScopeExclusion` when scope comes only from management-plane inputs. Today,
   any exclusion without `-ComputerName` throws at the target-validation gate.
+  Shipped as `6e7126f`.
 - Note in the input-sources row that the coverage-manifest snapshot is rewritten with
   pack-relative paths, so the `SourceSHA256`/`SHA256` difference is explained, and
   document that the sanitized manifest re-runs only from the pack root.
+  Shipped as `2ab7be4`.
 - Add a regression test for reconciliation gaps with the Defender inventory absent
-  from the manifest. The display fix shipped 2026-08-30.
+  from the manifest. The display fix shipped 2026-08-30. This test shipped as `b82f5c2`.
 
 ## Export-WindowsUpdateHealth hangs on a busy update stack
 
@@ -279,6 +291,11 @@ a check that could not run is reported as not having run. Evidence:
 `C:\Code_data\ops-toolkit\wu-health-diagnostic-2026-08-31\run.log`. The separate
 test-harness side, bounding live-integration setups, was completed on 2026-08-31; it
 does not resolve this collector-level defect.
+
+**Shipped 2026-09-08.** `e5283d3` added `-HistoryTimeoutSeconds` plus `Unmeasured`
+history signals, and `73b1b57` isolated the WUA history probe in a child PowerShell
+process so it can be bounded and killed. Strict passed all eight gates on the merged
+result. This collector-level defect is resolved.
 
 ## Open question for the developer
 

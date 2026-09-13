@@ -55,6 +55,25 @@ BeforeAll {
         $mutations.Count | Should -Be 0 -Because "a run that never got past parameter binding must not have changed anything: $($mutations | ConvertTo-Json -Compress)"
     }
 
+    function Assert-PythonPathParametersRequired {
+        <#
+        .SYNOPSIS
+        For a Python argparse script, assert its path parameters are required=True with
+        no hard-coded workstation path used as a default value.
+        #>
+        param([string]$RelativePath, [string[]]$RequiredFlags)
+
+        $body = Get-Content -LiteralPath (Get-RepositoryScriptPath -RelativePath $RelativePath) -Raw
+
+        $body | Should -Not -Match ([regex]::Escape('default=') + '\s*[''"]C:\\\\Code') `
+            -Because 'a path argument must never fall back to a hard-coded workstation path'
+
+        foreach ($flag in $RequiredFlags) {
+            $pattern = [regex]::Escape($flag) + '[''"][\s\S]{0,200}?required\s*=\s*True'
+            $body | Should -Match $pattern -Because "argparse for $flag must be required=True with no default"
+        }
+    }
+
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-pathparams-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
     $script:systemModulePath = Use-FakeSystemModule
@@ -116,5 +135,33 @@ Describe 'Analyze-C.py path parameters' {
         $body = Get-Content -LiteralPath (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-file-cleanup\Analyze-C.py') -Raw
         $body | Should -Not -Match ([regex]::Escape('C:\Code_data'))
         $body | Should -Not -Match ([regex]::Escape('C:\Code\'))
+    }
+}
+
+# 2026-09-13: the three Thunderbird MBOX-extraction scripts (scripts\email\thunderbird\)
+# already required every path argument with no default when they were first added, so
+# there was no "remove the default" fix to make here. They only lacked test coverage for
+# it. Their docstrings and --help text still cite C:\Code_data\ops-toolkit\thunderbird-extract
+# as a suggested location, which Assert-PythonPathParametersRequired's default= check
+# permits, since a suggestion in a required argument's help text is not a fallback value.
+
+Describe 'extract_mbox_chunks.py path parameters' {
+    It 'requires --mbox and --output-dir with no hard-coded default' {
+        Assert-PythonPathParametersRequired -RelativePath 'scripts\email\thunderbird\extract_mbox_chunks.py' `
+            -RequiredFlags @('--mbox', '--output-dir')
+    }
+}
+
+Describe 'extract_all_mboxes.py path parameters' {
+    It 'requires --source-dir and --output-root with no hard-coded default' {
+        Assert-PythonPathParametersRequired -RelativePath 'scripts\email\thunderbird\extract_all_mboxes.py' `
+            -RequiredFlags @('--source-dir', '--output-root')
+    }
+}
+
+Describe 'export_emails_to_parquet.py path parameters' {
+    It 'requires --source-dir and --output-dir with no hard-coded default' {
+        Assert-PythonPathParametersRequired -RelativePath 'scripts\email\thunderbird\export_emails_to_parquet.py' `
+            -RequiredFlags @('--source-dir', '--output-dir')
     }
 }

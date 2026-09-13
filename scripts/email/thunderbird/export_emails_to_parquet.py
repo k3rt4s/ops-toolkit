@@ -20,8 +20,8 @@ Output layout:
         logs/
             parse_errors.txt, per-file tracebacks for failed messages
 
-Default output root: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\parquet\\
-    (pass as --output-dir)
+--output-dir is required; there is no default. Suggested location:
+    C:\\Code_data\\ops-toolkit\\thunderbird-extract\\parquet\\
 Never write output under C:\\Code\\.
 
 Parquet columns per message:
@@ -233,8 +233,8 @@ def main() -> None:
         "--output-dir",
         required=True,
         help=(
-            "Directory for Parquet output files and logs. "
-            "Recommended: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\parquet"
+            "Directory for Parquet output files and logs. Required; no default. "
+            "Suggested: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\parquet"
         ),
     )
     parser.add_argument(

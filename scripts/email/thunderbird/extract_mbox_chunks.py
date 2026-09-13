@@ -19,8 +19,9 @@ Output layout:
             chunk_log.txt, progress + timestamps
             chunk_errors.txt, tracebacks for individual write failures
 
-Default output root: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\
-    (pass a mailbox-specific subdirectory as --output-dir, e.g.
+--output-dir is required; there is no default. Suggested location:
+    C:\\Code_data\\ops-toolkit\\thunderbird-extract\\<mailbox-name>
+    (a mailbox-specific subdirectory under the data root, e.g.
      C:\\Code_data\\ops-toolkit\\thunderbird-extract\\Inbox)
 Never write output under C:\\Code\\.
 
@@ -125,8 +126,8 @@ def main() -> None:
         "--output-dir",
         required=True,
         help=(
-            "Directory to write chunk folders into. "
-            "Recommended: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\<mailbox-name>"
+            "Directory to write chunk folders into. Required; no default. "
+            "Suggested: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\<mailbox-name>"
         ),
     )
     parser.add_argument(

@@ -16,8 +16,8 @@ Output layout:
             logs/chunk_log.txt
             logs/chunk_errors.txt
 
-Default output root: C:\\Code_data\\ops-toolkit\\thunderbird-extract\\
-    (pass as --output-root)
+--output-root is required; there is no default. Suggested location:
+    C:\\Code_data\\ops-toolkit\\thunderbird-extract\\
 Never write output under C:\\Code\\.
 
 Dependencies: stdlib only (os, pathlib, argparse).
@@ -118,8 +118,8 @@ def main() -> None:
         "--output-root",
         required=True,
         help=(
-            "Root directory for all chunked output. "
-            "Recommended: C:\\Code_data\\ops-toolkit\\thunderbird-extract"
+            "Root directory for all chunked output. Required; no default. "
+            "Suggested: C:\\Code_data\\ops-toolkit\\thunderbird-extract"
         ),
     )
     parser.add_argument(

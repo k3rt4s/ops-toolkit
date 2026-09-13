@@ -409,11 +409,8 @@ Describe 'Export-SecurityControlEvidencePack scope exclusion validation' {
 
 Describe 'Test-WindowsHardeningState against this machine' {
     BeforeAll {
-        # Note the path: Test-WindowsHardeningState lives in scripts\windows-hardening,
-        # while Export-BitLockerEscrowStatus and Export-LocalAdminAndLapsPosture live in
-        # scripts\it-operations\windows-hardening. The category exists at both levels.
         $script:hardeningRun = Invoke-ScriptUnderTest `
-            -RelativePath 'scripts\windows-hardening\Test-WindowsHardeningState.ps1' `
+            -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' `
             -Argument @{ OutputDirectory = (Join-Path $script:workRoot 'hardening') } `
             -TimeoutSeconds $script:liveSetupTimeoutSeconds
         $script:hardening = $script:hardeningRun.Summary

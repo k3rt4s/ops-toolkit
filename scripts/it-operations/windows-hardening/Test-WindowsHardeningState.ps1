@@ -35,9 +35,9 @@ claims. A protocol that negotiates while the registry says it is disabled is the
 finding worth having.
 
 Required syntax:
-pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1
-pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
-pwsh -File .\scripts\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
 
 .OUTPUTS
 Writes per-item compliance, a per-category rollup, handshake results, and a run
@@ -71,7 +71,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\reports\windows-hardening'),
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\windows-hardening'),
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -81,7 +81,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 $targetScript = @{
     SchannelTls = @{

@@ -4,15 +4,15 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 ## Contents
 
-| Path                        | Purpose                                                                                   |
-| --------------------------- | ----------------------------------------------------------------------------------------- |
-| `networking\`               | Network adapter MAC address helpers.                                                      |
-| `performance\`              | Workstation performance posture helpers.                                                  |
-| `printers\`                 | Windows printer connection helpers.                                                       |
-| `utilities\`                | General endpoint and admin utilities.                                                     |
-| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                             |
-| `windows-hardening\`        | Workstation idle-lock and sleep posture, plus browser credential-theft surface hardening. |
-| `..\..\data\it-operations\` | Example non-secret input data.                                                            |
+| Path                        | Purpose                                                                                                                                                          |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `networking\`               | Network adapter MAC address helpers.                                                                                                                             |
+| `performance\`              | Workstation performance posture helpers.                                                                                                                         |
+| `printers\`                 | Windows printer connection helpers.                                                                                                                              |
+| `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                 |
+| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                    |
+| `windows-hardening\`        | Workstation idle-lock and sleep posture, browser credential-theft surface hardening, plus system-level TLS/privacy/bloatware hardening and its compliance check. |
+| `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                   |
 
 ## Examples
 
@@ -149,4 +149,55 @@ Roll back the browser credential posture:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
+```
+
+Apply the TLS 1.2-only Schannel baseline (elevated; live run, then preview only):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
+```
+
+Preview Windows 11 privacy/telemetry hardening, then apply and roll back:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
+```
+
+Preview removing provisioned AppX bloatware, then apply and roll back from a saved state file:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
+```
+
+Check compliance against the hardening baselines above (registry state plus a live TLS handshake probe):
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
+```
+
+Join an applications CSV to an endpoints CSV on agent/endpoint name:
+
+```powershell
+pwsh -File .\scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv
+pwsh -File .\scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv -IncludeUnmatchedApplications
+```
+
+Scan a folder tree for retired or soon-to-be-retired Microsoft APIs:
+
+```powershell
+pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts
+pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts,D:\Share -Severity Broken
+```
+
+Compare two folder trees by BLAKE3 content hash with optional SHA-256 verification:
+
+```powershell
+python .\scripts\it-operations\utilities\compare_folders.py --folder-a D:\Source --folder-b E:\Backup --label-a source --label-b backup --sha256
 ```

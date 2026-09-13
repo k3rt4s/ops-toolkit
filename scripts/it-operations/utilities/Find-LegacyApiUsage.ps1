@@ -23,9 +23,9 @@ Application Impersonation, the original Get-MessageTrace), and Send-MailMessage.
 Each finding carries the deadline, the reason, and the replacement.
 
 Required syntax:
-pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts
-pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts,D:\Share -Severity Broken
-pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path . -OutputDirectory .\reports\utilities
+pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts
+pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path C:\Scripts,D:\Share -Severity Broken
+pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path . -OutputDirectory .\reports\utilities
 
 .OUTPUTS
 Writes findings, a per-rule rollup, a per-deadline rollup, and a summary as CSV and
@@ -60,7 +60,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\reports\utilities'),
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\utilities'),
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -73,14 +73,14 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 if (-not $Path) {
     @(
         'Find-LegacyApiUsage.ps1 scans a folder tree for retired or soon-to-be-retired Microsoft APIs.'
         ''
         'Usage:'
-        '  pwsh -File .\scripts\utilities\Find-LegacyApiUsage.ps1 -Path <folder> [-Path <folder2>]'
+        '  pwsh -File .\scripts\it-operations\utilities\Find-LegacyApiUsage.ps1 -Path <folder> [-Path <folder2>]'
         '                                                        [-Severity All|Broken|Deadline|Advisory]'
         '                                                        [-Extension .ps1,.py] [-ExcludeDirectory .git]'
         '                                                        [-OutputDirectory <dir>] [-IncludeSelf]'

@@ -3,7 +3,7 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     Import-ReportingModule
-    $script:scannerPath = Get-RepositoryScriptPath -RelativePath 'scripts\utilities\Find-LegacyApiUsage.ps1'
+    $script:scannerPath = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\utilities\Find-LegacyApiUsage.ps1'
 
     $script:fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) "legacy-scan-fixture-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:fixtureRoot -Force | Out-Null

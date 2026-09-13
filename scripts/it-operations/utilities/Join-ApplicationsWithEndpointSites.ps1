@@ -15,8 +15,8 @@ site data. By default it joins application "Agent Name" to endpoint "Endpoint
 Name" and writes matched rows, optional unmatched rows, and a summary JSON file.
 
 Required syntax:
-pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv
-pwsh -File .\scripts\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv -IncludeUnmatchedApplications
+pwsh -File .\scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv
+pwsh -File .\scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1 -ApplicationsPath .\applications.csv -EndpointsPath .\endpoints.csv -IncludeUnmatchedApplications
 
 .OUTPUTS
 Writes matched CSV and summary JSON reports under reports\utilities by default.
@@ -64,7 +64,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\reports\utilities'),
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\utilities'),
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -74,7 +74,7 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 function Assert-CsvColumn {
     param(

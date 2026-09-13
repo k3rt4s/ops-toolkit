@@ -24,9 +24,9 @@ It intentionally does not disable security-sensitive Microsoft connections such
 as Defender, SmartScreen, Windows Update, licensing, or root certificate updates.
 
 Required syntax:
-pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
-pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1
-pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
 
 .OUTPUTS
 Writes plan and state-list CSV/JSON files under reports\windows-hardening by
@@ -47,7 +47,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\reports\windows-hardening'),
+    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\windows-hardening'),
 
     [Parameter()]
     [switch]$IncludeScheduledTasks,
@@ -76,9 +76,9 @@ function Show-Usage {
 Windows 11 privacy hardening.
 
 Usage:
-  pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
-  pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1
-  pwsh -File .\scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1 -Rollback -WhatIf
 
 Options:
   -DiagnosticDataLevel    Required or Security. Default: Required.

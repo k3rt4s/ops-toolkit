@@ -297,16 +297,23 @@ history signals, and `73b1b57` isolated the WUA history probe in a child PowerSh
 process so it can be bounded and killed. Strict passed all eight gates on the merged
 result. This collector-level defect is resolved.
 
-## Open question for the developer
+## Resolved: windows-hardening and utilities folder duplication
 
-**`windows-hardening` and `utilities` each exist at two levels of `scripts\`**, once at
-the top and once under `it-operations\`, with no principle separating them:
-`Test-WindowsHardeningState.ps1` is in one and `Export-BitLockerEscrowStatus.ps1` in the
-other. It looks like a move that stopped halfway. Two leftover empty directories
-(`scripts\printers\`, `scripts\windows-file-cleanup\`) were removed, as git tracked
-nothing in them, but no script was moved: which way the split should resolve is a
-structural call, and moving files would churn every documentation reference and any
-scheduled task path for no functional gain. Raised here rather than decided.
+**Shipped 2026-09-13.** `windows-hardening` and `utilities` used to exist at two levels
+of `scripts\`, once at the top and once under `it-operations\`, with no principle
+separating them. Jon chose to fold the top level into `it-operations\`: the 4 top-level
+scripts under the old `scripts\windows-hardening\` directory and the 4 top-level
+`scripts\utilities\*` files (3 scripts plus `requirements.txt`) moved into `scripts\it-operations\windows-hardening\`
+and `scripts\it-operations\utilities\`, and the emptied top-level directories were
+removed. Every documentation reference (both READMEs, the top-level README's Areas and
+Updated Scripts tables, `USER_STORIES.md`) and every test `-RelativePath` were updated to
+the new locations. `docs\retirement-review.md` and `docs\reorganization-map.md` cite
+specific script paths that `Invoke-RepoValidation.ps1`'s StaleReference gate checks for
+resolvability, so their citations were updated to the new locations too (reorganization-map.md
+keeps its dated 2026-05-04 move table as a literal historical record, with a note pointing
+to this section for the later move). `docs\legacy-script-inventory.md` and
+`archive\legacy-scripts\` were left untouched as historical record of the repo's state at
+the time each was written.
 
 ## Residual risk, not a backlog item
 
@@ -384,8 +391,9 @@ Source: Flare "How Information Stealers Work" talk, YouTube FmF8cjViSlI.
   `Set-WorkstationLockPosture.ps1`, write timestamped plan/state CSV plus rollback JSON
   to `C:\Code_data\ops-toolkit\<domain>`, and pair with a Pester WhatIf-plus-execute test
   via `Invoke-WindowsScriptPair`. Folder placement, top-level `scripts\windows-hardening\`
-  versus `scripts\it-operations\windows-hardening\`, tied into the standing "Open question
-  for the developer" below; Jon chose `it-operations\windows-hardening\`.
+  versus `scripts\it-operations\windows-hardening\`; Jon chose `it-operations\windows-hardening\`,
+  and the same choice resolved the standing top-level/it-operations duplication for the
+  rest of the tree on 2026-09-13 (see "Resolved" section above).
 - Shipped 2026-09-01 as `Set-BrowserCredentialPosture.ps1` under
   `it-operations\windows-hardening\`; see CHANGELOG. The enforce/report split narrowed to
   what a local machine policy can actually pin (Chrome and Edge extension block, Chrome

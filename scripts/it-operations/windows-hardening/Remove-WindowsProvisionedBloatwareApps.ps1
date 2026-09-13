@@ -18,9 +18,9 @@ package list is informed by Microsoft AppX servicing documentation, common
 Windows 11 debloat tooling, and infosec/admin community guidance.
 
 Required syntax:
-pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
-pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
-pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 
 .OUTPUTS
 Writes inventory, plan, state, and rollback guidance CSV/JSON files under
@@ -36,11 +36,11 @@ Active script kept in the reorganized ops-toolkit repo.
 param(
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$RemoveListPath = (Join-Path $PSScriptRoot '..\..\data\windows-hardening\windows11-appx-remove.txt'),
+    [string]$RemoveListPath = (Join-Path $PSScriptRoot '..\..\..\data\windows-hardening\windows11-appx-remove.txt'),
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ProtectedListPath = (Join-Path $PSScriptRoot '..\..\data\windows-hardening\windows11-appx-protected.txt'),
+    [string]$ProtectedListPath = (Join-Path $PSScriptRoot '..\..\..\data\windows-hardening\windows11-appx-protected.txt'),
 
     [Parameter()]
     [ValidateSet('CurrentUser', 'AllUsers', 'None')]
@@ -57,7 +57,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\reports\windows-hardening'),
+    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\windows-hardening'),
 
     [Parameter()]
     [switch]$SkipWindows11Check
@@ -71,9 +71,9 @@ function Show-Usage {
 Windows 11 AppX bloatware removal.
 
 Usage:
-  pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
-  pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
-  pwsh -File .\scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 
 Options:
   -RemoveListPath             Text file of package-name patterns to remove.

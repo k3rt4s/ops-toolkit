@@ -213,7 +213,7 @@ a Microsoft module or API with a published retirement date, ordered by how soon 
 bites, so that I work the nearest cutoff first instead of finding out when an
 overnight job stops authenticating.
 
-Status: shipped 2026-08-14 (`scripts/utilities/Find-LegacyApiUsage.ps1`)
+Status: shipped 2026-08-14 (`scripts/it-operations/utilities/Find-LegacyApiUsage.ps1`)
 
 Acceptance criteria:
 

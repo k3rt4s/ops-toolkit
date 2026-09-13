@@ -17,16 +17,23 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 | `Windows Active Directory\` | `scripts\active-directory\`                                                               |
 | `Windows File Cleanup\`     | `scripts\it-operations\windows-file-cleanup\`                                             |
 | `Windows Hardening\`        | `scripts\windows-hardening\`, `data\windows-hardening\`, and `archive\windows-hardening\` |
-| `File Check.ps1`            | `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1`                                |
+| `File Check.ps1`            | `scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1`                  |
+
+Note: on 2026-09-13, `scripts\utilities\` and `scripts\windows-hardening\` (rows above,
+as they stood after the 2026-05-04 reorganization) were folded into
+`scripts\it-operations\utilities\` and `scripts\it-operations\windows-hardening\`
+respectively, closing a duplication with the existing `it-operations\` subfolders of the
+same names. The table above is left as the literal record of the 2026-05-04 move; see
+`FUTURE_FEATURES.md` for the later consolidation.
 
 ## Modernized Scripts
 
 - `scripts\azure\Export-AzNetworkInventory.ps1` replaces the broken `AzureRM` NSG export snippets with an `Az`-based inventory exporter.
 - `scripts\azure\New-AzKeyVaultServicePrincipal.ps1` parameterizes subscription, environment, app name, and Key Vault policy assignment.
 - `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1` removes the embedded rollback block and supports `-WhatIf`, per-site targeting, optional IIS restart, validation, replacement review reports, and summary output.
-- `scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1` replaces the older one-way Schannel hardening script with a report-first `-WhatIf` workflow, registry backups, and summary output.
-- `scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1` replaces the older one-way telemetry and consumer-feature script with a Windows 11 scoped privacy/AI report-first workflow, rollback, state reports, registry backups, and summary output.
-- `scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` replaces legacy bloatware lists and one-way AppX removal with Windows 11 scoped remove/protect lists, inventory reports, state reports, and rollback guidance.
+- `scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1` replaces the older one-way Schannel hardening script with a report-first `-WhatIf` workflow, registry backups, and summary output.
+- `scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1` replaces the older one-way telemetry and consumer-feature script with a Windows 11 scoped privacy/AI report-first workflow, rollback, state reports, registry backups, and summary output.
+- `scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1` replaces legacy bloatware lists and one-way AppX removal with Windows 11 scoped remove/protect lists, inventory reports, state reports, and rollback guidance.
 - `scripts\it-operations\printers\Set-WindowsPrinterConnections.ps1` combines the previous add/remove printer helpers into one report-first command with `-Action Add` and `-Action Remove`.
 - `scripts\it-operations\windows-file-cleanup\Invoke-WindowsFileCleanup.ps1` combines temp cleanup and stale-file cleanup into one guarded report-first command.
 - `scripts\it-operations\utilities\Get-CurrentUserContext.ps1` adds optional report output for endpoint user, group, and network context.
@@ -35,6 +42,6 @@ This repo was reorganized on 2026-05-04 to separate runnable automation from doc
 - `scripts\active-directory\Send-AdSecurityEmailReport.ps1` combines privileged group and password-never-expires reports into one AD security report command.
 - `scripts\active-directory\Send-AdPasswordExpiryReminderEmails.ps1` keeps the distinct user-notification workflow but adds email plan/state reporting and safer send behavior.
 - `scripts\microsoft-365\Export-M365DistributionGroupMessageTraceUsage.ps1` uses current Exchange Online `Get-MessageTraceV2` behavior, 10-day query windows, and report output parameters.
-- `scripts\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
+- `scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1` fixes the CSV join logic and exposes paths as parameters.
 - `scripts\pentesting\Install-AutoReconDependencies.sh` fixes the shebang, package continuation, `pipx` install flow, and shell safety options.
 - `docs\labs\elk-lab\scripts\*.sh` were renamed into explicit lab setup helpers for Elastic/Kibana, Filebeat, and DVWA.

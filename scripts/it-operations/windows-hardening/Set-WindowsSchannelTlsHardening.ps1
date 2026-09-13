@@ -16,8 +16,8 @@ SSL/TLS protocol versions, sets a hardened cipher suite order, and enables
 strong .NET and WinHTTP TLS defaults.
 
 Required syntax:
-pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
-pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
 
 .OUTPUTS
 Writes a plan CSV and JSON under reports\windows-hardening by default. Live runs
@@ -37,7 +37,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\reports\windows-hardening'),
+    [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\windows-hardening'),
 
     [Parameter()]
     [switch]$SkipRegistryBackup,
@@ -63,8 +63,8 @@ function Show-Usage {
 Windows Schannel TLS hardening.
 
 Usage:
-  pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
-  pwsh -File .\scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
 
 Options:
   -Baseline                           Baseline to apply. Currently: Tls12Only.

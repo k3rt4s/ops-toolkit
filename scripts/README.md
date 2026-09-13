@@ -9,13 +9,11 @@ Runnable automation lives under this folder, grouped by platform or operational 
 - `certificates/` - Certificate expiry across stores, IIS bindings, and TLS endpoints.
 - `entra/` - Microsoft Entra ID identity reporting through Microsoft Graph.
 - `iis/` - IIS configuration and HTTP response header scripts.
-- `it-operations/` - Endpoint administration, printers, user context, cleanup, and OS lifecycle helpers.
+- `it-operations/` - Endpoint administration, printers, user context, cleanup, OS lifecycle, windows-hardening, and utilities helpers.
 - `logging/` - Whether the security telemetry a hunt or detection needs is switched on, and how long it survives.
 - `microsoft-365/` - Exchange Online and Microsoft 365 administration.
 - `pentesting/` - Lab or workstation setup helpers for security testing.
 - `reporting/` - Cross-cutting reporting that runs other collectors and assembles their output.
-- `utilities/` - Small workstation and CSV utilities, plus the retired-API scanner.
-- `windows-hardening/` - Windows telemetry, bloatware, and cipher hardening.
 
 ## Header Rule
 

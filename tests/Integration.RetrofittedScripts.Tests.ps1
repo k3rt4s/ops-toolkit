@@ -430,7 +430,7 @@ Describe 'Join-ApplicationsWithEndpointSites end to end' {
         @([pscustomobject]@{ 'Endpoint Name' = 'PC001'; 'Site' = 'London' }) |
             Export-Csv (Join-Path $script:work 'endpoints.csv') -NoTypeInformation -Encoding utf8
 
-        $script:joinSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\utilities\Join-ApplicationsWithEndpointSites.ps1') `
+        $script:joinSummary = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1') `
             -ApplicationsPath (Join-Path $script:work 'apps.csv') `
             -EndpointsPath (Join-Path $script:work 'endpoints.csv') `
             -IncludeUnmatchedApplications `
@@ -454,7 +454,7 @@ Describe 'Join-ApplicationsWithEndpointSites end to end' {
     It 'writes the unmatched report even when unmatched output was not requested' {
         # An empty report proves the join ran and found nothing left over. A missing
         # file cannot be told apart from a run that never happened.
-        $summary = & (Get-RepositoryScriptPath -RelativePath 'scripts\utilities\Join-ApplicationsWithEndpointSites.ps1') `
+        $summary = & (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\utilities\Join-ApplicationsWithEndpointSites.ps1') `
             -ApplicationsPath (Join-Path $script:work 'apps.csv') `
             -EndpointsPath (Join-Path $script:work 'endpoints.csv') `
             -OutputDirectory (Join-Path $script:work 'out2')

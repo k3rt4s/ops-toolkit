@@ -152,7 +152,7 @@ Describe 'Set-WindowsLightMode' {
 Describe 'Set-WindowsSchannelTlsHardening' {
     BeforeAll {
         $script:tls = Invoke-WindowsScriptPair -Tag 'tls' `
-            -RelativePath 'scripts\windows-hardening\Set-WindowsSchannelTlsHardening.ps1' `
+            -RelativePath 'scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1' `
             -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'tls'); Baseline = 'Tls12Only' }
     }
 
@@ -181,7 +181,7 @@ Describe 'Set-WindowsSchannelTlsHardening' {
 Describe 'Set-Windows11PrivacyHardening' {
     BeforeAll {
         $script:privacy = Invoke-WindowsScriptPair -Tag 'privacy' `
-            -RelativePath 'scripts\windows-hardening\Set-Windows11PrivacyHardening.ps1' `
+            -RelativePath 'scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardening.ps1' `
             -Argument @{
             ReportDirectory       = (Join-Path $script:workRoot 'privacy')
             SkipWindows11Check    = $true
@@ -334,7 +334,7 @@ Describe 'Set-NetworkAdapterRandomMac' {
 Describe 'Remove-WindowsProvisionedBloatwareApps' {
     BeforeAll {
         $script:appx = Invoke-WindowsScriptPair -Tag 'appx' `
-            -RelativePath 'scripts\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
+            -RelativePath 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
             -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'appx'); SkipWindows11Check = $true }
     }
 

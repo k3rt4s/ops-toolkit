@@ -46,9 +46,11 @@ Pending. This heading is a record, not a live section; nothing here is scored tw
 ## Ready to pick up
 
 No unshipped feature is ready to pick up from this backlog. Five features moved to the
-work board on 2026-09-06; four have since shipped, and the remaining one is tracked on
-the work board as lane A. There is also one open question for the developer, further
-down, which is a decision rather than work.
+work board on 2026-09-06 and all five have since shipped, the last being lane A
+(`Export-WindowsUpdateHealth` bounding) on 2026-09-08. No open question for the
+developer remains; the one that stood here, the `windows-hardening`/`utilities`
+folder duplication, was decided and resolved on 2026-09-13. See "Resolved:
+windows-hardening and utilities folder duplication" below.
 
 The three items filed on 2026-08-17 from a threat-hunting conference transcript were all
 built the same day and are shipped: the endpoint telemetry and audit-logging posture

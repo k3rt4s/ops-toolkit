@@ -202,7 +202,7 @@ $script:EvidenceColumns = @(
     'ApexDnssecEnabled', 'Note'
 )
 
-function New-OpsEvidenceRow {
+function Get-OpsBlankEvidenceRow {
     <#
     .SYNOPSIS
     Return an ordered hashtable with every evidence column present and blank.
@@ -396,7 +396,7 @@ $evidenceRows = [Collections.Generic.List[object]]::new()
 $evidenceByHost = @{}
 $apexCache = @{}
 
-function Get-OpsApexFacts {
+function Get-OpsApexFact {
     <#
     .SYNOPSIS
     DNSSEC and HSTS preload status for an apex domain, looked up once per run.
@@ -414,7 +414,7 @@ function Get-OpsApexFacts {
 for ($i = 0; $i -lt $HostName.Count; $i++) {
     $h = $HostName[$i]
     Write-Verbose "Checking $h ..."
-    $row = New-OpsEvidenceRow -TargetHost $h
+    $row = Get-OpsBlankEvidenceRow -TargetHost $h
     $notes = [Collections.Generic.List[string]]::new()
     $isIp = Test-OpsWebIpAddress -Value $h
     $apex = Get-OpsWebApexDomain -HostName $h -Override $ApexDomain
@@ -523,7 +523,7 @@ for ($i = 0; $i -lt $HostName.Count; $i++) {
     $row.LikelyDead = ((-not $direct.Ok -and -not $httpServes) -or ($final.Ok -and $final.Status -in 404, 410))
 
     if (-not $isIp -and $apex) {
-        $facts = Get-OpsApexFacts -Apex $apex
+        $facts = Get-OpsApexFact -Apex $apex
         $row.ApexDnssecEnabled = $facts.Dnssec
         $row.ApexPreloadStatus = $facts.Preload
         if ($facts.DnssecNote) { $notes.Add($facts.DnssecNote) }
@@ -599,9 +599,9 @@ $apexList = @($HostName + $mailHosts | Where-Object { -not (Test-OpsWebIpAddress
         ForEach-Object { Get-OpsWebApexDomain -HostName $_ -Override $ApexDomain } | Where-Object { $_ } | Select-Object -Unique)
 
 foreach ($apex in $apexList) {
-    $facts = Get-OpsApexFacts -Apex $apex
+    $facts = Get-OpsApexFact -Apex $apex
     if (-not $evidenceByHost.ContainsKey($apex)) {
-        $row = New-OpsEvidenceRow -TargetHost $apex
+        $row = Get-OpsBlankEvidenceRow -TargetHost $apex
         $row.ApexDomain = $apex; $row.IsIpAddress = $false; $row.ApexDnssecEnabled = $facts.Dnssec; $row.ApexPreloadStatus = $facts.Preload
         $row.Note = 'Domain-level row (DNSSEC/DMARC only); apex was not in the web host list'
         $evidenceRows.Add([pscustomobject]$row); $evidenceByHost[$apex] = $row
@@ -616,7 +616,7 @@ foreach ($name in $dmarcTargets) {
     $apex = Get-OpsWebApexDomain -HostName $name -Override $ApexDomain
     $dmarc = Get-OpsDmarcEvaluation -Name $name -Apex $apex
     if (-not $evidenceByHost.ContainsKey($name)) {
-        $row = New-OpsEvidenceRow -TargetHost $name
+        $row = Get-OpsBlankEvidenceRow -TargetHost $name
         $row.ApexDomain = $apex; $row.IsIpAddress = $false; $row.IsMailHost = $true
         $row.Note = 'Domain-level row (DMARC only); mail host was not in the web host list'
         $evidenceRows.Add([pscustomobject]$row); $evidenceByHost[$name] = $row

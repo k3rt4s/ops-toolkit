@@ -19,6 +19,13 @@ BeforeAll {
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-nodry-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
 
+    # Invoke-DiskMaintenance refuses to run at all, even under -WhatIf, outside an
+    # elevated session. The suite is normally run elevated; when it is not, every
+    # assertion below that depends on that script actually running is skipped rather
+    # than failed.
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
     function Get-MutationRecord {
         <#
         .SYNOPSIS
@@ -162,6 +169,10 @@ function Start-Process {
     }
 
     It 'runs to completion in both modes' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $script:diskWhatIf.Run.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:diskWhatIf.Run.Output)"
         $script:diskExecute.Run.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:diskExecute.Run.Output)"
     }
@@ -176,7 +187,12 @@ function Start-Process {
 
     It 'names each step it would take on a preview run' {
         # A preview that runs nothing and says nothing is indistinguishable from a
-        # script that is broken.
+        # script that is broken. -WhatIf itself refuses unelevated, so there is
+        # nothing to name on this machine.
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $output = $script:diskWhatIf.Run.Output
         $output | Should -Match 'chkdsk'
         $output | Should -Match 'cipher'
@@ -184,6 +200,10 @@ function Start-Process {
     }
 
     It 'launches chkdsk, cipher, and defrag when executing' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $launched = @(Get-MutationRecord -Path $script:diskExecute.Log | ForEach-Object { $_.Command })
         $launched | Should -Contain 'chkdsk'
         $launched | Should -Contain 'cipher.exe'
@@ -193,6 +213,10 @@ function Start-Process {
     It 'honours a skip switch independently of -WhatIf' {
         # Skip and preview are different things, and a script that conflated them would
         # still pass every assertion above.
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $run = New-DiskRun -Tag 'disk-skip' -Extra @{ SkipCipherWipe = $true; SkipDefrag = $true; Confirm = $false }
         $run.Run.ExitCode | Should -Be 0 -Because "the run failed: $($run.Run.Output)"
 
@@ -203,6 +227,10 @@ function Start-Process {
     }
 
     It 'targets the drive it was given' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $arguments = (@(Get-MutationRecord -Path $script:diskExecute.Log | ForEach-Object { $_.Arguments })) -join ' '
         $arguments | Should -Match 'C:'
         $arguments | Should -Not -Match 'D:'

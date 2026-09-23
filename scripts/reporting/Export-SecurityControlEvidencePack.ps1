@@ -1047,7 +1047,7 @@ if ($null -eq $lifecycle) {
 # ---------------------------------------------------------------------------
 # Transport security and hardening.
 # ---------------------------------------------------------------------------
-$hardeningRun = Invoke-Collector -Name 'hardening' -RelativePath 'windows-hardening\Test-WindowsHardeningState.ps1'
+$hardeningRun = Invoke-Collector -Name 'hardening' -RelativePath 'it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
 $hardening = Get-CollectorSummary -Run $hardeningRun
 if ($null -eq $hardening) {
     Add-Control -Id 'CFG-01' -Question 'Are systems hardened to a documented configuration standard?' `

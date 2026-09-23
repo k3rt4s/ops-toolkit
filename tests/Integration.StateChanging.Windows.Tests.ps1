@@ -30,6 +30,13 @@ BeforeAll {
     # Defender exclusions on the machine this was first run on.
     $script:systemModulePath = Use-FakeSystemModule
 
+    # Several of these scripts refuse to apply live changes outside an elevated
+    # session (the -WhatIf half still runs). The suite is normally run elevated; when
+    # it is not, the assertions that depend on the executing half of those scripts are
+    # skipped rather than failed.
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
     function Get-MutationRecord {
         <#
         .SYNOPSIS
@@ -158,6 +165,10 @@ Describe 'Set-WindowsSchannelTlsHardening' {
 
     It 'runs to completion in both modes' {
         $script:tls.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:tls.WhatIf.Output)"
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $script:tls.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:tls.Execute.Output)"
     }
 
@@ -170,6 +181,10 @@ Describe 'Set-WindowsSchannelTlsHardening' {
     It 'writes the Schannel protocol values when executing' {
         # Disabling a protocol without enabling its replacement is how a machine ends
         # up unable to reach anything, so both halves have to be written.
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $mutations = @(Get-MutationRecord -Path $script:tls.ExecuteLog)
         $mutations.Count | Should -BeGreaterThan 0
         $schannel = @($mutations | Where-Object { $_.Target -match 'SCHANNEL\\Protocols' })
@@ -192,6 +207,10 @@ Describe 'Set-Windows11PrivacyHardening' {
 
     It 'runs to completion in both modes' {
         $script:privacy.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:privacy.WhatIf.Output)"
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $script:privacy.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:privacy.Execute.Output)"
     }
 
@@ -202,6 +221,10 @@ Describe 'Set-Windows11PrivacyHardening' {
     }
 
     It 'applies registry, service, and scheduled-task changes when executing' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $mutations = @(Get-MutationRecord -Path $script:privacy.ExecuteLog)
         $commands = @($mutations | ForEach-Object { $_.Command } | Sort-Object -Unique)
         # It creates values rather than setting existing ones, so New-ItemProperty is
@@ -263,6 +286,10 @@ Describe 'Set-BrowserCredentialPosture' {
     }
 
     It 'blocks the browser extensions and pins Chrome ABE when executing' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $mutations = @(Get-MutationRecord -Path $script:browsercred.ExecuteLog)
         $mutations.Count | Should -BeGreaterThan 0
         # The extension block is the point of the script: an authenticator or password
@@ -300,6 +327,10 @@ Describe 'Set-WorkstationPerformance' {
     }
 
     It 'adds only the exclusions it was given when executing' {
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $exclusions = @(Get-MutationRecord -Path $script:perf.ExecuteLog |
                 Where-Object { $_.Command -match 'MpPreference' })
         $exclusions.Count | Should -BeGreaterThan 0
@@ -340,6 +371,10 @@ Describe 'Remove-WindowsProvisionedBloatwareApps' {
 
     It 'runs to completion in both modes' {
         $script:appx.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:appx.WhatIf.Output)"
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'requires an elevated session'
+            return
+        }
         $script:appx.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:appx.Execute.Output)"
     }
 

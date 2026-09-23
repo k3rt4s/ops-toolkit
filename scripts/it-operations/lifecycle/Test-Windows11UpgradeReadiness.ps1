@@ -101,7 +101,7 @@ $readinessProbe = {
     $freeGb = [math]::Round($disk.FreeSpace / 1GB, 2)
     $sizeGb = [math]::Round($disk.Size / 1GB, 2)
     Add-Check $result 'SystemDiskSize' $(if ($sizeGb -ge $MinDiskGb) { 'Pass' } else { 'Fail' }) "$sizeGb GB" "$MinDiskGb GB" "System drive $systemDrive"
-    Add-Check $result 'SystemDiskFree' $(if ($freeGb -ge 20) { 'Pass' } else { 'Warn' }) "$freeGb GB free" '20 GB free' 'Upgrade staging needs free space beyond the disk size requirement.'
+    Add-Check $result 'SystemDiskFree' $(if ($freeGb -ge 20) { 'Pass' } else { 'Review' }) "$freeGb GB free" '20 GB free' 'Upgrade staging needs free space beyond the disk size requirement.'
 
     Add-Check $result 'ProcessorCores' $(if ($cpu.NumberOfCores -ge $MinCore) { 'Pass' } else { 'Fail' }) $cpu.NumberOfCores $MinCore
     Add-Check $result 'ProcessorSpeed' $(if ($cpu.MaxClockSpeed -ge $MinMhz) { 'Pass' } else { 'Fail' }) "$($cpu.MaxClockSpeed) MHz" "$MinMhz MHz"

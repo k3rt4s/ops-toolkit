@@ -5,6 +5,43 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-23
+
+### Changed: web security review scripts
+
+- `scripts/web` reworked around a shared `OpsWebCommon.ps1`, with the findings review,
+  risk context, clickjacking, external posture and HSTS scripts updated to use it.
+  `tests\WebSecurityReview.Tests.ps1` covers the set. `#Requires` now follows each
+  script's help block so `Get-Help` parses it, and a false Windows PowerShell 5.1
+  compatibility claim was removed from `New-SecurityFindingsRiskContext.ps1`.
+
+### Fixed: evidence pack never ran the hardening collector
+
+- `Export-SecurityControlEvidencePack.ps1` still pointed at
+  `windows-hardening\Test-WindowsHardeningState.ps1` after that script moved under
+  `it-operations`, so the collector always reported Missing and its script hash was
+  empty. The path is corrected; every collector path now resolves.
+
+### Fixed: upgrade readiness emitted an undocumented verdict
+
+- `Test-Windows11UpgradeReadiness.ps1` reported low system-drive free space as `Warn`,
+  outside its documented Pass/Fail/Review/Undetermined set. It now reports `Review`.
+  The overall verdict is unchanged.
+
+### Fixed: validator Test gate crashed and then reported a pass
+
+- Failing tests' messages carried ANSI escapes from the pwsh processes they launch,
+  which crashed Pester's NUnit XML export. The Test gate now sets `NO_COLOR` and plain
+  output rendering for the Pester child, and treats a run with no readable results
+  as a failure instead of a pass with zero tests checked.
+
+### Changed: elevation-only assertions skip when unelevated
+
+- The execute-mode assertions for `Invoke-DiskMaintenance`, Schannel TLS hardening,
+  Windows 11 privacy hardening, browser credential posture, workstation performance
+  and provisioned-app removal now report Skipped from an unelevated session instead
+  of failing. Elevated runs assert exactly as before.
+
 ## 2026-09-08
 
 ### Changed: backlog cut to repo-fit work

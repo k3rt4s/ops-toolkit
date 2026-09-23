@@ -172,6 +172,13 @@ the named control lists match their counts, a collector that failed is reported 
 failed rather than dropped, and nothing passes on an absence of evidence. Both scripts
 have previously got exactly that wrong, in the same direction.
 
+### Elevation
+
+The suite is meant to run elevated. Several state-changing scripts refuse to apply
+live changes without Administrator rights, so from an unelevated session their
+execute-mode assertions report Skipped with the reason "requires an elevated session".
+A skip proves nothing about that path; only an elevated run covers it.
+
 ## What is and is not proven
 
 Proven when its setup completes: the full pipeline of every script, including the six

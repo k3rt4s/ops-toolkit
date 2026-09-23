@@ -537,6 +537,10 @@ if ($Gate -contains 'Test') {
         # child lets PSModulePath ordering pick a different version, so the gate
         # could report on a Pester the parent never checked.
         $command = @(
+            # Failure messages embed stderr from pwsh processes the tests launch; ANSI
+            # escapes there crash the NUnit XML export. NO_COLOR is inherited by them.
+            "`$env:NO_COLOR = '1'"
+            "`$PSStyle.OutputRendering = 'PlainText'"
             "Import-Module '$($pester.Path)' -Force"
             "`$config = New-PesterConfiguration"
             "`$config.Run.Path = '$testRoot'"
@@ -545,6 +549,7 @@ if ($Gate -contains 'Test') {
             "`$config.TestResult.Enabled = `$true"
             "`$config.TestResult.OutputPath = '$testLog'"
             "`$r = Invoke-Pester -Configuration `$config"
+            "if (-not `$r) { exit 1 }"
             "exit `$r.FailedCount"
         ) -join '; '
 
@@ -570,6 +575,12 @@ if ($Gate -contains 'Test') {
             }
 
             Remove-Item -LiteralPath $testLog -Force -ErrorAction SilentlyContinue
+        }
+
+        # A crashed Pester run leaves no readable results; that is a failure, not a pass.
+        if ($totalCount -eq 0) {
+            $failedCount = [Math]::Max($failedCount, 1)
+            Add-Finding -Gate 'Test' -Severity 'Error' -File 'tests' -Message 'Pester produced no readable test results.'
         }
 
         $testNote = "Pester $($pester.Version); $notRunCount NotRun"

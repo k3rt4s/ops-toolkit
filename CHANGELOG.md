@@ -5,6 +5,15 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-24
+
+### Changed: THEORY.md unwrapped under the DOC-03 line ceiling
+
+- THEORY.md was 63 lines against the 60-line R10 ceiling (already well under on
+  characters). Unwrapped its hard-wrapped bullets onto single lines with no wording
+  changed; now 27 lines, 4,010 chars. Review, evidence, and the whitespace-comparison
+  no-invariant-lost check: `C:\Code_data\ops-toolkit\THEORY_PRUNE_REVIEW.md`.
+
 ## 2026-09-23
 
 ### Changed: web security review scripts

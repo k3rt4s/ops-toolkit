@@ -4,6 +4,7 @@ Hardened operations and security administration scripts for Active Directory, Az
 
 **Author:** Jon Bowker
 **Linting:** PSScriptAnalyzer (settings in `PSScriptAnalyzerSettings.psd1`)
+**Board:** `C:\Code_data\ops-toolkit\WORK_BOARD.md` (this is a public repo; the board is not committed here)
 
 ## Contents
 

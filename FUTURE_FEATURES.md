@@ -10,6 +10,17 @@ No live repo-fit backlog item remains here as of 2026-09-08. The two scored item
 were still indexed, `net-hygiene` and `mcp-tool-ladder`, were cut on the developer's
 approval because they do not belong in this repo.
 
+Two items were filed on 2026-09-24 from the Azure incident-readiness talk and are not
+yet scored; score them per `ai_development/docs/board-scoring.md` before either moves
+to the work board. Detail is under "Ingested 2026-09-24: Azure incident-readiness
+talk" below.
+
+- **cloud-ir-ready** Read-only Azure/M365 incident-readiness collector.
+  - `worker: sonnet 3/6/12 h` (estimate, unscored)
+
+- **entra-contain** `-WhatIf`-guarded Entra identity containment script.
+  - `worker: sonnet 3/6/10 h` (estimate, unscored)
+
 ## Moved to the work board
 
 Five features left this index on 2026-09-06 when the developer approved them. Their
@@ -376,6 +387,45 @@ Things that look like gaps and are not.
 - `Test-WindowsHardeningState.ps1` reads desired state locally even when checking
   remote machines, because desired state comes from the hardening scripts rather than
   from any machine. Remote targets therefore do not need a copy of this repo.
+
+## Ingested 2026-09-24: Azure incident-readiness talk
+
+Source: Gerard Johansen, "Is Your Azure Environment Incident-Ready?", BHIS Anti-Cast,
+YouTube swEKKlN5BMA. Digest and portfolio evaluation:
+`C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`.
+
+- **cloud-ir-ready** A read-only collector, `scripts\microsoft-365\` or `scripts\entra\`
+  (placement decided at pickup), that answers "could we investigate an incident here
+  today": Unified Audit Log ingestion enabled; Entra sign-in and audit logs and each
+  subscription's Activity Log exported by a diagnostic setting, and to where; the
+  destination Log Analytics workspace retention against a `-TargetRetentionDays`
+  parameter (the talk's rule of thumb is 90 days UAL and about 180 days Activity Log,
+  the speaker's own view and not a Microsoft default, so it is a parameter, not a
+  constant); Graph activity logs enabled; responder roles (Global Reader, Security
+  Reader, Security Operator) assigned and PIM-eligible rather than standing; break-glass
+  account count and FIDO2 registration; the user-consent setting and existing
+  delegated OAuth grants; Conditional Access coverage of legacy authentication and the
+  device code flow. Every read that fails or lacks permission reports `NotAssessed`, never
+  pass. Output through `OpsToolkit.Reporting`, and it feeds the evidence pack as a new
+  logging control beside the LOG-01/LOG-02 rows `Export-EndpointTelemetryPosture.ps1`
+  supplies. Uses the repo's existing `Connect-MgGraph` plus `Invoke-MgGraphRequest`
+  pattern from `scripts\entra\Export-EntraConditionalAccessBaseline.ps1`; the Azure
+  diagnostic-setting reads need Az.Monitor or ARM REST, which no script here uses yet,
+  so that dependency is decided at pickup. Stays inside the "Considered and rejected"
+  line: it reads configuration once, it never ingests or queries the logs themselves.
+- **entra-contain** A `SupportsShouldProcess` containment script for one or more UPNs:
+  revoke sign-in sessions, disable the account, and export (not delete) the user's inbox
+  rules and mailbox forwarding so the responder decides what to remove. Plan/state CSV
+  plus rollback JSON (re-enable) per the repo's state-changing standard, with a Pester
+  WhatIf-plus-execute pair. The talk's most common post-incident lesson is that
+  responders cannot revoke sessions without a ticket; this makes it one pre-approved
+  command. Password reset is left out for now: no script here resets passwords today and
+  a reset has to hand the new secret to someone, so include it only by decision at
+  pickup. Higher risk than `cloud-ir-ready` because it changes identity state, so it
+  goes second.
+- Not queued: a UAL or Activity Log extractor. Invictus-IR Microsoft Extractor Suite and
+  SANS SOF-ELK already do this, and log pulling is the ingestion work this repo has
+  rejected.
 
 ## Ingested 2026-08-31: Flare info-stealers talk
 

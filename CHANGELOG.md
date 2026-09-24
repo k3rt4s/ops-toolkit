@@ -7,6 +7,13 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-09-24
 
+### Changed: README names the board's location
+
+- Added a `Board:` line naming `C:\Code_data\ops-toolkit\WORK_BOARD.md` as the
+  board's location, per the workspace's project-board-location rule (public repo,
+  board not committed). The board was already at the right location; only the
+  README pointer was missing.
+
 ### Changed: THEORY.md unwrapped under the DOC-03 line ceiling
 
 - THEORY.md was 63 lines against the 60-line R10 ceiling (already well under on

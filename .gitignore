@@ -1,2 +1,5 @@
 # Generated reports are local output.
 /reports/
+# The board lives at C:\Code_data\ops-toolkit\WORK_BOARD.md, never in this
+# public repo (workspace-rules.md, "Project board location").
+**/WORK_BOARD.md

@@ -29,6 +29,12 @@ Instructions:
 - -IncludeEntra and -IncludeActiveDirectory are off by default because they need
   credentials and modules that a workstation may not have. Controls whose collector
   did not run are reported NotAssessed, never Met.
+- -AzureSubscriptionId and -BreakGlassUpn are optional inputs forwarded to the cloud
+  incident readiness collector when -IncludeEntra is set. Without them, IR-02 still
+  runs but its subscription Activity Log export check and its break-glass FIDO2
+  check stay NotAssessed, and no Azure sign-in beyond the existing -Connect is
+  requested. Supplying -AzureSubscriptionId also passes -ConnectAzure to that
+  collector.
 - The pack contains configuration state, not secrets. No password, key, recovery
   value, or certificate private key is collected or written.
 - Review the pack before sending it anywhere. It describes your security posture,
@@ -91,6 +97,14 @@ param(
 
     [Parameter()]
     [switch]$IncludeEntra,
+
+    [Parameter()]
+    [AllowEmptyCollection()]
+    [string[]]$AzureSubscriptionId,
+
+    [Parameter()]
+    [AllowEmptyCollection()]
+    [string[]]$BreakGlassUpn,
 
     [Parameter()]
     [switch]$IncludeActiveDirectory,
@@ -187,6 +201,23 @@ $resolvedTargets = @($requestedTargets | Where-Object { $_ -notin $excludedNames
 $isEstateScope = $requestedTargets.Count -gt 0
 if ($isEstateScope -and $resolvedTargets.Count -eq 0) {
     throw 'Every requested target was excluded. Nothing remains to assess.'
+}
+
+$guidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+foreach ($subscriptionId in @($AzureSubscriptionId)) {
+    # @($null) is a one-element array holding $null, not an empty one, so an
+    # unbound [string[]] parameter must be skipped explicitly rather than looped
+    # over as if it held a value.
+    if (-not $subscriptionId) { continue }
+    if ($subscriptionId -notmatch $guidPattern) {
+        throw "-AzureSubscriptionId '$subscriptionId' is not a GUID. Supply the subscription's GUID, not its name."
+    }
+}
+foreach ($breakGlassUpnValue in @($BreakGlassUpn)) {
+    if ($null -eq $breakGlassUpnValue) { continue }
+    if ([string]::IsNullOrWhiteSpace($breakGlassUpnValue)) {
+        throw '-BreakGlassUpn cannot contain an empty or whitespace-only value.'
+    }
 }
 
 $scopeText = if ($isEstateScope) {
@@ -557,6 +588,7 @@ function Get-OpsControlScopeKind {
         [Parameter(Mandatory = $true)][string]$ControlId
     )
 
+    if ($ControlId -eq 'IR-02') { return 'EntraTenant' }
     if ($ControlId -eq 'EDR-02') { return 'LocalEndpoint' }
     if ($ControlId -match '^(EDR-01|ENC-|PATCH-|CFG-|LOG-|PRIV-0[12])') { return 'EndpointPopulation' }
     if ($ControlId -match '^(MFA-|IAM-)') { return 'EntraTenant' }
@@ -1170,10 +1202,23 @@ if ($IncludeEntra) {
             -Evidence $credRun.RelativeOutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
     }
 
-    $cloudIrRun = Invoke-Collector -Name 'entra-cloud-incident-readiness' -RelativePath 'entra\Export-CloudIncidentReadiness.ps1' -Argument @('-Connect')
+    $cloudIrArgument = [System.Collections.Generic.List[string]]::new()
+    $cloudIrArgument.Add('-Connect')
+    if ($AzureSubscriptionId -and $AzureSubscriptionId.Count -gt 0) {
+        $cloudIrArgument.Add('-ConnectAzure')
+        $cloudIrArgument.Add('-SubscriptionId')
+        # One comma-joined value per parameter: under pwsh -File a second bare
+        # value binds positionally to -TenantId. The collector splits it.
+        $cloudIrArgument.Add(($AzureSubscriptionId -join ','))
+    }
+    if ($BreakGlassUpn -and $BreakGlassUpn.Count -gt 0) {
+        $cloudIrArgument.Add('-BreakGlassUpn')
+        $cloudIrArgument.Add(($BreakGlassUpn -join ','))
+    }
+    $cloudIrRun = Invoke-Collector -Name 'entra-cloud-incident-readiness' -RelativePath 'entra\Export-CloudIncidentReadiness.ps1' -Argument @($cloudIrArgument)
     $cloudIr = Get-CollectorSummary -Run $cloudIrRun
     if ($null -eq $cloudIr) {
-        Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+        Add-Control -Id 'IR-02' -Question 'Could this tenant support an incident investigation today?' `
             -Status 'NotAssessed' -Finding "The cloud incident readiness collector did not produce a summary. Status: $($cloudIrRun.Status). $($cloudIrRun.Note)" -Collector 'Export-CloudIncidentReadiness.ps1'
     } else {
         $metChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'MetCount')
@@ -1183,12 +1228,12 @@ if ($IncludeEntra) {
         $checkCount = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'CheckCount')
         $cloudIrOverallStatus = [string](Get-OpsPropertyValue -InputObject $cloudIr -Name 'OverallStatus')
         if ($cloudIrOverallStatus -notin @('Met', 'NotMet', 'Partial', 'NotAssessed')) {
-            Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+            Add-Control -Id 'IR-02' -Question 'Could this tenant support an incident investigation today?' `
                 -Status 'NotAssessed' -Finding "The cloud incident readiness collector's summary did not carry a recognized OverallStatus value ('$cloudIrOverallStatus')." -Collector 'Export-CloudIncidentReadiness.ps1'
         } else {
-            Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+            Add-Control -Id 'IR-02' -Question 'Could this tenant support an incident investigation today?' `
                 -Status $cloudIrOverallStatus `
-                -Finding "Checks met: $metChecks of $checkCount. Partial: $partialChecks. Not met: $notMetChecks. Not assessed: $notAssessedChecks. Covers Unified Audit Log ingestion, Entra and subscription log export, destination workspace retention, responder role eligibility, break-glass FIDO2 coverage, user consent, and Conditional Access coverage of the device code flow. Never reported Met while any individual check is Not Assessed." `
+                -Finding "Checks met: $metChecks of $checkCount. Partial: $partialChecks. Not met: $notMetChecks. Not assessed: $notAssessedChecks. Covers Unified Audit Log ingestion, Entra and subscription log export, Graph activity logs, destination workspace retention, responder role eligibility, break-glass FIDO2 coverage, user consent, and Conditional Access coverage of the device code flow. Never reported Met while any individual check is Not Assessed." `
                 -Evidence $cloudIrRun.RelativeOutputPath -Collector 'Export-CloudIncidentReadiness.ps1'
         }
     }
@@ -1198,7 +1243,7 @@ if ($IncludeEntra) {
             @('MFA-02', 'Is MFA resistant to phishing and help desk social engineering?'),
             @('IAM-01', 'Are access policies enforced, including a block on legacy authentication?'),
             @('IAM-02', 'Are application credentials rotated before they expire?'),
-            @('LOG-03', 'Could this tenant support an incident investigation today?')
+            @('IR-02', 'Could this tenant support an incident investigation today?')
         )) {
         Add-Control -Id $pair[0] -Question $pair[1] -Status 'NotAssessed' `
             -Finding 'Not assessed. Re-run with -IncludeEntra and a Graph sign-in to cover the identity controls.' -Collector 'none'

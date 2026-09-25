@@ -762,10 +762,22 @@ function Get-DeviceCodeFlowCoverageRecord {
         # Mirror Export-EntraConditionalAccessBaseline.ps1's own tenant-wide test
         # (conditions.users.includeUsers containing 'All') so the two scripts agree on
         # what "tenant-wide" means. A policy that blocks the flow but is scoped to a
-        # pilot group covers only that group, not the tenant, and must not grade Met.
+        # pilot group, a narrower application scope, or carries any user/group/role
+        # exclusion covers less than the tenant, and must not grade Met. Kept
+        # conservative and simple: any exclusion at all, or an application scope
+        # other than 'All', drops the policy out of tenant-wide coverage even if it
+        # might still cover most of the tenant.
         $users = Get-OpsPropertyValue -InputObject $conditions -Name 'users'
         $includeUsers = Join-OpsValue (Get-OpsPropertyValue -InputObject $users -Name 'includeUsers')
-        if ($includeUsers -match 'All') {
+        $excludeUsers = Join-OpsValue (Get-OpsPropertyValue -InputObject $users -Name 'excludeUsers')
+        $excludeGroups = Join-OpsValue (Get-OpsPropertyValue -InputObject $users -Name 'excludeGroups')
+        $excludeRoles = Join-OpsValue (Get-OpsPropertyValue -InputObject $users -Name 'excludeRoles')
+        $applications = Get-OpsPropertyValue -InputObject $conditions -Name 'applications'
+        $includeApplications = Join-OpsValue (Get-OpsPropertyValue -InputObject $applications -Name 'includeApplications')
+        $hasExclusion = [bool]($excludeUsers -or $excludeGroups -or $excludeRoles)
+        $isAllApplications = ($includeApplications -eq 'All')
+
+        if (($includeUsers -match 'All') -and $isAllApplications -and -not $hasExclusion) {
             $blocking.Add($displayName)
         } else {
             $narrowBlocking.Add($displayName)
@@ -900,6 +912,83 @@ function Get-OpsArmObject {
     $response.Content | ConvertFrom-Json
 }
 
+function Get-OpsHttpStatusCode {
+    <#
+    .SYNOPSIS
+    Read the HTTP status code off a caught exception, without trusting its message text.
+
+    .PARAMETER ErrorRecord
+    The error record caught from a failed request.
+
+    .OUTPUTS
+    The status code as an int, or $null when no status code can be read.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $response = $null
+    try { $response = $ErrorRecord.Exception.Response } catch { $response = $null }
+    if ($null -eq $response) { return $null }
+
+    $statusCode = $null
+    try { $statusCode = $response.StatusCode } catch { $statusCode = $null }
+    if ($null -eq $statusCode) { return $null }
+
+    # Handles both an int (e.g. Invoke-AzRestMethod's response) and an enum
+    # (e.g. System.Net.HttpStatusCode from a .NET HttpResponseException).
+    try { return [int]$statusCode } catch { return $null }
+}
+
+function ConvertTo-OpsSplitList {
+    <#
+    .SYNOPSIS
+    Splits comma-joined list values into a flat, trimmed list.
+
+    .DESCRIPTION
+    pwsh -File hands every argument to the script as a literal string, so a list
+    typed as a,b, or passed by the evidence pack as one joined value, binds as
+    the single string 'a,b', and a second bare value binds positionally to
+    -TenantId. This splits each value on commas, trims it and drops empty
+    entries, so every launch path reaches the checks as a real list.
+
+    .PARAMETER Value
+    The bound parameter values. May be null or empty.
+
+    .OUTPUTS
+    System.String[]
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$Value
+    )
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+        foreach ($part in ($item -split ',')) {
+            $trimmed = $part.Trim()
+            if ($trimmed) { $result.Add($trimmed) }
+        }
+    }
+    $result.ToArray()
+}
+
+foreach ($listParameterName in @('SubscriptionId', 'BreakGlassUpn', 'ResponderRoleName', 'GraphScope')) {
+    if (-not $PSBoundParameters.ContainsKey($listParameterName)) { continue }
+    $splitValue = @(ConvertTo-OpsSplitList -Value $PSBoundParameters[$listParameterName])
+    if ($splitValue.Count -eq 0) {
+        throw "-$listParameterName contains no value once split on commas."
+    }
+    Set-Variable -Name $listParameterName -Value $splitValue
+}
+
 if ($GraphScope -and -not $Connect) {
     throw 'GraphScope applies only to a new connection. Add -Connect, or drop it and reuse the current Microsoft Graph session.'
 }
@@ -922,6 +1011,19 @@ if ($Connect) {
 
 if (-not (Get-MgContext)) {
     throw 'No Microsoft Graph session. Run again with -Connect, or connect first with Connect-MgGraph.'
+}
+
+$mgTenantId = (Get-MgContext).TenantId
+
+# -TenantId can be a GUID or a verified domain (Connect-MgGraph and
+# Connect-AzAccount both accept either). Only a GUID is directly comparable to
+# the GUID Get-MgContext reports; a domain is skipped rather than compared, to
+# avoid ever flagging a false mismatch. When -TenantId is GUID-shaped and
+# disagrees with the connected Graph session, fail closed before any read
+# rather than silently grading whichever tenant happened to be connected.
+$tenantIdGuidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+if ($TenantId -and $TenantId -match $tenantIdGuidPattern -and $mgTenantId -and $TenantId -ne $mgTenantId) {
+    throw "-TenantId '$TenantId' does not match the connected Microsoft Graph session's tenant ($mgTenantId). Connect to the right tenant before running this script."
 }
 
 if ($ConnectAzure) {
@@ -949,13 +1051,15 @@ if ($azConnected) {
     # the last-used context), never that it matches the tenant this run is grading.
     # An Az session left over from a different tenant must be treated the same as no
     # Azure session at all, or checks 2-5 silently grade the wrong tenant's resources
-    # under this run's TenantId.
-    $expectedTenantId = if ($TenantId) { $TenantId } else { (Get-MgContext).TenantId }
+    # under this run's TenantId. Always compared against the connected Graph
+    # session's GUID tenant ID, never against -TenantId directly: -TenantId may be a
+    # domain, and a GUID-vs-domain comparison is never equal even when they name the
+    # same tenant, which would falsely flag every domain-named run as a mismatch.
     $azTenant = Get-OpsPropertyValue -InputObject $azContext -Name 'Tenant'
     $azTenantId = Get-OpsPropertyValue -InputObject $azTenant -Name 'Id'
-    if ($expectedTenantId -and $azTenantId -and $azTenantId -ne $expectedTenantId) {
+    if ($mgTenantId -and $azTenantId -and $azTenantId -ne $mgTenantId) {
         $azConnected = $false
-        $noAzureSessionMessage = "Azure session is connected to a different tenant ($azTenantId) than the Microsoft Graph session ($expectedTenantId)."
+        $noAzureSessionMessage = "Azure session is connected to a different tenant ($azTenantId) than the Microsoft Graph session ($mgTenantId)."
     }
 }
 
@@ -1056,9 +1160,15 @@ foreach ($roleName in $ResponderRoleName) {
     $templateId = $null
 
     try {
-        $templateMatch = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoleTemplates?`$filter=displayName eq '$roleName'")
+        # The server $filter is never trusted for correctness: re-filter client-side
+        # on the values actually returned. Zero or more than one match makes the
+        # role unresolvable, not a guess at which one is right.
+        $rawTemplateMatch = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoleTemplates?`$filter=displayName eq '$roleName'")
+        $templateMatch = @($rawTemplateMatch | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'displayName')) -eq $roleName })
         if ($templateMatch.Count -eq 0) {
             $reason = "No directory role template named '$roleName' was found."
+        } elseif ($templateMatch.Count -gt 1) {
+            $reason = "$($templateMatch.Count) directory role templates named '$roleName' were found; cannot unambiguously grade this role."
         } else {
             $templateId = Join-OpsValue (Get-OpsPropertyValue -InputObject $templateMatch[0] -Name 'id')
         }
@@ -1068,8 +1178,11 @@ foreach ($roleName in $ResponderRoleName) {
 
     if (-not $reason) {
         try {
-            $activatedRole = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoles?`$filter=roleTemplateId eq '$templateId'")
-            if ($activatedRole.Count -gt 0) {
+            $rawActivatedRole = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoles?`$filter=roleTemplateId eq '$templateId'")
+            $activatedRole = @($rawActivatedRole | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'roleTemplateId')) -eq $templateId })
+            if ($activatedRole.Count -gt 1) {
+                $reason = "$($activatedRole.Count) activated directory roles matched role template '$templateId'; cannot unambiguously grade this role."
+            } elseif ($activatedRole.Count -eq 1) {
                 $roleId = Join-OpsValue (Get-OpsPropertyValue -InputObject $activatedRole[0] -Name 'id')
                 $members = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoles/$roleId/members")
                 $activeCount = @($members).Count
@@ -1083,7 +1196,8 @@ foreach ($roleName in $ResponderRoleName) {
 
     if (-not $reason) {
         try {
-            $eligible = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=roleDefinitionId eq '$templateId'")
+            $rawEligible = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=roleDefinitionId eq '$templateId'")
+            $eligible = @($rawEligible | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'roleDefinitionId')) -eq $templateId })
             $eligibleCount = @($eligible).Count
         } catch {
             $reason = "Eligible assignment read failed: $($_.Exception.Message)"
@@ -1100,18 +1214,39 @@ if (-not $BreakGlassUpn -or $BreakGlassUpn.Count -eq 0) {
     $breakGlassRecords.Add([pscustomobject]@{ CheckId = 'BREAK-GLASS'; UserPrincipalName = ''; Fido2Registered = $null; Status = 'NotAssessed'; Finding = 'No -BreakGlassUpn supplied. Break-glass accounts must be named explicitly; this script never guesses one by naming convention.' })
 } else {
     foreach ($upn in $BreakGlassUpn) {
+        $encodedUpn = [uri]::EscapeDataString($upn)
+
+        # Separate try blocks: the user read and the FIDO2 method read fail
+        # independently, and each failure is graded on its own terms. "Not
+        # found" is decided only from the HTTP status code on the exception,
+        # never by matching text in the exception message (a message can
+        # legitimately contain digits that look like a status code, e.g. a
+        # GUID substring).
+        $userId = $null
+        $userLookupFailed = $false
         try {
-            $user = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$upn`?`$select=id,userPrincipalName,accountEnabled" -OutputType Hashtable -ErrorAction Stop
+            $user = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$encodedUpn`?`$select=id,userPrincipalName,accountEnabled" -OutputType Hashtable -ErrorAction Stop
             $userId = Join-OpsValue (Get-OpsPropertyValue -InputObject $user -Name 'id')
+        } catch {
+            $userLookupFailed = $true
+            $statusCode = Get-OpsHttpStatusCode -ErrorRecord $_
+            if ($statusCode -eq 404) {
+                $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'NotFound'))
+            } else {
+                $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'NotAssessed' -Reason $_.Exception.Message))
+            }
+        }
+
+        if ($userLookupFailed) { continue }
+
+        try {
             $fido2 = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/users/$userId/authentication/fido2Methods")
             $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'Found' -Fido2Registered ([bool](@($fido2).Count -gt 0))))
         } catch {
-            $message = $_.Exception.Message
-            if ($message -match '404|ResourceNotFound|Request_ResourceNotFound|does not exist') {
-                $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'NotFound'))
-            } else {
-                $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'NotAssessed' -Reason $message))
-            }
+            # Any failure reading FIDO2 methods, including a 403, is
+            # NotAssessed for this account. The account was found; whether it
+            # has a security key registered simply could not be read.
+            $breakGlassRecords.Add((Get-BreakGlassAccountRecord -UserPrincipalName $upn -LookupResult 'NotAssessed' -Reason $_.Exception.Message))
         }
     }
 }

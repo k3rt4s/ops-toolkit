@@ -118,29 +118,47 @@ function Invoke-MgGraphRequest {
         return @{
             value = @(
                 @{ id = 'p2'; displayName = 'Block device code flow'; state = 'enabled'
-                   conditions = @{ authenticationFlows = @{ transferMethods = 'deviceCodeFlow' }; users = @{ includeUsers = @('All') } }
+                   conditions = @{
+                       authenticationFlows = @{ transferMethods = 'deviceCodeFlow' }
+                       users = @{ includeUsers = @('All') }
+                       applications = @{ includeApplications = @('All') }
+                   }
                    grantControls = @{ builtInControls = @('block') } }
             )
         }
     }
 
-    if (`$Uri -like '*directoryRoleTemplates*Global Reader*') { return @{ value = @(@{ id = 'tmpl-global-reader' }) } }
-    if (`$Uri -like '*directoryRoleTemplates*Security Reader*') { return @{ value = @(@{ id = 'tmpl-security-reader' }) } }
-    if (`$Uri -like '*directoryRoleTemplates*Security Operator*') { return @{ value = @(@{ id = 'tmpl-security-operator' }) } }
+    if (`$Uri -like '*directoryRoleTemplates*') {
+        # The server `$filter is never trusted for correctness: every
+        # directoryRoleTemplates request returns the same full, unfiltered list
+        # regardless of the query string, proving the production code's own
+        # client-side displayName filter is what selects the right role.
+        return @{ value = @(
+            @{ id = 'tmpl-global-reader'; displayName = 'Global Reader' }
+            @{ id = 'tmpl-security-reader'; displayName = 'Security Reader' }
+            @{ id = 'tmpl-security-operator'; displayName = 'Security Operator' }
+        ) }
+    }
 
-    if (`$Uri -like "*directoryRoles?*tmpl-global-reader*") { return @{ value = @(@{ id = 'role-global-reader' }) } }
     if (`$Uri -eq 'https://graph.microsoft.com/v1.0/directoryRoles/role-global-reader/members') { return @{ value = @() } }
-    if (`$Uri -like "*roleEligibilityScheduleInstances?*tmpl-global-reader*") { return @{ value = @(@{ id = 'elig-1' }) } }
 
     if (`$Uri -like "*directoryRoles?*tmpl-security-reader*") {
         throw 'Insufficient privileges to complete the operation. Status: 403 (Forbidden)'
     }
 
-    if (`$Uri -like "*directoryRoles?*tmpl-security-operator*") {
-        # Null shape: a role with no standing assignments at all.
-        return @{ value = @() }
+    if (`$Uri -like '*directoryRoles?*') {
+        # Full unfiltered list again: only Global Reader is an activated role in
+        # this tenant, so client-side filtering by roleTemplateId must select
+        # exactly that one row for the Global Reader lookup and zero rows for the
+        # Security Operator lookup, never trusting the query string.
+        return @{ value = @(@{ id = 'role-global-reader'; roleTemplateId = 'tmpl-global-reader' }) }
     }
-    if (`$Uri -like "*roleEligibilityScheduleInstances?*tmpl-security-operator*") { return @{ value = @() } }
+
+    if (`$Uri -like '*roleEligibilityScheduleInstances?*') {
+        # Full unfiltered list again: only Global Reader has an eligible schedule
+        # instance in this tenant.
+        return @{ value = @(@{ id = 'elig-1'; roleDefinitionId = 'tmpl-global-reader' }) }
+    }
 
     if (`$Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') {
         return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-low') } }
@@ -150,7 +168,7 @@ function Invoke-MgGraphRequest {
         return @{ value = @() }
     }
 
-    if (`$Uri -like '*/users/breakglass1@contoso.com*') {
+    if (`$Uri -like '*/users/breakglass1%40contoso.com*') {
         return @{ id = 'bg-1'; userPrincipalName = 'breakglass1@contoso.com'; accountEnabled = `$true }
     }
     if (`$Uri -eq 'https://graph.microsoft.com/v1.0/users/bg-1/authentication/fido2Methods') {
@@ -322,6 +340,280 @@ function Invoke-MgGraphRequest {
 
     It 'reports AzureConnected false in the summary despite a live Az context existing' {
         $script:summary2.AzureConnected | Should -Be $false
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness fails closed before any read when a GUID -TenantId disagrees with the connected Graph session' {
+    BeforeAll {
+        $guidGraphStub = @'
+Import-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue
+
+function Connect-MgGraph { param($Scopes, $TenantId, $UseDeviceCode) }
+function Get-MgContext { [pscustomobject]@{ TenantId = '11111111-1111-1111-1111-111111111111'; Account = 'admin@contoso.com' } }
+function Disconnect-MgGraph { }
+'@
+
+        $fixtureGuidMismatch = @'
+function Get-AdminAuditLogConfig { throw 'Get-AdminAuditLogConfig must not be called once the -TenantId mismatch is detected.' }
+
+function Invoke-AzRestMethod {
+    param($Path, $Method, $ErrorAction)
+    throw 'Invoke-AzRestMethod must not be called once the -TenantId mismatch is detected.'
+}
+
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $OutputType, $ErrorAction)
+    throw "Invoke-MgGraphRequest must not be called once the -TenantId mismatch is detected. uri: $Uri"
+}
+'@
+
+        $setupGuidMismatch = $guidGraphStub + $script:azStub + $fixtureGuidMismatch
+
+        $script:runGuidMismatch = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setupGuidMismatch -Argument @{
+            Connect = $true
+            TenantId = '22222222-2222-2222-2222-222222222222'
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+    }
+
+    It 'exits non-zero and throws before touching Graph, Azure, or the audit log config' {
+        $script:runGuidMismatch.ExitCode | Should -Not -Be 0
+        $script:runGuidMismatch.Output | Should -Match "does not match the connected Microsoft Graph session's tenant"
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness skips the -TenantId comparison when it is a domain, and runs ARM checks against a matching Az/Mg GUID pair' {
+    BeforeAll {
+        $guidGraphStub2 = @'
+Import-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue
+
+function Connect-MgGraph { param($Scopes, $TenantId, $UseDeviceCode) }
+function Get-MgContext { [pscustomobject]@{ TenantId = '33333333-3333-3333-3333-333333333333'; Account = 'admin@contoso.com' } }
+function Disconnect-MgGraph { }
+'@
+
+        $guidAzStub = @'
+Import-Module Az.Accounts -Force -ErrorAction SilentlyContinue
+
+function Connect-AzAccount { param($Tenant, $UseDeviceAuthentication) }
+function Get-AzContext { [pscustomobject]@{ Subscription = [pscustomobject]@{ Id = 'sub-1' }; Tenant = [pscustomobject]@{ Id = '33333333-3333-3333-3333-333333333333' } } }
+function Disconnect-AzAccount { }
+'@
+
+        $fixtureDomainSkip = @'
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $true } }
+
+function Invoke-AzRestMethod {
+    param($Path, $Method, $ErrorAction)
+    if ($Path -like '*microsoft.aadiam/diagnosticSettings*') {
+        $body = @{ value = @() } | ConvertTo-Json -Depth 10
+        return [pscustomobject]@{ StatusCode = 200; Content = $body }
+    }
+    if ($Path -like '*sub-1/providers/microsoft.insights/diagnosticSettings*') {
+        $body = @{ value = @() } | ConvertTo-Json -Depth 10
+        return [pscustomobject]@{ StatusCode = 200; Content = $body }
+    }
+    throw "Unstubbed Invoke-AzRestMethod path: $Path"
+}
+
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $OutputType, $ErrorAction)
+
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: $Uri"
+}
+'@
+
+        $setupDomainSkip = $guidGraphStub2 + $guidAzStub + $fixtureDomainSkip
+
+        $script:runDomainSkip = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setupDomainSkip -Argument @{
+            Connect = $true
+            ConnectAzure = $true
+            TenantId = 'contoso.onmicrosoft.com'
+            SubscriptionId = @('sub-1')
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summaryDomainSkip = $script:runDomainSkip.Summary
+    }
+
+    It 'runs to completion' {
+        $script:runDomainSkip.ExitCode | Should -Be 0 -Because "the script failed: $($script:runDomainSkip.Output)"
+    }
+
+    It 'treats the Azure session as connected and runs ARM checks, proving the domain -TenantId was never compared against the GUID tenant IDs' {
+        $script:summaryDomainSkip.AzureConnected | Should -Be $true
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness never trusts the server $filter for role lookups' {
+    BeforeAll {
+        $fixtureRoles = @"
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = `$true } }
+
+function Invoke-AzRestMethod {
+    param(`$Path, `$Method, `$ErrorAction)
+    throw "Unstubbed Invoke-AzRestMethod path: `$Path"
+}
+
+function Invoke-MgGraphRequest {
+    param(`$Method, `$Uri, `$OutputType, `$ErrorAction)
+
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    if (`$Uri -like '*directoryRoleTemplates*') {
+        # A server `$filter for 'Global Reader' that (wrongly) returns two matches.
+        # The production code must not trust the count the server implies by the
+        # query string; it must re-filter client-side and grade this ambiguous,
+        # never picking either row.
+        return @{ value = @(
+            @{ id = 'tmpl-global-reader-1'; displayName = 'Global Reader' }
+            @{ id = 'tmpl-global-reader-2'; displayName = 'Global Reader' }
+        ) }
+    }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: `$Uri"
+}
+"@
+
+        $setupRoles = $script:graphStub + $script:azStub + $fixtureRoles
+
+        $script:runRoles = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setupRoles -Argument @{
+            Connect = $true
+            ResponderRoleName = @('Global Reader')
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summaryRoles = $script:runRoles.Summary
+        $script:roleRowsAmbiguous = if ($script:summaryRoles) { @(Import-Csv (Join-Path $script:summaryRoles.OutputDirectory 'responder-roles.csv')) } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:runRoles.ExitCode | Should -Be 0 -Because "the script failed: $($script:runRoles.Output)"
+    }
+
+    It 'grades the role NotAssessed, never picking either of two ambiguous template matches' {
+        $row = $script:roleRowsAmbiguous | Where-Object { $_.RoleName -eq 'Global Reader' }
+        $row.Status | Should -Be 'NotAssessed'
+        $row.Finding | Should -Match 'cannot unambiguously grade'
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness grades break-glass status from the HTTP status code, never the message text' {
+    BeforeAll {
+        # The user read succeeds; the FIDO2 method read then fails with a 403
+        # whose exception message contains the literal substring '404' inside a
+        # GUID. The old code regex-matched the message and would have
+        # misclassified this as NotFound; the fix must read the status code off
+        # the exception's Response and land on NotAssessed regardless of what
+        # the message text says.
+        $fixtureBreakGlass = @'
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $true } }
+
+function Invoke-AzRestMethod {
+    param($Path, $Method, $ErrorAction)
+    throw "Unstubbed Invoke-AzRestMethod path: $Path"
+}
+
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $OutputType, $ErrorAction)
+
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    if ($Uri -like '*/users/breakglass1%40contoso.com*') {
+        return @{ id = 'bg-1'; userPrincipalName = 'breakglass1@contoso.com'; accountEnabled = $true }
+    }
+
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/users/bg-1/authentication/fido2Methods') {
+        $ex = New-Object System.Exception('Insufficient privileges to complete the operation for account 4b1f8404-aaaa-bbbb-cccc-000000000000')
+        $ex | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{ StatusCode = 403 })
+        throw $ex
+    }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: $Uri"
+}
+'@
+
+        $setupBreakGlass = $script:graphStub + $script:azStub + $fixtureBreakGlass
+
+        $script:runBreakGlass = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setupBreakGlass -Argument @{
+            Connect = $true
+            BreakGlassUpn = @('breakglass1@contoso.com')
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summaryBreakGlass = $script:runBreakGlass.Summary
+        $script:breakGlassRowsFido403 = if ($script:summaryBreakGlass) { @(Import-Csv (Join-Path $script:summaryBreakGlass.OutputDirectory 'break-glass-accounts.csv')) } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:runBreakGlass.ExitCode | Should -Be 0 -Because "the script failed: $($script:runBreakGlass.Output)"
+    }
+
+    It 'grades the account NotAssessed on a 403 FIDO2 read, never NotFound from the message text' {
+        $row = $script:breakGlassRowsFido403 | Where-Object { $_.UserPrincipalName -eq 'breakglass1@contoso.com' }
+        $row.Status | Should -Be 'NotAssessed'
+        $row.Status | Should -Not -Be 'NotFound'
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness grades break-glass NotFound only from a 404 status code on the user read' {
+    BeforeAll {
+        $fixtureBreakGlassNotFound = @'
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $true } }
+
+function Invoke-AzRestMethod {
+    param($Path, $Method, $ErrorAction)
+    throw "Unstubbed Invoke-AzRestMethod path: $Path"
+}
+
+function Invoke-MgGraphRequest {
+    param($Method, $Uri, $OutputType, $ErrorAction)
+
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if ($Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    if ($Uri -like '*/users/ghost%40contoso.com*') {
+        # No digits resembling '404' anywhere in this message, proving the
+        # NotFound grade comes from the status code, not text matching.
+        $ex = New-Object System.Exception('Account could not be located.')
+        $ex | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{ StatusCode = [System.Net.HttpStatusCode]::NotFound })
+        throw $ex
+    }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: $Uri"
+}
+'@
+
+        $setupBreakGlassNotFound = $script:graphStub + $script:azStub + $fixtureBreakGlassNotFound
+
+        $script:runBreakGlassNotFound = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setupBreakGlassNotFound -Argument @{
+            Connect = $true
+            BreakGlassUpn = @('ghost@contoso.com')
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summaryBreakGlassNotFound = $script:runBreakGlassNotFound.Summary
+        $script:breakGlassRowsNotFound = if ($script:summaryBreakGlassNotFound) { @(Import-Csv (Join-Path $script:summaryBreakGlassNotFound.OutputDirectory 'break-glass-accounts.csv')) } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:runBreakGlassNotFound.ExitCode | Should -Be 0 -Because "the script failed: $($script:runBreakGlassNotFound.Output)"
+    }
+
+    It 'grades the account NotFound from the enum-typed 404 status code on the user read' {
+        $row = $script:breakGlassRowsNotFound | Where-Object { $_.UserPrincipalName -eq 'ghost@contoso.com' }
+        $row.Status | Should -Be 'NotMet'
+        $row.Finding | Should -Match 'was not found'
     }
 }
 

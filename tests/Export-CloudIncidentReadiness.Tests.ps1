@@ -23,7 +23,11 @@ BeforeAll {
     }
 
     function New-CaPolicy {
-        param($Id = 'p1', $Name = 'Policy', $State = 'enabled', $TransferMethods = 'deviceCodeFlow', $Controls = @('block'), $IncludeUsers = @('All'))
+        param(
+            $Id = 'p1', $Name = 'Policy', $State = 'enabled', $TransferMethods = 'deviceCodeFlow', $Controls = @('block'),
+            $IncludeUsers = @('All'), $ExcludeUsers = @(), $ExcludeGroups = @(), $ExcludeRoles = @(),
+            $IncludeApplications = @('All')
+        )
 
         @{
             id = $Id
@@ -31,7 +35,13 @@ BeforeAll {
             state = $State
             conditions = @{
                 authenticationFlows = @{ transferMethods = $TransferMethods }
-                users = @{ includeUsers = $IncludeUsers }
+                users = @{
+                    includeUsers = $IncludeUsers
+                    excludeUsers = $ExcludeUsers
+                    excludeGroups = $ExcludeGroups
+                    excludeRoles = $ExcludeRoles
+                }
+                applications = @{ includeApplications = $IncludeApplications }
             }
             grantControls = @{ builtInControls = $Controls }
         }
@@ -301,6 +311,25 @@ Describe 'Get-DeviceCodeFlowCoverageRecord' {
         )
         (Get-DeviceCodeFlowCoverageRecord -Policy $policy).Status | Should -Be 'Met'
     }
+
+    It 'is NotMet, not a false Met, when the blocking policy scopes applications to one app rather than All' {
+        $policy = @((New-CaPolicy -Name 'App-scoped block' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('All') -IncludeApplications @('11111111-1111-1111-1111-111111111111')))
+        $record = Get-DeviceCodeFlowCoverageRecord -Policy $policy
+        $record.Status | Should -Be 'NotMet'
+        $record.Finding | Should -Match 'App-scoped block'
+    }
+
+    It 'is NotMet, not a false Met, when a tenant-wide-looking policy carries a user exclusion' {
+        $policy = @((New-CaPolicy -Name 'Excluded VIPs' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('All') -ExcludeGroups @('33333333-3333-3333-3333-333333333333')))
+        $record = Get-DeviceCodeFlowCoverageRecord -Policy $policy
+        $record.Status | Should -Be 'NotMet'
+        $record.Finding | Should -Match 'Excluded VIPs'
+    }
+
+    It 'is Met only when includeUsers is All, includeApplications is All, and there is no exclusion at all' {
+        $policy = @((New-CaPolicy -Name 'Clean tenant-wide block' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('All') -IncludeApplications @('All')))
+        (Get-DeviceCodeFlowCoverageRecord -Policy $policy).Status | Should -Be 'Met'
+    }
 }
 
 Describe 'Get-UserConsentRecord field-null pitfall' {
@@ -378,5 +407,18 @@ Describe 'Get-OpsArmPagedValue' {
         $script:pathsRequested.Count | Should -Be 2
         $script:pathsRequested[1] | Should -Not -Match '^https?://'
         $script:pathsRequested[1] | Should -Match '^/subscriptions/sub-1'
+    }
+}
+
+Describe 'ConvertTo-OpsSplitList' {
+    It 'splits comma-joined values, trims them and drops empty entries' {
+        $result = @(ConvertTo-OpsSplitList -Value @('a, b', ' c ', ',', 'd,'))
+        $result.Count | Should -Be 4
+        $result | Should -Be @('a', 'b', 'c', 'd')
+    }
+
+    It 'returns an empty list for null input' {
+        $result = @(ConvertTo-OpsSplitList -Value $null)
+        $result.Count | Should -Be 0
     }
 }

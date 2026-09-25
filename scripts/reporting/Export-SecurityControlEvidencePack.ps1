@@ -1181,11 +1181,16 @@ if ($IncludeEntra) {
         $notMetChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'NotMetCount')
         $notAssessedChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'NotAssessedCount')
         $checkCount = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'CheckCount')
-
-        Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
-            -Status ([string](Get-OpsPropertyValue -InputObject $cloudIr -Name 'OverallStatus')) `
-            -Finding "Checks met: $metChecks of $checkCount. Partial: $partialChecks. Not met: $notMetChecks. Not assessed: $notAssessedChecks. Covers Unified Audit Log ingestion, Entra and subscription log export, destination workspace retention, responder role eligibility, break-glass FIDO2 coverage, user consent, and Conditional Access coverage of the device code flow. Never reported Met while any individual check is Not Assessed." `
-            -Evidence $cloudIrRun.RelativeOutputPath -Collector 'Export-CloudIncidentReadiness.ps1'
+        $cloudIrOverallStatus = [string](Get-OpsPropertyValue -InputObject $cloudIr -Name 'OverallStatus')
+        if ($cloudIrOverallStatus -notin @('Met', 'NotMet', 'Partial', 'NotAssessed')) {
+            Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+                -Status 'NotAssessed' -Finding "The cloud incident readiness collector's summary did not carry a recognized OverallStatus value ('$cloudIrOverallStatus')." -Collector 'Export-CloudIncidentReadiness.ps1'
+        } else {
+            Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+                -Status $cloudIrOverallStatus `
+                -Finding "Checks met: $metChecks of $checkCount. Partial: $partialChecks. Not met: $notMetChecks. Not assessed: $notAssessedChecks. Covers Unified Audit Log ingestion, Entra and subscription log export, destination workspace retention, responder role eligibility, break-glass FIDO2 coverage, user consent, and Conditional Access coverage of the device code flow. Never reported Met while any individual check is Not Assessed." `
+                -Evidence $cloudIrRun.RelativeOutputPath -Collector 'Export-CloudIncidentReadiness.ps1'
+        }
     }
 } else {
     foreach ($pair in @(

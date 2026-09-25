@@ -113,11 +113,12 @@ function Invoke-MgGraphRequest {
     }
     if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies?%24skiptoken=page2') {
         # Second page, reached only through @odata.nextLink, carries the policy that
-        # actually blocks the flow. Proves Graph pagination is followed.
+        # actually blocks the flow. Proves Graph pagination is followed. Scoped to
+        # includeUsers 'All' so it grades tenant-wide coverage, not a narrower scope.
         return @{
             value = @(
                 @{ id = 'p2'; displayName = 'Block device code flow'; state = 'enabled'
-                   conditions = @{ authenticationFlows = @{ transferMethods = 'deviceCodeFlow' } }
+                   conditions = @{ authenticationFlows = @{ transferMethods = 'deviceCodeFlow' }; users = @{ includeUsers = @('All') } }
                    grantControls = @{ builtInControls = @('block') } }
             )
         }
@@ -246,5 +247,208 @@ function Invoke-MgGraphRequest {
 
     It 'never writes a secret, token, or key into a report' {
         (Get-Content (Join-Path $script:summary.OutputDirectory 'summary.json') -Raw) | Should -Not -Match 'secret|password|clientsecret'
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness treats an Azure session in a different tenant as no Azure session' {
+    BeforeAll {
+        $script:callLogPath2 = Join-Path ([System.IO.Path]::GetTempPath()) "ops-callog-$([guid]::NewGuid().ToString('N')).log"
+        Set-Content -LiteralPath $script:callLogPath2 -Encoding utf8 -Value ''
+
+        $mismatchAzStub = @'
+Import-Module Az.Accounts -Force -ErrorAction SilentlyContinue
+
+function Connect-AzAccount { param($Tenant, $UseDeviceAuthentication) }
+function Get-AzContext { [pscustomobject]@{ Subscription = [pscustomobject]@{ Id = 'sub-other' }; Tenant = [pscustomobject]@{ Id = 'fabrikam-tenant-id' } } }
+function Disconnect-AzAccount { }
+'@
+
+        $fixture2 = @"
+`$env:OPSTOOLKIT_TEST_CALL_LOG = '$($script:callLogPath2)'
+
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = `$true } }
+
+function Invoke-AzRestMethod {
+    param(`$Path, `$Method, `$ErrorAction)
+    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -Value ('AZ:' + `$Method + ':' + `$Path)
+    throw 'Invoke-AzRestMethod must not be called once the tenant mismatch is detected.'
+}
+
+function Invoke-MgGraphRequest {
+    param(`$Method, `$Uri, `$OutputType, `$ErrorAction)
+
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: `$Uri"
+}
+"@
+
+        $setup2 = $script:graphStub + $mismatchAzStub + $fixture2
+
+        $script:run2 = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setup2 -Argument @{
+            Connect = $true
+            ConnectAzure = $true
+            TenantId = 'contoso-tenant-id'
+            SubscriptionId = @('sub-1')
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summary2 = $script:run2.Summary
+        $script:checks2 = if ($script:summary2) { @(Import-Csv (Join-Path $script:summary2.OutputDirectory 'readiness-checks.csv')) } else { @() }
+        $script:callLog2 = if (Test-Path -LiteralPath $script:callLogPath2) { Get-Content -LiteralPath $script:callLogPath2 } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:run2.ExitCode | Should -Be 0 -Because "the script failed: $($script:run2.Output)"
+    }
+
+    It 'never calls Invoke-AzRestMethod once the mismatch is detected, proving the check was skipped rather than raced' {
+        # Set-Content -Value '' seeds the log file with one empty line, so Get-Content
+        # always returns at least one element; filter blanks before counting real calls.
+        @($script:callLog2 | Where-Object { $_ }).Count | Should -Be 0
+    }
+
+    It 'grades the Entra log export NotAssessed with the tenant mismatch reason, not a false read of the wrong tenant' {
+        $record = $script:checks2 | Where-Object { $_.CheckId -eq 'ENTRA-LOG-EXPORT' }
+        $record.Status | Should -Be 'NotAssessed'
+        $record.Finding | Should -Match 'different tenant'
+    }
+
+    It 'grades the subscription Activity Log check NotAssessed for the same reason' {
+        ($script:checks2 | Where-Object { $_.CheckId -eq 'SUB-ACTIVITY-LOG-EXPORT' }).Status | Should -Be 'NotAssessed'
+    }
+
+    It 'reports AzureConnected false in the summary despite a live Az context existing' {
+        $script:summary2.AzureConnected | Should -Be $false
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness grades user consent NotAssessed when only the grants read fails' {
+    BeforeAll {
+        $fixture3 = @"
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = `$true } }
+
+function Invoke-AzRestMethod {
+    param(`$Path, `$Method, `$ErrorAction)
+    throw "Unstubbed Invoke-AzRestMethod path: `$Path"
+}
+
+function Invoke-MgGraphRequest {
+    param(`$Method, `$Uri, `$OutputType, `$ErrorAction)
+
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') {
+        return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } }
+    }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') {
+        throw 'Insufficient privileges to complete the operation. Status: 403 (Forbidden)'
+    }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: `$Uri"
+}
+"@
+
+        $setup3 = $script:graphStub + $script:azStub + $fixture3
+
+        $script:run3 = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setup3 -Argument @{
+            Connect = $true
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summary3 = $script:run3.Summary
+        $script:checks3 = if ($script:summary3) { @(Import-Csv (Join-Path $script:summary3.OutputDirectory 'readiness-checks.csv')) } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:run3.ExitCode | Should -Be 0 -Because "the script failed: $($script:run3.Output)"
+    }
+
+    It 'grades USER-CONSENT NotAssessed with the grants-read failure, not a silent zero-grant pass' {
+        $record = $script:checks3 | Where-Object { $_.CheckId -eq 'USER-CONSENT' }
+        $record.Status | Should -Be 'NotAssessed'
+        $record.Finding | Should -Match '403'
+    }
+}
+
+Describe 'Export-CloudIncidentReadiness grades a workspace shared by Entra and subscription exports against the stricter target' {
+    BeforeAll {
+        $fixture4 = @"
+function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = `$true } }
+
+function Invoke-AzRestMethod {
+    param(`$Path, `$Method, `$ErrorAction)
+
+    if (`$Path -like '*microsoft.aadiam/diagnosticSettings*') {
+        `$body = @{ value = @(
+            @{ name = 'entra-export'; properties = @{
+                workspaceId = '/subscriptions/sub-1/resourceGroups/rg1/providers/Microsoft.OperationalInsights/workspaces/shared'
+                logs = @( @{ category = 'AuditLogs'; enabled = `$true }, @{ category = 'SignInLogs'; enabled = `$true } )
+            } }
+        ) } | ConvertTo-Json -Depth 10
+        return [pscustomobject]@{ StatusCode = 200; Content = `$body }
+    }
+
+    if (`$Path -like '*sub-1/providers/microsoft.insights/diagnosticSettings*') {
+        `$body = @{ value = @(
+            @{ name = 'sub1-activity-export'; properties = @{
+                workspaceId = '/subscriptions/sub-1/resourceGroups/rg1/providers/Microsoft.OperationalInsights/workspaces/shared'
+                logs = @( @{ category = 'Administrative'; enabled = `$true } )
+            } }
+        ) } | ConvertTo-Json -Depth 10
+        return [pscustomobject]@{ StatusCode = 200; Content = `$body }
+    }
+
+    if (`$Path -like '*Microsoft.OperationalInsights/workspaces/shared*') {
+        `$body = @{ properties = @{ retentionInDays = 80 } } | ConvertTo-Json -Depth 10
+        return [pscustomobject]@{ StatusCode = 200; Content = `$body }
+    }
+
+    throw "Unstubbed Invoke-AzRestMethod path: `$Path"
+}
+
+function Invoke-MgGraphRequest {
+    param(`$Method, `$Uri, `$OutputType, `$ErrorAction)
+
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') { return @{ value = @() } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/policies/authorizationPolicy') { return @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @() } } }
+    if (`$Uri -eq 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants') { return @{ value = @() } }
+
+    throw "Unstubbed Invoke-MgGraphRequest uri: `$Uri"
+}
+"@
+
+        $setup4 = $script:graphStub + $script:azStub + $fixture4
+
+        $script:run4 = Invoke-ScriptUnderTest -RelativePath 'scripts\entra\Export-CloudIncidentReadiness.ps1' `
+            -Setup $setup4 -Argument @{
+            Connect = $true
+            ConnectAzure = $true
+            SubscriptionId = @('sub-1')
+            TargetRetentionDaysUal = 100
+            TargetRetentionDaysActivityLog = 50
+            OutputDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "cloudir-$([guid]::NewGuid().ToString('N'))")
+        }
+        $script:summary4 = $script:run4.Summary
+        $script:retentionRows4 = if ($script:summary4) { @(Import-Csv (Join-Path $script:summary4.OutputDirectory 'log-retention.csv')) } else { @() }
+    }
+
+    It 'runs to completion' {
+        $script:run4.ExitCode | Should -Be 0 -Because "the script failed: $($script:run4.Output)"
+    }
+
+    It 'grades the shared workspace against the stricter (higher) of the two targets, not whichever export was read last' {
+        $script:retentionRows4.Count | Should -Be 1
+        $record = $script:retentionRows4[0]
+        $record.TargetRetentionDays | Should -Be 100
+        $record.Status | Should -Be 'NotMet' -Because 'retention of 80 days meets the 50-day Activity Log target but not the stricter 100-day Entra target; a false Met here would mean the overwrite bug survived'
+    }
+
+    It 'notes on the shared workspace that both Entra logs and subscription Activity Log purposes apply' {
+        $record = $script:retentionRows4[0]
+        ($record.Purpose -match 'EntraLogs') | Should -BeTrue
+        ($record.Purpose -match 'SubscriptionActivityLog') | Should -BeTrue
     }
 }

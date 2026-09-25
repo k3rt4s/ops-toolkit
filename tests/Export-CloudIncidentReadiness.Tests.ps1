@@ -23,13 +23,16 @@ BeforeAll {
     }
 
     function New-CaPolicy {
-        param($Id = 'p1', $Name = 'Policy', $State = 'enabled', $TransferMethods = 'deviceCodeFlow', $Controls = @('block'))
+        param($Id = 'p1', $Name = 'Policy', $State = 'enabled', $TransferMethods = 'deviceCodeFlow', $Controls = @('block'), $IncludeUsers = @('All'))
 
         @{
             id = $Id
             displayName = $Name
             state = $State
-            conditions = @{ authenticationFlows = @{ transferMethods = $TransferMethods } }
+            conditions = @{
+                authenticationFlows = @{ transferMethods = $TransferMethods }
+                users = @{ includeUsers = $IncludeUsers }
+            }
             grantControls = @{ builtInControls = $Controls }
         }
     }
@@ -282,5 +285,98 @@ Describe 'Get-DeviceCodeFlowCoverageRecord' {
     It 'never repeats the legacy-authentication grading owned by Export-EntraConditionalAccessBaseline.ps1' {
         $policy = @((New-CaPolicy -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block')))
         (Get-DeviceCodeFlowCoverageRecord -Policy $policy).Finding | Should -Match 'IAM-01'
+    }
+
+    It 'is NotMet, not a false Met, when the only blocking policy is scoped to a pilot group rather than all users' {
+        $policy = @((New-CaPolicy -Name 'Pilot device code block' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('11111111-1111-1111-1111-111111111111')))
+        $record = Get-DeviceCodeFlowCoverageRecord -Policy $policy
+        $record.Status | Should -Be 'NotMet'
+        $record.Finding | Should -Match 'Pilot device code block'
+    }
+
+    It 'is Met when a tenant-wide blocking policy is joined by a narrower non-blocking scope' {
+        $policy = @(
+            (New-CaPolicy -Id 'p1' -Name 'Tenant-wide block' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('All')),
+            (New-CaPolicy -Id 'p2' -Name 'Pilot block' -State 'enabled' -TransferMethods 'deviceCodeFlow' -Controls @('block') -IncludeUsers @('22222222-2222-2222-2222-222222222222'))
+        )
+        (Get-DeviceCodeFlowCoverageRecord -Policy $policy).Status | Should -Be 'Met'
+    }
+}
+
+Describe 'Get-UserConsentRecord field-null pitfall' {
+    It 'is NotAssessed, not Partial or Met, when permissionGrantPoliciesAssigned is absent from the authorization policy' {
+        # Null shape: @($null) is a one-element array, not an empty one, so a missing
+        # field must be caught before Met/Partial/NotMet logic runs on it.
+        $policy = @{ defaultUserRolePermissions = @{} }
+        $record = Get-UserConsentRecord -AuthorizationPolicy $policy -OAuthGrantCount 0
+        $record.Status | Should -Be 'NotAssessed'
+        $record.Finding | Should -Match 'permissionGrantPoliciesAssigned'
+    }
+}
+
+Describe 'Merge-OpsWorkspaceRetentionTarget' {
+    It 'keeps the stricter (higher) target when the same workspace already has one recorded for a different purpose' {
+        $table = [ordered]@{}
+        Merge-OpsWorkspaceRetentionTarget -Table $table -WorkspaceResourceId '/ws1' -TargetRetentionDays 90 -Purpose 'EntraLogs'
+        Merge-OpsWorkspaceRetentionTarget -Table $table -WorkspaceResourceId '/ws1' -TargetRetentionDays 180 -Purpose 'SubscriptionActivityLog'
+
+        $table['/ws1'].TargetRetentionDays | Should -Be 180
+        $table['/ws1'].Purpose | Should -Contain 'EntraLogs'
+        $table['/ws1'].Purpose | Should -Contain 'SubscriptionActivityLog'
+    }
+
+    It 'does not let a lower target recorded second overwrite a higher target recorded first' {
+        $table = [ordered]@{}
+        Merge-OpsWorkspaceRetentionTarget -Table $table -WorkspaceResourceId '/ws1' -TargetRetentionDays 180 -Purpose 'SubscriptionActivityLog'
+        Merge-OpsWorkspaceRetentionTarget -Table $table -WorkspaceResourceId '/ws1' -TargetRetentionDays 90 -Purpose 'EntraLogs'
+
+        $table['/ws1'].TargetRetentionDays | Should -Be 180
+    }
+
+    It 'records a single purpose for a workspace seen from only one check' {
+        $table = [ordered]@{}
+        Merge-OpsWorkspaceRetentionTarget -Table $table -WorkspaceResourceId '/ws1' -TargetRetentionDays 90 -Purpose 'EntraLogs'
+        @($table['/ws1'].Purpose).Count | Should -Be 1
+    }
+}
+
+Describe 'Get-OpsArmPagedValue' {
+    AfterEach {
+        Remove-Item -LiteralPath 'function:Invoke-AzRestMethod' -ErrorAction SilentlyContinue
+    }
+
+    It 'adds nothing for a page whose body has no value field, rather than one null item' {
+        # Null shape: @($null) is a one-element array, not an empty one, so a
+        # malformed page with no value field at all must add zero items, not one.
+        function global:Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            [pscustomobject]@{ StatusCode = 200; Content = (@{ oddballShape = $true } | ConvertTo-Json) }
+        }
+
+        $result = @(Get-OpsArmPagedValue -Path '/malformed?api-version=2022-10-01')
+        $result.Count | Should -Be 0
+    }
+
+    It 'strips the scheme and host from an absolute nextLink before requesting the next page' {
+        $script:pathsRequested = [System.Collections.Generic.List[string]]::new()
+        function global:Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            $script:pathsRequested.Add($Path)
+            if ($script:pathsRequested.Count -eq 1) {
+                $body = @{
+                    value = @(@{ id = 'item1' })
+                    nextLink = 'https://management.azure.com/subscriptions/sub-1/providers/microsoft.insights/diagnosticSettings?api-version=2021-05-01-preview&%24skiptoken=page2'
+                } | ConvertTo-Json
+                return [pscustomobject]@{ StatusCode = 200; Content = $body }
+            }
+            $body = @{ value = @(@{ id = 'item2' }) } | ConvertTo-Json
+            [pscustomobject]@{ StatusCode = 200; Content = $body }
+        }
+
+        $result = @(Get-OpsArmPagedValue -Path '/subscriptions/sub-1/providers/microsoft.insights/diagnosticSettings?api-version=2021-05-01-preview')
+        $result.Count | Should -Be 2
+        $script:pathsRequested.Count | Should -Be 2
+        $script:pathsRequested[1] | Should -Not -Match '^https?://'
+        $script:pathsRequested[1] | Should -Match '^/subscriptions/sub-1'
     }
 }

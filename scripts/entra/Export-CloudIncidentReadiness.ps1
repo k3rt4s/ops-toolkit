@@ -453,6 +453,62 @@ function Get-WorkspaceRetentionRecord {
     }
 }
 
+function Merge-OpsWorkspaceRetentionTarget {
+    <#
+    .SYNOPSIS
+    Record a workspace's retention target and purpose, keeping the stricter target when the workspace already has one recorded for a different purpose.
+
+    .DESCRIPTION
+    The same Log Analytics workspace can receive both the Entra diagnostic export and
+    a subscription's Activity Log export. Recording a second purpose must never
+    silently overwrite the first purpose's target; the stricter (higher) target
+    always wins, and both purposes are kept so the reader knows two targets applied.
+
+    .PARAMETER Table
+    Ordered hashtable of workspace resource id to a target record. Mutated in place.
+
+    .PARAMETER WorkspaceResourceId
+    ARM resource ID of the workspace.
+
+    .PARAMETER TargetRetentionDays
+    The retention target this purpose expects.
+
+    .PARAMETER Purpose
+    Which check found this workspace: EntraLogs or SubscriptionActivityLog.
+
+    .OUTPUTS
+    None. Mutates Table in place.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Specialized.OrderedDictionary]$Table,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$WorkspaceResourceId,
+
+        [Parameter(Mandatory = $true)]
+        [int]$TargetRetentionDays,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Purpose
+    )
+
+    if ($Table.Contains($WorkspaceResourceId)) {
+        $entry = $Table[$WorkspaceResourceId]
+        if ($entry.Purpose -notcontains $Purpose) {
+            $entry.Purpose = @($entry.Purpose) + $Purpose
+        }
+        if ($TargetRetentionDays -gt $entry.TargetRetentionDays) {
+            $entry.TargetRetentionDays = $TargetRetentionDays
+        }
+    } else {
+        $Table[$WorkspaceResourceId] = [pscustomobject]@{ TargetRetentionDays = $TargetRetentionDays; Purpose = @($Purpose) }
+    }
+}
+
 function Get-ResponderRoleRecord {
     <#
     .SYNOPSIS
@@ -623,7 +679,27 @@ function Get-UserConsentRecord {
     }
 
     $defaultPermissions = Get-OpsPropertyValue -InputObject $AuthorizationPolicy -Name 'defaultUserRolePermissions'
-    $policies = @(Get-OpsPropertyValue -InputObject $defaultPermissions -Name 'permissionGrantPoliciesAssigned')
+
+    # Get-OpsPropertyValue returning a genuinely present but empty array writes zero
+    # objects to the pipeline, so @(...) around the call captures Count 0; a missing
+    # or unreadable field instead returns the scalar $null, which @(...) captures as
+    # a one-element array holding that $null. Reading the raw wrapped result first,
+    # before running the array through the match logic below, is what tells "field
+    # absent" apart from "field present and genuinely empty" (@($null) is a
+    # one-element array, not an empty one, so this distinction is lost if the two
+    # cases are not separated up front).
+    $rawPolicies = @(Get-OpsPropertyValue -InputObject $defaultPermissions -Name 'permissionGrantPoliciesAssigned')
+    if ($rawPolicies.Count -eq 1 -and $null -eq $rawPolicies[0]) {
+        return [pscustomobject]@{
+            CheckId = 'USER-CONSENT'
+            Status = 'NotAssessed'
+            Finding = 'permissionGrantPoliciesAssigned could not be read from the authorization policy.'
+            PermissionGrantPolicy = ''
+            OAuthGrantCount = $OAuthGrantCount
+        }
+    }
+
+    $policies = $rawPolicies
     $policyText = Join-OpsValue $policies
 
     $status = if ($policies -match 'microsoft-user-default-legacy') { 'NotMet' }
@@ -667,6 +743,7 @@ function Get-DeviceCodeFlowCoverageRecord {
     )
 
     $blocking = [System.Collections.Generic.List[string]]::new()
+    $narrowBlocking = [System.Collections.Generic.List[string]]::new()
     foreach ($item in @($Policy)) {
         $state = Join-OpsValue (Get-OpsPropertyValue -InputObject $item -Name 'state')
         if ($state -ne 'enabled') { continue }
@@ -678,8 +755,20 @@ function Get-DeviceCodeFlowCoverageRecord {
 
         $grant = Get-OpsPropertyValue -InputObject $item -Name 'grantControls'
         $controls = Join-OpsValue (Get-OpsPropertyValue -InputObject $grant -Name 'builtInControls')
-        if ($controls -match 'block') {
-            $blocking.Add((Join-OpsValue (Get-OpsPropertyValue -InputObject $item -Name 'displayName')))
+        if ($controls -notmatch 'block') { continue }
+
+        $displayName = Join-OpsValue (Get-OpsPropertyValue -InputObject $item -Name 'displayName')
+
+        # Mirror Export-EntraConditionalAccessBaseline.ps1's own tenant-wide test
+        # (conditions.users.includeUsers containing 'All') so the two scripts agree on
+        # what "tenant-wide" means. A policy that blocks the flow but is scoped to a
+        # pilot group covers only that group, not the tenant, and must not grade Met.
+        $users = Get-OpsPropertyValue -InputObject $conditions -Name 'users'
+        $includeUsers = Join-OpsValue (Get-OpsPropertyValue -InputObject $users -Name 'includeUsers')
+        if ($includeUsers -match 'All') {
+            $blocking.Add($displayName)
+        } else {
+            $narrowBlocking.Add($displayName)
         }
     }
 
@@ -690,6 +779,8 @@ function Get-DeviceCodeFlowCoverageRecord {
         Status = if ($covered) { 'Met' } else { 'NotMet' }
         Finding = if ($covered) {
             "Blocked by: $($blocking -join '; '). Legacy authentication is graded separately by Export-EntraConditionalAccessBaseline.ps1 (control IAM-01) and is not repeated here."
+        } elseif ($narrowBlocking.Count -gt 0) {
+            "Blocked only for a narrower scope, not all users: $($narrowBlocking -join '; '). This is a coverage gap, not tenant-wide protection. Legacy authentication is graded separately by Export-EntraConditionalAccessBaseline.ps1 (control IAM-01) and is not repeated here."
         } else {
             'No enabled policy blocks the device code authentication flow. Legacy authentication is graded separately by Export-EntraConditionalAccessBaseline.ps1 (control IAM-01) and is not repeated here.'
         }
@@ -758,11 +849,24 @@ function Get-OpsArmPagedValue {
         }
 
         $body = $response.Content | ConvertFrom-Json
-        foreach ($item in @(Get-OpsPropertyValue -InputObject $body -Name 'value')) {
-            $results.Add($item)
+        $rawValue = Get-OpsPropertyValue -InputObject $body -Name 'value'
+        if ($null -ne $rawValue) {
+            # @($null) is a one-element array, not an empty one, so a page with no
+            # value field at all must not be iterated, or it adds one null item to
+            # the results instead of zero.
+            foreach ($item in @($rawValue)) {
+                $results.Add($item)
+            }
         }
 
         $next = Join-OpsValue (Get-OpsPropertyValue -InputObject $body -Name 'nextLink')
+        if ($next -and $next -match '^https?://') {
+            # Azure Resource Manager's nextLink is typically an absolute URL, but
+            # Invoke-AzRestMethod's -Path expects a path relative to the ARM endpoint.
+            # Strip the scheme and host so pagination works whether the response
+            # returns a relative or absolute nextLink.
+            $next = ([System.Uri]$next).PathAndQuery
+        }
         if (-not $next) { $next = $null }
     }
 
@@ -840,6 +944,21 @@ try {
 $azConnected = [bool]$azContext
 $noAzureSessionMessage = 'No Azure session. Run again with -ConnectAzure, or connect first with Connect-AzAccount.'
 
+if ($azConnected) {
+    # Get-AzContext only proves SOME Az session exists on disk (Az.Accounts autosaves
+    # the last-used context), never that it matches the tenant this run is grading.
+    # An Az session left over from a different tenant must be treated the same as no
+    # Azure session at all, or checks 2-5 silently grade the wrong tenant's resources
+    # under this run's TenantId.
+    $expectedTenantId = if ($TenantId) { $TenantId } else { (Get-MgContext).TenantId }
+    $azTenant = Get-OpsPropertyValue -InputObject $azContext -Name 'Tenant'
+    $azTenantId = Get-OpsPropertyValue -InputObject $azTenant -Name 'Id'
+    if ($expectedTenantId -and $azTenantId -and $azTenantId -ne $expectedTenantId) {
+        $azConnected = $false
+        $noAzureSessionMessage = "Azure session is connected to a different tenant ($azTenantId) than the Microsoft Graph session ($expectedTenantId)."
+    }
+}
+
 $asOf = Get-Date
 Write-Verbose 'Grading incident readiness.'
 
@@ -888,31 +1007,40 @@ if (-not $SubscriptionId -or $SubscriptionId.Count -eq 0) {
 $subscriptionOverallStatus = Get-OpsOverallReadinessStatus -Status @($subscriptionRecords | ForEach-Object { $_.Status })
 
 # Check 4: destination workspace retention, gathered from every workspace named by checks 2 and 3.
+# A workspace can be the destination for both the Entra export and a subscription's
+# Activity Log export; Merge-OpsWorkspaceRetentionTarget keeps the stricter target
+# rather than letting the second loop silently overwrite the first loop's target.
 $workspaceTargetDays = [ordered]@{}
 foreach ($destination in @($entraLogExportRecord.Destination)) {
-    if ($destination.WorkspaceResourceId) { $workspaceTargetDays[$destination.WorkspaceResourceId] = $TargetRetentionDaysUal }
+    if ($destination.WorkspaceResourceId) { Merge-OpsWorkspaceRetentionTarget -Table $workspaceTargetDays -WorkspaceResourceId $destination.WorkspaceResourceId -TargetRetentionDays $TargetRetentionDaysUal -Purpose 'EntraLogs' }
 }
 foreach ($subscriptionRecord in $subscriptionRecords) {
     foreach ($destination in @($subscriptionRecord.Destination)) {
-        if ($destination.WorkspaceResourceId) { $workspaceTargetDays[$destination.WorkspaceResourceId] = $TargetRetentionDaysActivityLog }
+        if ($destination.WorkspaceResourceId) { Merge-OpsWorkspaceRetentionTarget -Table $workspaceTargetDays -WorkspaceResourceId $destination.WorkspaceResourceId -TargetRetentionDays $TargetRetentionDaysActivityLog -Purpose 'SubscriptionActivityLog' }
     }
 }
 
 $retentionRecords = [System.Collections.Generic.List[object]]::new()
 foreach ($workspaceResourceId in $workspaceTargetDays.Keys) {
-    $target = $workspaceTargetDays[$workspaceResourceId]
-    $purpose = if ($target -eq $TargetRetentionDaysUal) { 'EntraLogs' } else { 'SubscriptionActivityLog' }
+    $entry = $workspaceTargetDays[$workspaceResourceId]
+    $target = $entry.TargetRetentionDays
+    $purpose = $entry.Purpose -join '+'
+
     if (-not $azConnected) {
-        $retentionRecords.Add((Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $null -TargetRetentionDays $target -Purpose $purpose -Reason $noAzureSessionMessage))
-        continue
+        $retentionRecord = Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $null -TargetRetentionDays $target -Purpose $purpose -Reason $noAzureSessionMessage
+    } else {
+        try {
+            $workspace = Get-OpsArmObject -Path "${workspaceResourceId}?api-version=2022-10-01"
+            $retentionRecord = Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $workspace -TargetRetentionDays $target -Purpose $purpose
+        } catch {
+            $retentionRecord = Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $null -TargetRetentionDays $target -Purpose $purpose -Reason $_.Exception.Message
+        }
     }
 
-    try {
-        $workspace = Get-OpsArmObject -Path "${workspaceResourceId}?api-version=2022-10-01"
-        $retentionRecords.Add((Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $workspace -TargetRetentionDays $target -Purpose $purpose))
-    } catch {
-        $retentionRecords.Add((Get-WorkspaceRetentionRecord -WorkspaceResourceId $workspaceResourceId -Workspace $null -TargetRetentionDays $target -Purpose $purpose -Reason $_.Exception.Message))
+    if (@($entry.Purpose).Count -gt 1) {
+        $retentionRecord.Finding = "$($retentionRecord.Finding) This workspace serves both Entra log export and subscription Activity Log export, so the stricter of the two retention targets applies."
     }
+    $retentionRecords.Add($retentionRecord)
 }
 if ($retentionRecords.Count -eq 0) {
     $retentionRecords.Add([pscustomobject]@{ CheckId = 'LOG-RETENTION'; WorkspaceResourceId = ''; Purpose = ''; TargetRetentionDays = $null; RetentionDays = $null; Status = 'NotAssessed'; Finding = 'No exporting diagnostic setting named a Log Analytics workspace destination to check retention against.' })
@@ -1008,7 +1136,10 @@ try {
     if (-not $consentError) { $consentError = $_.Exception.Message }
 }
 
-$userConsentRecord = if ($consentError -and $null -eq $authPolicy) {
+$userConsentRecord = if ($consentError) {
+    # A grants-read failure alone, even alongside a successful authorization-policy
+    # read, must not fall through to Get-UserConsentRecord: that function would grade
+    # a real read failure the same as a genuine zero-grant tenant.
     [pscustomobject]@{ CheckId = 'USER-CONSENT'; Status = 'NotAssessed'; Finding = $consentError; PermissionGrantPolicy = ''; OAuthGrantCount = $oauthGrantCount }
 } else {
     Get-UserConsentRecord -AuthorizationPolicy $authPolicy -OAuthGrantCount $oauthGrantCount

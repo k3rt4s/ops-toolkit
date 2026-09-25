@@ -110,10 +110,20 @@ Describe 'Security evidence-pack LOG-03 cloud incident readiness wiring' {
 
     It "flows the collector's own OverallStatus straight into the LOG-03 grade" {
         $script:packSource | Should -Match (
+            [regex]::Escape("`$cloudIrOverallStatus = [string](Get-OpsPropertyValue -InputObject `$cloudIr -Name 'OverallStatus')")
+        )
+        $script:packSource | Should -Match (
             [regex]::Escape("Add-Control -Id 'LOG-03'") +
-            "[\s\S]{0,200}-Status \(\[string\]\(Get-OpsPropertyValue -InputObject \`$cloudIr -Name 'OverallStatus'\)\)"
+            "[\s\S]{0,200}-Status `\`$cloudIrOverallStatus"
         )
         $script:packSource | Should -Match ([regex]::Escape("-Collector 'Export-CloudIncidentReadiness.ps1'"))
+    }
+
+    It 'falls back to NotAssessed when the collector summary carries an unrecognized OverallStatus' {
+        $script:packSource | Should -Match (
+            [regex]::Escape("if (`$cloudIrOverallStatus -notin @('Met', 'NotMet', 'Partial', 'NotAssessed')) {") +
+            "[\s\S]{0,200}" + [regex]::Escape("-Status 'NotAssessed'")
+        )
     }
 
     It 'uses the same control question text everywhere LOG-03 is referenced' {

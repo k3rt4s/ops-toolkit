@@ -15,6 +15,7 @@ What a session needs to believe before it changes this repo's scripts or tests.
 - Live WMI and WUA reads can block indefinitely while Windows Update orchestration is busy. Live integration setups use `Invoke-ScriptUnderTest -TimeoutSeconds`; expiry tree-kills the child and reports `NotRun`, because an absent result is not a pass.
 - Report and rollback writes, and the run directory itself, carry `-WhatIf:$false` on purpose: writing the plan *is* the preview, not the change being previewed. Without it, `Resolve-Path` throws and a `-WhatIf` run produces nothing to review.
 - A Graph field that exists only in beta returns `$null`, not an error, as `servicePrincipalCredentialKeyId` and `defaultMfaMethod` (`scripts\entra\`) both did. Check a new field against the installed SDK model type before trusting it.
+- The evidence pack launches each collector through `Start-Process pwsh -File` (`Invoke-Collector`), which passes every argument as a literal string: `-X a,b` binds the one string `a,b`, and `-X a b` binds `b` positionally to the first parameter. So a list reaches a collector only as one comma-joined value the collector splits itself (`ConvertTo-OpsSplitList` in `Export-CloudIncidentReadiness.ps1`); a test that echoes `$args` without a param block cannot see this.
 
 ## Decisions that look wrong
 

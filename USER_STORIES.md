@@ -561,6 +561,35 @@ Acceptance criteria:
   that it is technical evidence and makes no NIST maturity, ISO conformity, audit, or
   certification claim.
 
+## Epic: Incident response readiness
+
+### Story: Know whether this tenant could support an incident investigation today
+
+As a security-conscious operator, I want a single graded readiness check across log
+ingestion, log export, retention, responder access, break-glass coverage, consent,
+and Conditional Access, so that I find the gap before an incident forces me to
+discover it live.
+
+Status: shipped 2026-09-25 (`scripts/entra/Export-CloudIncidentReadiness.ps1`,
+control IR-02 in the evidence pack)
+
+Acceptance criteria:
+
+- Given a connected Graph session, When the script runs, Then it grades all nine
+  checks Met, NotMet, Partial, or NotAssessed and writes a summary plus per-check
+  CSV/JSON reports, changing nothing in the tenant.
+- Given no Azure session, no `-SubscriptionId`, or no `-BreakGlassUpn`, When the
+  corresponding check runs, Then it reports NotAssessed with the reason, never a
+  false Met or a silent zero.
+- Given an Azure session connected to a different tenant than the Graph session, When
+  Azure-backed checks run, Then they are treated as having no Azure session at all,
+  rather than grading the wrong tenant's resources.
+- Given the overall readiness status, When any individual check is NotAssessed, Then
+  the overall status is never reported Met.
+- Given an evidence pack run with `-IncludeEntra` and several `-AzureSubscriptionId`
+  or `-BreakGlassUpn` values, When the collector is launched, Then every value
+  reaches it as a list and none binds to another parameter.
+
 ## Epic: Repository quality
 
 ### Story: Run the validation ritual as one command

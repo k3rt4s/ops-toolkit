@@ -10,16 +10,14 @@ No live repo-fit backlog item remains here as of 2026-09-08. The two scored item
 were still indexed, `net-hygiene` and `mcp-tool-ladder`, were cut on the developer's
 approval because they do not belong in this repo.
 
-Two items were filed on 2026-09-24 from the Azure incident-readiness talk and are not
-yet scored; score them per `ai_development/docs/board-scoring.md` before either moves
-to the work board. Detail is under "Ingested 2026-09-24: Azure incident-readiness
-talk" below.
+Two items were filed on 2026-09-24 from the Azure incident-readiness talk and scored
+the same day per `ai_development/docs/board-scoring.md`. `cloud-ir-ready` moved to the
+work board on 2026-09-24 on the developer's approval (see "Moved to the work board");
+`entra-contain` stays here and goes second. Detail is under "Ingested 2026-09-24:
+Azure incident-readiness talk" below.
 
-- **cloud-ir-ready** Read-only Azure/M365 incident-readiness collector.
-  - `worker: sonnet 3/6/12 h` (estimate, unscored)
-
-- **entra-contain** `-WhatIf`-guarded Entra identity containment script.
-  - `worker: sonnet 3/6/10 h` (estimate, unscored)
+- **entra-contain** `-WhatIf`-guarded Entra identity containment script. `score: kind=feature gain=1/3/8 p=0.4 freq=2 horizon=3 hours=1.5/3/6 risk=0.1x4 rev=two-way conf=opinion flags=security id=entra-contain` `return: likelihood two suspected-compromise responses a year across client estates is the developer's guess, no count; impact each saves one to eight hours of ticket-gated session revocation and inbox-rule export, the talk's most common post-incident lesson; evidence opinion only, the Johansen digest at C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`
+  - `worker: sonnet 3/6/10 h`
 
 ## Moved to the work board
 
@@ -53,6 +51,10 @@ Pending. This heading is a record, not a live section; nothing here is scored tw
   Defender inventory absent from the coverage manifest. See "Evidence-pack follow-ups".
   - `worker: sonnet 1.5/3/5 h`
   Moved to the work board Pending section on 2026-09-06.
+
+- cloud-ir-ready, read-only Azure/M365 incident-readiness collector. See "Ingested
+  2026-09-24: Azure incident-readiness talk". Moved to the work board In Progress
+  section on 2026-09-24 as lane `cloud-ir-ready`, with its score block, on the developer's approval.
 
 ## Ready to pick up
 

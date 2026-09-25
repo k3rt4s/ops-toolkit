@@ -1169,12 +1169,31 @@ if ($IncludeEntra) {
             -Finding "Expired credentials still attached: $expiredCreds. Expiring within the warning window: $expiringCreds. Over-long secret lifetimes: $(Get-OpsPropertyValue -InputObject $credentials -Name 'ExceedsRecommendedLifetimeCount')." `
             -Evidence $credRun.RelativeOutputPath -Collector 'Export-EntraAppCredentialExpiry.ps1'
     }
+
+    $cloudIrRun = Invoke-Collector -Name 'entra-cloud-incident-readiness' -RelativePath 'entra\Export-CloudIncidentReadiness.ps1' -Argument @('-Connect')
+    $cloudIr = Get-CollectorSummary -Run $cloudIrRun
+    if ($null -eq $cloudIr) {
+        Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+            -Status 'NotAssessed' -Finding "The cloud incident readiness collector did not produce a summary. Status: $($cloudIrRun.Status). $($cloudIrRun.Note)" -Collector 'Export-CloudIncidentReadiness.ps1'
+    } else {
+        $metChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'MetCount')
+        $partialChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'PartialCount')
+        $notMetChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'NotMetCount')
+        $notAssessedChecks = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'NotAssessedCount')
+        $checkCount = [int](Get-OpsPropertyValue -InputObject $cloudIr -Name 'CheckCount')
+
+        Add-Control -Id 'LOG-03' -Question 'Could this tenant support an incident investigation today?' `
+            -Status ([string](Get-OpsPropertyValue -InputObject $cloudIr -Name 'OverallStatus')) `
+            -Finding "Checks met: $metChecks of $checkCount. Partial: $partialChecks. Not met: $notMetChecks. Not assessed: $notAssessedChecks. Covers Unified Audit Log ingestion, Entra and subscription log export, destination workspace retention, responder role eligibility, break-glass FIDO2 coverage, user consent, and Conditional Access coverage of the device code flow. Never reported Met while any individual check is Not Assessed." `
+            -Evidence $cloudIrRun.RelativeOutputPath -Collector 'Export-CloudIncidentReadiness.ps1'
+    }
 } else {
     foreach ($pair in @(
             @('MFA-01', 'Is multi-factor authentication enforced for all users?'),
             @('MFA-02', 'Is MFA resistant to phishing and help desk social engineering?'),
             @('IAM-01', 'Are access policies enforced, including a block on legacy authentication?'),
-            @('IAM-02', 'Are application credentials rotated before they expire?')
+            @('IAM-02', 'Are application credentials rotated before they expire?'),
+            @('LOG-03', 'Could this tenant support an incident investigation today?')
         )) {
         Add-Control -Id $pair[0] -Question $pair[1] -Status 'NotAssessed' `
             -Finding 'Not assessed. Re-run with -IncludeEntra and a Graph sign-in to cover the identity controls.' -Collector 'none'

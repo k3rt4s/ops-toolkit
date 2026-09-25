@@ -5,6 +5,33 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-25
+
+### Added: cloud incident readiness collector and evidence-pack control IR-02
+
+- `scripts/entra/Export-CloudIncidentReadiness.ps1` grades whether this tenant's
+  logging, roles, and identity controls could support an incident investigation
+  today: Unified Audit Log ingestion, Entra sign-in and audit log export, each named
+  subscription's Activity Log export, destination workspace retention against
+  target-days parameters, Microsoft Graph activity logs, responder role PIM
+  eligibility versus standing access, break-glass account FIDO2 coverage, the
+  user-consent setting and existing delegated OAuth grants, and Conditional Access
+  coverage of the device code flow. Legacy authentication is already graded by
+  `Export-EntraConditionalAccessBaseline.ps1` (IAM-01) and is not repeated. Azure
+  reads use ARM REST through `Az.Accounts` with pinned api-versions. A check that
+  could not be read is always NotAssessed, never folded into a pass, and an Azure
+  session in a different tenant than the Graph session counts as no Azure session.
+- `Export-SecurityControlEvidencePack.ps1` reports it as control IR-02, scoped to
+  the Entra tenant, when `-IncludeEntra` is set. New optional `-AzureSubscriptionId`
+  and `-BreakGlassUpn` pass through to the collector; `-AzureSubscriptionId` also
+  passes `-ConnectAzure`. Without them the subscription and break-glass checks stay
+  NotAssessed and existing `-IncludeEntra` runs are unchanged.
+- List parameters reach the collector as one comma-joined value, which the collector
+  splits. `pwsh -File` passes every argument as a literal string, so a second bare
+  value after a list parameter would bind positionally to `-TenantId`.
+- Stub-only verification: never run against a live tenant. See "Residual risk, not a
+  backlog item" in `FUTURE_FEATURES.md`.
+
 ## 2026-09-24
 
 ### Changed: README names the board's location

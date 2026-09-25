@@ -12,12 +12,20 @@ approval because they do not belong in this repo.
 
 Two items were filed on 2026-09-24 from the Azure incident-readiness talk and scored
 the same day per `ai_development/docs/board-scoring.md`. `cloud-ir-ready` moved to the
-work board on 2026-09-24 on the developer's approval (see "Moved to the work board");
+work board on 2026-09-24 on the developer's approval and shipped 2026-09-25 (see "Moved
+to the work board");
 `entra-contain` stays here and goes second. Detail is under "Ingested 2026-09-24:
 Azure incident-readiness talk" below.
 
+`pack-fanout-bind` was added on 2026-09-25 from the `cloud-ir-ready` landing review, on the
+developer's decision to backlog it rather than fix it in that cycle.
+
 - **entra-contain** `-WhatIf`-guarded Entra identity containment script. `score: kind=feature gain=1/3/8 p=0.4 freq=2 horizon=3 hours=1.5/3/6 risk=0.1x4 rev=two-way conf=opinion flags=security id=entra-contain` `return: likelihood two suspected-compromise responses a year across client estates is the developer's guess, no count; impact each saves one to eight hours of ticket-gated session revocation and inbox-rule export, the talk's most common post-incident lesson; evidence opinion only, the Johansen digest at C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`
   - `worker: sonnet 3/6/10 h`
+
+- **pack-fanout-bind** Evidence-pack estate fan-out binds only the first target. `score: kind=bug gain=0.5/2/6 p=0.9 freq=4 horizon=3 hours=1/2/4 rev=two-way conf=assessed flags=security id=pack-fanout-bind` `return: likelihood p=0.9 because the mechanism is proven with a probe script under pwsh -File on 2026-09-25 but no multi-target pack has been run to see the live effect, freq four packs a year matches the cloud-ir-ready guess; impact each multi-target run loses every target after the first to NotAssessed or a failed collector and costs hours to diagnose; evidence the probe at landing review 2026-09-25, found while fixing the same flaw in the IR-02 pass-through`
+  - `worker: sonnet 2/4/8 h`
+  - `Invoke-Collector` in `scripts\reporting\Export-SecurityControlEvidencePack.ps1` launches collectors with `Start-Process pwsh -File` and passes `-ComputerName` followed by each target as a separate argument. Under `-File` each argument is a literal string, so the second target binds positionally to the collector's first parameter and a third fails the launch with "A positional parameter cannot be found". Fix shape: pass one comma-joined value and split it in each remote-capable collector, as `ConvertTo-OpsSplitList` does in `Export-CloudIncidentReadiness.ps1`, with a test that launches a real param block through `pwsh -File`. Errs conservative today (failed collectors are NotAssessed, never Met). Backlogged 2026-09-25 on the developer's decision.
 
 ## Moved to the work board
 
@@ -55,6 +63,8 @@ Pending. This heading is a record, not a live section; nothing here is scored tw
 - cloud-ir-ready, read-only Azure/M365 incident-readiness collector. See "Ingested
   2026-09-24: Azure incident-readiness talk". Moved to the work board In Progress
   section on 2026-09-24 as lane `cloud-ir-ready`, with its score block, on the developer's approval.
+  Shipped 2026-09-25 as `scripts\entra\Export-CloudIncidentReadiness.ps1`, evidence-pack
+  control IR-02.
 
 ## Ready to pick up
 
@@ -363,6 +373,15 @@ It is recorded here rather than as work because there is nothing to build. It cl
 the first time someone runs the six scripts against a live system, which the work
 board carries as the standing next action.
 
+The cloud incident readiness collector, `Export-CloudIncidentReadiness.ps1` (shipped
+2026-09-25), carries the same limit in its sharpest form: it has never run against a
+live tenant, on the developer's stub-only decision. Its specs stub
+`Invoke-MgGraphRequest` and `Invoke-AzRestMethod` against shapes read from Microsoft's
+documented Graph and ARM schemas, not captured from a real response, so an
+undocumented or beta-only field shape could still surface a gap the stubs did not
+cover. Verify it against a real tenant, with and without an Azure session, before
+treating an IR-02 Met or NotMet as authoritative for a real readiness decision.
+
 ## Known deviations
 
 Things that look like gaps and are not.
@@ -415,6 +434,27 @@ YouTube swEKKlN5BMA. Digest and portfolio evaluation:
   diagnostic-setting reads need Az.Monitor or ARM REST, which no script here uses yet,
   so that dependency is decided at pickup. Stays inside the "Considered and rejected"
   line: it reads configuration once, it never ingests or queries the logs themselves.
+
+Follow-ups from the `cloud-ir-ready` landing review, 2026-09-25. Unscored, low severity,
+each errs conservative (a pass is never overstated); score one when it is picked up.
+The responder-role item goes first.
+
+- **Responder roles: activated PIM and administrative-unit scope.** The responder check
+  treats any member of the activated directory role as standing access, so a user
+  inside a PIM activation window reads as standing, and it counts
+  `roleEligibilityScheduleInstances` at every `directoryScopeId`, including
+  administrative-unit scope, as tenant-wide eligibility. Separate activated from
+  permanent assignments and count only `directoryScopeId` `/` toward tenant coverage.
+- **User consent: resource-specific consent entries.** `permissionGrantPoliciesAssigned`
+  commonly carries `ManagePermissionGrantsForOwnedResource.*` entries (Teams
+  resource-specific consent) even with user consent disabled, so the check grades
+  Partial where it should grade Met. Evaluate only `ManagePermissionGrantsForSelf.*`
+  entries.
+- **UAL ingestion read from the wrong session.** `Get-AdminAuditLogConfig` is also
+  exported by Security & Compliance PowerShell (`Connect-IPPSSession`) and on-prem
+  Exchange, where `UnifiedAuditLogIngestionEnabled` is always False. An operator
+  connected only to IPPS gets NotMet on a tenant where ingestion is on. Check which
+  module supplied the cmdlet and grade NotAssessed when it is not Exchange Online.
 - **entra-contain** A `SupportsShouldProcess` containment script for one or more UPNs:
   revoke sign-in sessions, disable the account, and export (not delete) the user's inbox
   rules and mailbox forwarding so the responder decides what to remove. Plan/state CSV

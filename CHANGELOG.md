@@ -5,6 +5,38 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-09-29
+
+### Fixed: evidence-pack estate fan-out reached only the first target
+
+- `Invoke-Collector` in `scripts/reporting/Export-SecurityControlEvidencePack.ps1`
+  launched each collector with `Start-Process pwsh -File` and passed `-ComputerName`
+  followed by one argument per target. Under `-File` every argument is a literal
+  string, so the second target bound positionally to the collector's first parameter
+  and a third failed the launch with "A positional parameter cannot be found". An
+  estate-scoped pack covered one machine and reported the rest as failed collectors.
+  It now passes one comma-joined value.
+- `ConvertTo-OpsSplitList` is exported from `modules/OpsToolkit.Reporting`: it splits
+  each value on commas, trims, and drops empties. It is behaviourally identical to the
+  script-local copy in `scripts/entra/Export-CloudIncidentReadiness.ps1`, which stays
+  where it is because `tests/Export-SecurityControlEvidencePack.Tests.ps1` lifts that
+  function from the script's AST.
+- All nine remote-capable collectors, plus the pack itself, split `-ComputerName`
+  through that function immediately after importing `OpsToolkit.Reporting`, guarded on
+  `$PSBoundParameters.ContainsKey('ComputerName')` so an unbound parameter keeps its
+  own default. Nine rather than the seven the pack calls, because a scheduled task or
+  any other `-File` launch hits the same bug.
+- The pack's `-TargetListPath` lines go through the same splitter, so the scope the
+  pack reports and the scope the collectors query cannot diverge. A list line holding
+  a comma previously counted as one machine while two were collected, and
+  `-ScopeExclusion` then refused to exclude the second. Blank-line and comment tests
+  stay on the whole line, so a comment holding a comma is still a comment.
+- Tests launch a real collector param block through `pwsh -File` with one, two and
+  three targets and assert the bound count before the values; a failure-path probe
+  asserts that a value splitting to nothing exits non-zero naming the parameter rather
+  than falling back to a local-only run; and a guard test requires every script
+  declaring `[string[]]$ComputerName` to carry the split after its import.
+
 ## 2026-09-25
 
 ### Added: cloud incident readiness collector and evidence-pack control IR-02

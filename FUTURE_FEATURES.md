@@ -18,14 +18,12 @@ to the work board");
 Azure incident-readiness talk" below.
 
 `pack-fanout-bind` was added on 2026-09-25 from the `cloud-ir-ready` landing review, on the
-developer's decision to backlog it rather than fix it in that cycle.
+developer's decision to backlog it rather than fix it in that cycle. It shipped on
+2026-09-29 and has left this index; see the Shipped 2026-09-29 heading below.
+`entra-contain` is now the only scored item here.
 
 - **entra-contain** `-WhatIf`-guarded Entra identity containment script. `score: kind=feature gain=1/3/8 p=0.4 freq=2 horizon=3 hours=1.5/3/6 risk=0.1x4 rev=two-way conf=opinion flags=security id=entra-contain` `return: likelihood two suspected-compromise responses a year across client estates is the developer's guess, no count; impact each saves one to eight hours of ticket-gated session revocation and inbox-rule export, the talk's most common post-incident lesson; evidence opinion only, the Johansen digest at C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`
   - `worker: sonnet 3/6/10 h`
-
-- **pack-fanout-bind** Evidence-pack estate fan-out binds only the first target. `score: kind=bug gain=0.5/2/6 p=0.9 freq=4 horizon=3 hours=1/2/4 rev=two-way conf=assessed flags=security id=pack-fanout-bind` `return: likelihood p=0.9 because the mechanism is proven with a probe script under pwsh -File on 2026-09-25 but no multi-target pack has been run to see the live effect, freq four packs a year matches the cloud-ir-ready guess; impact each multi-target run loses every target after the first to NotAssessed or a failed collector and costs hours to diagnose; evidence the probe at landing review 2026-09-25, found while fixing the same flaw in the IR-02 pass-through`
-  - `worker: sonnet 2/4/8 h`
-  - `Invoke-Collector` in `scripts\reporting\Export-SecurityControlEvidencePack.ps1` launches collectors with `Start-Process pwsh -File` and passes `-ComputerName` followed by each target as a separate argument. Under `-File` each argument is a literal string, so the second target binds positionally to the collector's first parameter and a third fails the launch with "A positional parameter cannot be found". Fix shape: pass one comma-joined value and split it in each remote-capable collector, as `ConvertTo-OpsSplitList` does in `Export-CloudIncidentReadiness.ps1`, with a test that launches a real param block through `pwsh -File`. Errs conservative today (failed collectors are NotAssessed, never Met). Backlogged 2026-09-25 on the developer's decision.
 
 ## Moved to the work board
 
@@ -286,6 +284,38 @@ were corrected and covered by regression tests.
 
 The deferred `LOG-03`, `LOG-04`, and `VULN-01` ideas remain candidates only. They still
 need a named data source and operator need before they become stories.
+
+## Shipped 2026-09-29: evidence-pack estate fan-out
+
+`pack-fanout-bind` shipped as `a303916`, merged as `380bdff`. What changed is in
+`CHANGELOG.md` under 2026-09-29 and the mechanism is in `THEORY.md` under Load-bearing
+constraints. Strict validation passed all eight gates on the branch: 60 parser, 0
+analyzer, 72 help, 4 shell, 110 stale-reference, 1 module, 611 Pester tests, MachineState
+clean, 0 warnings, 12 NotRun from an unelevated session.
+
+Three low, unscored follow-ups came out of the landing review. None is queued work.
+
+- Dedupe the script-local `ConvertTo-OpsSplitList` in
+  `scripts\entra\Export-CloudIncidentReadiness.ps1` onto the exported
+  `OpsToolkit.Reporting` function. The blocker is
+  `tests\Export-SecurityControlEvidencePack.Tests.ps1`, which lifts that function from
+  the script's AST, so that test has to change with it. Settle the return shape at the
+  same time, for both copies at once (see the next bullet).
+- The function's `[OutputType([string[]])]` and `.OUTPUTS` say `System.String[]`, but an
+  empty result emits nothing, so a caller doing `$x = ConvertTo-OpsSplitList ...` gets
+  `$null` rather than a zero-length array, and `.Count` on it under
+  `Set-StrictMode -Version 3.0` is a runtime error. A comma-prefixed return fixes that
+  and was tried on 2026-09-29, but it breaks the `\()` capture idiom every caller in this
+  repository uses, including `Export-CloudIncidentReadiness.ps1` line 985, by yielding a
+  one-element nested array instead of the list. Trading a loud error for a silent wrong
+  result is the wrong direction, so it was reverted. Either settle on one idiom across
+  both copies, or correct the documented `.OUTPUTS` to match what the function does.
+- The empty-split failure message is PowerShell's own: it names the parameter, which is
+  the bar the fix was held to, but shows a blank value. On the fan-out path that text
+  lands in a collector's `run.err.log` and then in the pack's result note, where an
+  operator sees a variable-validation complaint rather than a statement that
+  `-ComputerName` held no computer names. A per-script throw would fix the wording at
+  the cost of a duplicated block in each of ten scripts, which is why it was declined.
 
 ## Evidence-pack follow-ups
 

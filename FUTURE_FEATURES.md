@@ -293,7 +293,7 @@ constraints. Strict validation passed all eight gates on the branch: 60 parser, 
 analyzer, 72 help, 4 shell, 110 stale-reference, 1 module, 611 Pester tests, MachineState
 clean, 0 warnings, 12 NotRun from an unelevated session.
 
-Three low, unscored follow-ups came out of the landing review. None is queued work.
+Four low, unscored follow-ups came out of the landing review. None is queued work.
 
 - Dedupe the script-local `ConvertTo-OpsSplitList` in
   `scripts\entra\Export-CloudIncidentReadiness.ps1` onto the exported
@@ -305,7 +305,7 @@ Three low, unscored follow-ups came out of the landing review. None is queued wo
   empty result emits nothing, so a caller doing `$x = ConvertTo-OpsSplitList ...` gets
   `$null` rather than a zero-length array, and `.Count` on it under
   `Set-StrictMode -Version 3.0` is a runtime error. A comma-prefixed return fixes that
-  and was tried on 2026-09-29, but it breaks the `\()` capture idiom every caller in this
+  and was tried on 2026-09-29, but it breaks the `@()` capture idiom every caller in this
   repository uses, including `Export-CloudIncidentReadiness.ps1` line 985, by yielding a
   one-element nested array instead of the list. Trading a loud error for a silent wrong
   result is the wrong direction, so it was reverted. Either settle on one idiom across
@@ -316,6 +316,12 @@ Three low, unscored follow-ups came out of the landing review. None is queued wo
   operator sees a variable-validation complaint rather than a statement that
   `-ComputerName` held no computer names. A per-script throw would fix the wording at
   the cost of a duplicated block in each of ten scripts, which is why it was declined.
+- `$posturePropbe` in
+  `scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1` is a
+  misspelling of `$postureProbe`. It is spelled the same way at its declaration and
+  at both of its uses, so it runs correctly and is cosmetic only. It predates this
+  change and is not in its diff, which is why it was not renamed here. Raised by
+  `pre_push_review.py` at the 2026-09-29 landing.
 
 ## Evidence-pack follow-ups
 

@@ -18,6 +18,7 @@
         'Get-OpsVolatileColumn'
         'Get-OpsRunDirectory'
         'Compare-OpsRecordSet'
+        'ConvertTo-OpsSplitList'
     )
     CmdletsToExport = @()
     VariablesToExport = @()

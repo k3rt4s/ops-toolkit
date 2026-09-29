@@ -78,6 +78,13 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
+# pwsh -File hands every argument as a literal string, so an estate-scoped caller
+# that joins targets into one comma-separated value needs them split back into a
+# real array here. An unbound -ComputerName is left alone.
+if ($PSBoundParameters.ContainsKey('ComputerName')) {
+    $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
+}
+
 # The audit subcategories worth requiring on an endpoint, by GUID rather than by name.
 # The display name is localized, so on a non-English Windows a name match silently
 # finds nothing and every subcategory reads as absent.

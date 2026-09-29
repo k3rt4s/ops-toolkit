@@ -290,3 +290,240 @@ Describe 'Security evidence-pack cloud incident readiness arguments bind as list
         @($received.BreakGlassUpn) | Should -Be $breakGlassUpns
     }
 }
+
+Describe 'Security evidence-pack Invoke-Collector passes -ComputerName as one comma-joined value' {
+    BeforeAll {
+        $script:packSource = Get-Content -Raw `
+            (Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1')
+    }
+
+    It 'builds the fan-out argument as a single comma-joined -ComputerName value, not one argument per target' {
+        # Under Start-Process pwsh -File every argument is a literal string, so the old
+        # shape (@('-ComputerName') + $resolvedTargets, one array element per target)
+        # bound only the first two targets: the second target filled -ComputerName and
+        # the third had nowhere to bind and failed the launch. The fix is one joined
+        # value that the collector splits back into a list itself.
+        $script:packSource | Should -Match (
+            [regex]::Escape("`$targetArgument = @('-ComputerName', (`$resolvedTargets -join ','))")
+        )
+        $script:packSource | Should -Not -Match (
+            [regex]::Escape("`$targetArgument = @('-ComputerName') + `$resolvedTargets")
+        )
+    }
+}
+
+Describe 'A collector param block binds -ComputerName as a real list under pwsh -File, at one, two, and three targets' {
+    BeforeAll {
+        # Same technique as the cloud-incident-readiness probe above: lift a real
+        # collector's param block, its OpsToolkit.Reporting import, and its real
+        # split-when-bound statement straight from the AST, so a change to any of the
+        # three breaks this test rather than a hand-copied stand-in silently drifting
+        # from the source.
+        $collectorPath = Get-RepositoryScriptPath -RelativePath 'scripts\active-directory\Test-LdapSigningReadiness.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($collectorPath, [ref]$tokens, [ref]$parseErrors)
+
+        $importStatement = @($ast.EndBlock.Statements | Where-Object {
+                $_.Extent.Text -match 'Import-Module.*OpsToolkit\.Reporting'
+            })
+        $splitStatement = @($ast.EndBlock.Statements | Where-Object {
+                $_ -is [System.Management.Automation.Language.IfStatementAst] -and
+                $_.Extent.Text -match 'ConvertTo-OpsSplitList'
+            })
+        $importStatement.Count | Should -Be 1
+        $splitStatement.Count | Should -Be 1
+
+        $reportingModulePath = Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Reporting'
+        $script:probeBody = @(
+            $ast.ParamBlock.Extent.Text
+            'Set-StrictMode -Version 3.0'
+            '$ErrorActionPreference = ''Stop'''
+            "Import-Module '$reportingModulePath' -Force"
+            $splitStatement[0].Extent.Text
+            '[ordered]@{ Bound = $PSBoundParameters.ContainsKey(''ComputerName''); ComputerName = @($ComputerName) } | ConvertTo-Json | Set-Content -LiteralPath $env:OPS_ARGPROBE_OUT -Encoding utf8'
+        ) -join [Environment]::NewLine
+    }
+
+    function script:Invoke-ComputerNameProbe {
+        param([string[]]$Targets, [switch]$ExpectFailure)
+
+        $probeScript = Join-Path ([System.IO.Path]::GetTempPath()) "ops-cnprobe-$([guid]::NewGuid().ToString('N')).ps1"
+        $outFile = Join-Path ([System.IO.Path]::GetTempPath()) "ops-cnprobe-$([guid]::NewGuid().ToString('N')).json"
+        $errFile = Join-Path ([System.IO.Path]::GetTempPath()) "ops-cnprobe-$([guid]::NewGuid().ToString('N')).err"
+        Set-Content -LiteralPath $probeScript -Encoding utf8 -Value $script:probeBody
+
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $probeScript)
+        if ($Targets) {
+            $arguments += @('-ComputerName', ($Targets -join ','))
+        }
+
+        try {
+            $env:OPS_ARGPROBE_OUT = $outFile
+            $pwshPath = (Get-Process -Id $PID).Path
+            $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -NoNewWindow -PassThru -Wait `
+                -RedirectStandardError $errFile
+            if ($ExpectFailure) {
+                [pscustomobject]@{
+                    ExitCode = $process.ExitCode
+                    StdErr = if (Test-Path -LiteralPath $errFile) { Get-Content -LiteralPath $errFile -Raw } else { '' }
+                }
+            } else {
+                $process.ExitCode | Should -Be 0
+                Get-Content -LiteralPath $outFile -Raw | ConvertFrom-Json
+            }
+        } finally {
+            Remove-Item Env:\OPS_ARGPROBE_OUT -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $probeScript -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $outFile -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'binds a single target' {
+        $received = Invoke-ComputerNameProbe -Targets @('PC1')
+        $received.Bound | Should -BeTrue
+        @($received.ComputerName).Count | Should -Be 1
+        @($received.ComputerName) | Should -Be @('PC1')
+    }
+
+    It 'binds two comma-joined targets, the shape that used to bind fine' {
+        $received = Invoke-ComputerNameProbe -Targets @('PC1', 'PC2')
+        $received.Bound | Should -BeTrue
+        @($received.ComputerName).Count | Should -Be 2
+        @($received.ComputerName) | Should -Be @('PC1', 'PC2')
+    }
+
+    It 'binds three comma-joined targets, the shape that used to fail the launch outright' {
+        $received = Invoke-ComputerNameProbe -Targets @('PC1', 'PC2', 'PC3')
+        $received.Bound | Should -BeTrue
+        @($received.ComputerName).Count | Should -Be 3
+        @($received.ComputerName) | Should -Be @('PC1', 'PC2', 'PC3')
+    }
+
+    It 'leaves an unbound -ComputerName completely alone, keeping the script''s own default' {
+        $received = Invoke-ComputerNameProbe -Targets @()
+        $received.Bound | Should -BeFalse
+        @($received.ComputerName) | Should -Be @($env:COMPUTERNAME)
+    }
+
+    It 'fails loudly and names the parameter when -ComputerName splits to nothing, never falling back to local-only' {
+        # A literal ',' splits to an empty list. ConvertTo-OpsSplitList now returns a
+        # real empty [string[]] rather than $null, and assigning that back to the
+        # [ValidateNotNullOrEmpty()][string[]]$ComputerName parameter variable must
+        # still throw, naming ComputerName, rather than silently keeping the script's
+        # single-machine default.
+        $result = Invoke-ComputerNameProbe -Targets @(',') -ExpectFailure
+        $result.ExitCode | Should -Not -Be 0
+        $result.StdErr | Should -Match 'ComputerName'
+    }
+}
+
+Describe 'Every script declaring [string[]]$ComputerName splits it when bound' {
+    It 'contains the split-when-bound pattern, so a future collector added without it fails here' {
+        $repositoryRoot = Get-RepositoryRoot
+        $scriptsRoot = Join-Path $repositoryRoot 'scripts'
+        # Whitespace-tolerant between the type and the variable name, so
+        # [string[]] $ComputerName (extra space) is selected the same as
+        # [string[]]$ComputerName.
+        $declaringScripts = @(Get-ChildItem -Path $scriptsRoot -Filter '*.ps1' -Recurse |
+                Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match '\[string\[\]\]\s*\$ComputerName\b' })
+
+        $declaringScripts.Count | Should -Be 10
+
+        $missing = @($declaringScripts | Where-Object {
+                $text = Get-Content -LiteralPath $_.FullName -Raw
+                -not (
+                    $text -match [regex]::Escape("if (`$PSBoundParameters.ContainsKey('ComputerName')) {") -and
+                    $text -match [regex]::Escape('$ComputerName = ConvertTo-OpsSplitList -Value $ComputerName')
+                )
+            } | ForEach-Object { $_.FullName })
+
+        $missing | Should -BeNullOrEmpty -Because "these scripts declare [string[]]`$ComputerName but do not split it when bound: $($missing -join ', ')"
+
+        $splitBeforeImport = @($declaringScripts | Where-Object {
+                $text = Get-Content -LiteralPath $_.FullName -Raw
+                $importIndex = $text.IndexOf('Import-Module')
+                $splitIndex = $text.IndexOf('$ComputerName = ConvertTo-OpsSplitList -Value $ComputerName')
+                $importIndex -lt 0 -or $splitIndex -lt 0 -or $splitIndex -lt $importIndex
+            } | ForEach-Object { $_.FullName })
+
+        $splitBeforeImport | Should -BeNullOrEmpty -Because "these scripts split -ComputerName before importing OpsToolkit.Reporting: $($splitBeforeImport -join ', ')"
+    }
+}
+
+Describe 'ConvertTo-OpsSplitList (OpsToolkit.Reporting module)' {
+    BeforeAll {
+        Import-ReportingModule
+    }
+
+    # Captured with @(), the idiom every caller in this repository uses, including
+    # the script-local copy in Export-CloudIncidentReadiness.ps1 that this function
+    # is required to match. The function emits its entries onto the pipeline, so an
+    # empty result emits nothing and @() collects it as a zero-length array.
+
+    It 'splits a comma-separated single string into a flat list' {
+        $result = @(ConvertTo-OpsSplitList -Value 'PC1,PC2,PC3')
+        $result.Count | Should -Be 3
+        $result | Should -Be @('PC1', 'PC2', 'PC3')
+    }
+
+    It 'trims whitespace around each split value' {
+        $result = @(ConvertTo-OpsSplitList -Value ' PC1 , PC2 ,PC3 ')
+        $result.Count | Should -Be 3
+        $result | Should -Be @('PC1', 'PC2', 'PC3')
+    }
+
+    It 'drops empty segments from leading, trailing, or doubled commas' {
+        $result = @(ConvertTo-OpsSplitList -Value ',PC1,,PC2,')
+        $result.Count | Should -Be 2
+        $result | Should -Be @('PC1', 'PC2')
+    }
+
+    It 'returns an empty array for $null input' {
+        @(ConvertTo-OpsSplitList -Value $null).Count | Should -Be 0
+    }
+
+    It 'returns an empty array for a value that splits to nothing' {
+        @(ConvertTo-OpsSplitList -Value ' , , ').Count | Should -Be 0
+    }
+
+    It 'passes a real array through unchanged' {
+        $result = @(ConvertTo-OpsSplitList -Value @('PC1', 'PC2'))
+        $result.Count | Should -Be 2
+        $result | Should -Be @('PC1', 'PC2')
+    }
+}
+
+Describe 'Calling a collector directly with a real array behaves exactly as before' {
+    BeforeAll {
+        $collectorPath = Get-RepositoryScriptPath -RelativePath 'scripts\active-directory\Test-LdapSigningReadiness.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($collectorPath, [ref]$tokens, [ref]$parseErrors)
+        $splitStatement = @($ast.EndBlock.Statements | Where-Object {
+                $_ -is [System.Management.Automation.Language.IfStatementAst] -and
+                $_.Extent.Text -match 'ConvertTo-OpsSplitList'
+            })
+        $splitStatement.Count | Should -Be 1
+
+        Import-ReportingModule
+        $script:probeBlock = [scriptblock]::Create(
+            $ast.ParamBlock.Extent.Text + [Environment]::NewLine +
+            $splitStatement[0].Extent.Text + [Environment]::NewLine +
+            '@($ComputerName)'
+        )
+    }
+
+    It 'passes a real PowerShell array straight through, unaffected by the split-when-bound guard' {
+        # -OutputDirectory is supplied only so its default value expression, which reads
+        # $PSScriptRoot, is never evaluated: this scriptblock was built from lifted text
+        # rather than run from a file, so $PSScriptRoot is empty here.
+        & $script:probeBlock -ComputerName @('dc01', 'dc02') -OutputDirectory $TestDrive |
+            Should -Be @('dc01', 'dc02')
+    }
+
+    It "leaves the script's own default (@(`$env:COMPUTERNAME)) untouched when -ComputerName is not supplied" {
+        & $script:probeBlock -OutputDirectory $TestDrive | Should -Be @($env:COMPUTERNAME)
+    }
+}

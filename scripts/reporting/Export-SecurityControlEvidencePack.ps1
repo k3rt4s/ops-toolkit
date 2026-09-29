@@ -131,6 +131,14 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
+# pwsh -File hands every argument as a literal string, so this pack's own direct
+# -ComputerName invocation, and the same value joined for a fan-out launch, both
+# need splitting back into a real array here. An unbound -ComputerName is left
+# alone.
+if ($PSBoundParameters.ContainsKey('ComputerName')) {
+    $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
+}
+
 $scriptsRoot = Join-Path $PSScriptRoot '..'
 $asOf = Get-Date
 $packDirectory = Resolve-OpsRunDirectory -OutputDirectory $OutputDirectory -Prefix $OutputPrefix
@@ -169,8 +177,16 @@ if ($TargetListPath) {
 
     foreach ($line in [System.IO.File]::ReadAllLines($TargetListPath)) {
         $trimmed = $line.Trim()
-        if ($trimmed -and -not $trimmed.StartsWith('#')) {
-            $targets.Add($trimmed)
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+
+        # Split each line the same way -ComputerName and the collector fan-out split
+        # their values, so a comma inside a target-list line yields the same names
+        # here as it does downstream. Invariant: $requestedTargets must hold exactly
+        # what the collectors end up querying, so a line reading pc01,pc02 cannot
+        # report one machine while two are collected. The blank-line and comment
+        # tests stay on the whole line, so a comment holding a comma stays a comment.
+        foreach ($name in @(ConvertTo-OpsSplitList -Value $trimmed)) {
+            $targets.Add($name)
         }
     }
 }
@@ -351,7 +367,7 @@ function Invoke-Collector {
         $result.Scope = 'InputDefined'
     } elseif ($isEstateScope) {
         if (Test-CollectorSupportsComputerName -Path $scriptPath) {
-            $targetArgument = @('-ComputerName') + $resolvedTargets
+            $targetArgument = @('-ComputerName', ($resolvedTargets -join ','))
             $result.Scope = "$($resolvedTargets.Count) machine(s)"
         } else {
             $result.Scope = 'LocalMachineOnly'

@@ -90,6 +90,13 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Force
 
+# pwsh -File hands every argument as a literal string, so an estate-scoped caller
+# that joins targets into one comma-separated value needs them split back into a
+# real array here. An unbound -ComputerName is left alone.
+if ($PSBoundParameters.ContainsKey('ComputerName')) {
+    $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
+}
+
 $asOf = Get-Date
 $records = [System.Collections.Generic.List[object]]::new()
 

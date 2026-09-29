@@ -690,6 +690,43 @@ function Compare-OpsRecordSet {
     }
 }
 
+function ConvertTo-OpsSplitList {
+    <#
+    .SYNOPSIS
+    Splits comma-joined list values into a flat, trimmed list.
+
+    .DESCRIPTION
+    pwsh -File hands every argument to the script as a literal string, so a list
+    typed as a,b, or passed by a caller as one joined value, binds as the single
+    string 'a,b', and a second bare value binds positionally to the next
+    parameter. This splits each value on commas, trims it and drops empty
+    entries, so every launch path reaches the checks as a real list.
+
+    .PARAMETER Value
+    The bound parameter values. May be null or empty.
+
+    .OUTPUTS
+    System.String[]
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]]$Value
+    )
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+        foreach ($part in ($item -split ',')) {
+            $trimmed = $part.Trim()
+            if ($trimmed) { $result.Add($trimmed) }
+        }
+    }
+    $result.ToArray()
+}
+
 Export-ModuleMember -Function @(
     'Resolve-OpsOutputDirectory'
     'Resolve-OpsRunDirectory'
@@ -703,4 +740,5 @@ Export-ModuleMember -Function @(
     'Get-OpsVolatileColumn'
     'Get-OpsRunDirectory'
     'Compare-OpsRecordSet'
+    'ConvertTo-OpsSplitList'
 )

@@ -324,6 +324,21 @@ function Get-OpsRiskContext {
                 $against.Add("The response is '$contentType'; nosniff also stops API responses from being sniffed and run as HTML, so it still applies to APIs")
             }
         }
+        'X-XSS-Protection is enabled' {
+            $for.Add('The header only controls the old reflected-XSS filter of Internet Explorer, Chrome, and Safari (MDN), so the exposure is limited to browsers that still run that filter')
+            $against.Add('The fix is to remove the header or set it to 0, a one-line change with no compatibility cost')
+        }
+        'Referrer-Policy is missing or unsafe-url' {
+            if (-not (& $v 'ReferrerPolicy')) {
+                $for.Add('Current browsers default to strict-origin-when-cross-origin when the header is absent, so full URLs are not sent to other sites')
+            }
+            else {
+                $against.Add('unsafe-url is set explicitly, so full URLs, including query strings, are sent to every other site the page links to or loads from')
+            }
+        }
+        'Permissions-Policy is not set' {
+            $for.Add('Permissions-Policy is defense in depth: browsers already ask the user before granting camera, microphone, or location, and support for the header is uneven')
+        }
         default {
             $for.Add('No finding-specific context logic defined for this finding type yet.')
         }

@@ -184,6 +184,18 @@ $script:FindingCatalog = @{
         Severity = 'Low'; Category = 'HTTP Security Headers'; Finding = 'X-Content-Type-Options is not nosniff'
         Remediation = "Add 'X-Content-Type-Options: nosniff' to HTTP responses at the web server or CDN config."
     }
+    XXssProtectionEnabled = @{
+        Severity = 'Low'; Category = 'HTTP Security Headers'; Finding = 'X-XSS-Protection is enabled'
+        Remediation = "Remove the X-XSS-Protection header, or set it to '0'. It only controlled an old reflected-XSS filter in Internet Explorer, Chrome, and Safari, and that filter can be abused to create cross-site scripting holes in otherwise safe pages (OWASP HTTP Headers Cheat Sheet; MDN). A Content-Security-Policy is the replacement."
+    }
+    ReferrerPolicyWeak = @{
+        Severity = 'Low'; Category = 'HTTP Security Headers'; Finding = 'Referrer-Policy is missing or unsafe-url'
+        Remediation = "Send 'Referrer-Policy: strict-origin-when-cross-origin' (or no-referrer) at the web server or CDN. unsafe-url sends the full URL, including paths and query strings, to every site the page links to or loads from. Current browsers already default to strict-origin-when-cross-origin when the header is absent, so a missing header is mainly about older browsers and making the intent explicit."
+    }
+    PermissionsPolicyMissing = @{
+        Severity = 'Low'; Category = 'HTTP Security Headers'; Finding = 'Permissions-Policy is not set'
+        Remediation = "Add a Permissions-Policy header that turns off browser features the site does not use, for example 'Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()'. It limits what an injected script or an embedded third-party frame can ask the browser for. Browser support is still uneven, so treat it as defense in depth rather than a primary control."
+    }
 }
 
 
@@ -195,6 +207,7 @@ $script:EvidenceColumns = @(
     'Hsts', 'HstsMaxAge', 'HstsIncludeSubDomains', 'HstsPreloadDirective', 'ApexPreloadStatus'
     'Csp', 'CspUnsafeInline', 'CspUnsafeEval', 'CspUnsafeSources', 'FrameAncestors'
     'XFrameOptions', 'XContentTypeOptions', 'ServerHeader', 'ServerHeaderHasVersion', 'XPoweredBy'
+    'XXssProtection', 'ReferrerPolicy', 'PermissionsPolicy'
     'WwwAuthenticate', 'AuthRequired'
     'FinalUrl', 'FinalStatus', 'FinalContentType', 'FinalOnSameHost', 'HasForm', 'HasPasswordField', 'LoginPathFound', 'LikelyDead'
     'Port22', 'Port22Banner', 'Port25', 'Port25Banner'
@@ -494,6 +507,9 @@ for ($i = 0; $i -lt $HostName.Count; $i++) {
         $row.ServerHeader = $server
         $row.ServerHeaderHasVersion = [bool]($server -match '\d')
         $row.XPoweredBy = Get-OpsWebHeaderValue -Headers $page.Headers -Name 'X-Powered-By'
+        $row.XXssProtection = Get-OpsWebHeaderValue -Headers $page.Headers -Name 'X-XSS-Protection'
+        $row.ReferrerPolicy = Get-OpsWebHeaderValue -Headers $page.Headers -Name 'Referrer-Policy'
+        $row.PermissionsPolicy = Get-OpsWebHeaderValue -Headers $page.Headers -Name 'Permissions-Policy'
         $row.WwwAuthenticate = Get-OpsWebHeaderValue -Headers $final.Headers -Name 'WWW-Authenticate'
     }
     else {
@@ -578,8 +594,17 @@ for ($i = 0; $i -lt $HostName.Count; $i++) {
             Add-OpsFinding -FindingList $findings -TargetHost $h -Key 'ServerHeaderExposed' -Evidence "Server: $($row.ServerHeader); version number present: $($row.ServerHeaderHasVersion); X-Powered-By: '$($row.XPoweredBy)'"
         }
 
-        if ($row.XFrameOptions -notmatch '(?i)^\s*(deny|sameorigin)\s*$') {
-            Add-OpsFinding -FindingList $findings -TargetHost $h -Key 'XfoNotDenyOrSameorigin' -Evidence "X-Frame-Options: '$($row.XFrameOptions)'; CSP frame-ancestors: '$($row.FrameAncestors)'"
+        # Frame-ancestors 'none' or 'self' satisfies the X-Frame-Options finding:
+        # browsers that support it ignore X-Frame-Options.
+        $hygieneEvidence = @{
+            XfoNotDenyOrSameorigin = "X-Frame-Options: '$($row.XFrameOptions)'; CSP frame-ancestors: '$($row.FrameAncestors)'"
+            XXssProtectionEnabled = "X-XSS-Protection: '$($row.XXssProtection)'"
+            ReferrerPolicyWeak = "Referrer-Policy: '$($row.ReferrerPolicy)'"
+            PermissionsPolicyMissing = "No Permissions-Policy header ($($row.HeaderSource), status $($page.Status))"
+        }
+        $hygieneKeys = Get-OpsWebHeaderHygieneFinding -XFrameOptions $row.XFrameOptions -FrameAncestors $row.FrameAncestors -XXssProtection $row.XXssProtection -ReferrerPolicy $row.ReferrerPolicy -PermissionsPolicy $row.PermissionsPolicy
+        foreach ($key in $hygieneKeys) {
+            Add-OpsFinding -FindingList $findings -TargetHost $h -Key $key -Evidence $hygieneEvidence[$key]
         }
 
         if ($row.XContentTypeOptions -notmatch '(?i)nosniff') {

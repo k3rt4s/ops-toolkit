@@ -407,6 +407,63 @@ function Get-OpsWebHeaderValue {
     return ''
 }
 
+function Test-OpsWebFrameAncestorsProtection {
+    <#
+    .SYNOPSIS
+    Report whether a CSP frame-ancestors value limits framing to 'none' or the
+    page's own origin plus an explicit list, with no wildcard that reopens it.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter()][AllowEmptyString()][string]$FrameAncestors)
+    $tokens = @($FrameAncestors -split '\s+' | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
+    if ($tokens -contains '*' -or $tokens -contains 'https:' -or $tokens -contains 'http:') { return $false }
+    return ($tokens -contains "'none'" -or $tokens -contains "'self'")
+}
+
+function Get-OpsWebHeaderHygieneFinding {
+    <#
+    .SYNOPSIS
+    Return the sweep's finding keys for the framing and browser-policy headers a
+    response gets wrong: X-Frame-Options, X-XSS-Protection, Referrer-Policy, and
+    Permissions-Policy.
+
+    .DESCRIPTION
+    Pure function over header values, so the rules can be tested without a network.
+    - X-Frame-Options must be DENY or SAMEORIGIN unless CSP frame-ancestors already
+      limits framing, since browsers that support frame-ancestors ignore X-Frame-Options.
+    - X-XSS-Protection is flagged only when present and not 0: OWASP says not to set
+      it or to turn it off, because the old filter could itself be abused.
+    - Referrer-Policy is flagged when absent or when the value browsers apply (the
+      last one in a comma list) is unsafe-url, which sends full URLs everywhere.
+    - Permissions-Policy is flagged when absent.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$XFrameOptions,
+        [Parameter()][AllowEmptyString()][string]$FrameAncestors,
+        [Parameter()][AllowEmptyString()][string]$XXssProtection,
+        [Parameter()][AllowEmptyString()][string]$ReferrerPolicy,
+        [Parameter()][AllowEmptyString()][string]$PermissionsPolicy
+    )
+    $keys = [Collections.Generic.List[string]]::new()
+    if ($XFrameOptions -notmatch '(?i)^\s*(deny|sameorigin)\s*$' -and -not (Test-OpsWebFrameAncestorsProtection -FrameAncestors $FrameAncestors)) {
+        $keys.Add('XfoNotDenyOrSameorigin')
+    }
+    if ($XXssProtection.Trim() -and $XXssProtection -notmatch '^\s*0\s*$') {
+        $keys.Add('XXssProtectionEnabled')
+    }
+    $appliedReferrer = @($ReferrerPolicy -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -Last 1
+    if (-not $appliedReferrer -or $appliedReferrer -eq 'unsafe-url') {
+        $keys.Add('ReferrerPolicyWeak')
+    }
+    if (-not $PermissionsPolicy.Trim()) {
+        $keys.Add('PermissionsPolicyMissing')
+    }
+    return [string[]]$keys.ToArray()
+}
+
 function Get-OpsWebResponse {
     <#
     .SYNOPSIS

@@ -5,6 +5,33 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-02
+
+### Changed: IIS header preset gaps closed, posture sweep checks three more headers
+
+- The preset Content-Security-Policy adds `form-action 'self'`; `form-action` does not
+  fall back to `default-src`, so without it a page's forms could post anywhere.
+- New switches on `Set-IisRecommendedSecurityHeaders.ps1`: `-CspReportUri` (an https://
+  URL; adds `report-uri`, `report-to csp-endpoint` and a `Reporting-Endpoints` header),
+  `-CoopAllowPopups` (`same-origin-allow-popups` for OAuth and payment popups), and
+  `-RedirectHttpToHttps` (native HSTS redirect, requires `-UseNativeHsts`). All three
+  conflict with `-Headers`. The `removeServerHeader` support note now says 1709, per
+  Microsoft, and the help documents that a custom HSTS header is also sent on plain
+  HTTP, where browsers ignore it (RFC 6797 8.1).
+- `Test-ExternalSecurityPosture.ps1` adds three Low findings: X-XSS-Protection present
+  and not `0`, Referrer-Policy missing or `unsafe-url`, and Permissions-Policy not set,
+  with `XXssProtection`, `ReferrerPolicy` and `PermissionsPolicy` evidence columns. The
+  X-Frame-Options finding is no longer raised when CSP `frame-ancestors` is `'none'` or
+  `'self'` without a wildcard. The rules live in `Get-OpsWebHeaderHygieneFinding` in
+  `OpsWebCommon.ps1` so they can be tested offline; `New-SecurityFindingsRiskContext.ps1`
+  gains context for the three new findings.
+- `docs/iis/security-headers.md` rewritten for a general audience: plain-language
+  purpose and breakage per header, a safe rollout order, the web.config deployment
+  caveat, what the headers do not cover, and links to OWASP, MDN, web.dev, Microsoft and
+  RFC 6797.
+- Tests: the IIS spec grows to 75 (14 fail against the previous scripts);
+  `WebSecurityReview.Tests.ps1` grows to 40 (21 fail against the previous scripts).
+
 ## 2026-10-01
 
 ### Changed: IIS security header preset brought up to current OWASP guidance
@@ -22,7 +49,7 @@ that produced the current layout is described in the README under "What Changed"
   only, and removes a custom STS header so it is not sent twice), `-IncludeNoStore`, and
   `-KeepServerHeader`. Conflicting combinations with `-Headers` throw before any read.
 - Every run now removes the `Server` header through `requestFiltering`
-  `removeServerHeader` (IIS 10 1607+); an older server is reported `NotRun` per site.
+  `removeServerHeader` (Windows Server or Windows 10 1709+); an older server is reported `NotRun` per site.
 - All three header scripts reject a header name containing a single quote and a value
   containing control characters (CR/LF header injection), before importing
   WebAdministration.

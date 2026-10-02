@@ -8,11 +8,12 @@ down where the evidence actually supports it.
 
 - `Invoke-SecurityFindingsReview.ps1`: the one script to run. It prompts for a
   host list, then runs the sweep and the risk-context pass in sequence.
-- `Test-ExternalSecurityPosture.ps1`: the sweep. It checks fifteen finding types
+- `Test-ExternalSecurityPosture.ps1`: the sweep. It checks eighteen finding types
   (HTTP redirect, certificate hostname match, open SMTP and SSH, CSP missing,
   unsafe CSP, CSP unsafe-eval, HSTS missing, HSTS includeSubDomains, HSTS
-  preload, Server header, X-Frame-Options, X-Content-Type-Options, DMARC
-  quarantine, and DNSSEC) and writes two reports: a per-host evidence table and a
+  preload, Server header, X-Frame-Options, X-Content-Type-Options,
+  X-XSS-Protection, Referrer-Policy, Permissions-Policy, DMARC quarantine, and
+  DNSSEC) and writes two reports: a per-host evidence table and a
   findings table with remediation text.
 - `New-SecurityFindingsRiskContext.ps1`: reads the sweep's output and adds, per
   finding, a short Flags summary and the concrete evidence for and against
@@ -28,18 +29,26 @@ down where the evidence actually supports it.
 
 ## Which script answers which finding
 
-| Scanner finding | Run | Key evidence columns |
-| --- | --- | --- |
-| HTTP does not redirect to HTTPS | sweep, or `Test-HstsAndHttpExposure.ps1` | `Port80`, `Http80Status`, `Http80Location` |
-| HSTS not enforced / includeSubDomains / preload | sweep, or `Test-HstsAndHttpExposure.ps1` | `Hsts`, `HstsMaxAge`, `Port80`, `ApexPreloadStatus` |
-| Hostname does not match SSL certificate | sweep | `CertHostnameMatch`, `CertSubjectAlternativeNames`, `CnameTarget`, `LikelyDead` |
-| X-Frame-Options not deny or sameorigin | sweep, or `Test-ClickjackingProtection.ps1` | `XFrameOptions`, `FrameAncestors`, `HasPasswordField`, `AuthRequired` |
-| CSP missing, unsafe, or unsafe-eval | sweep | `Csp`, `CspUnsafeSources`, `FinalContentType`, `AuthRequired` |
-| X-Content-Type-Options not nosniff | sweep | `XContentTypeOptions`, `FinalContentType` |
-| Server information header exposed | sweep | `ServerHeader`, `ServerHeaderHasVersion`, `XPoweredBy` |
-| SSH or SMTP port open | sweep (from a cloud VM) | `Port22`, `Port22Banner`, `Port25`, `Port25Banner` |
-| DMARC policy is p=quarantine | sweep with `-MailHostFile` | `DmarcRecord`, `DmarcEffectivePolicy`, `DmarcInherited`, `DmarcPct` |
-| DNSSEC not enabled | sweep | `ApexDnssecEnabled` |
+| Scanner finding                                                                             | Run                                         | Key evidence columns                                                            |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------- |
+| HTTP does not redirect to HTTPS                                                             | sweep, or `Test-HstsAndHttpExposure.ps1`    | `Port80`, `Http80Status`, `Http80Location`                                      |
+| HSTS not enforced / includeSubDomains / preload                                             | sweep, or `Test-HstsAndHttpExposure.ps1`    | `Hsts`, `HstsMaxAge`, `Port80`, `ApexPreloadStatus`                             |
+| Hostname does not match SSL certificate                                                     | sweep                                       | `CertHostnameMatch`, `CertSubjectAlternativeNames`, `CnameTarget`, `LikelyDead` |
+| X-Frame-Options not deny or sameorigin                                                      | sweep, or `Test-ClickjackingProtection.ps1` | `XFrameOptions`, `FrameAncestors`, `HasPasswordField`, `AuthRequired`           |
+| CSP missing, unsafe, or unsafe-eval                                                         | sweep                                       | `Csp`, `CspUnsafeSources`, `FinalContentType`, `AuthRequired`                   |
+| X-Content-Type-Options not nosniff                                                          | sweep                                       | `XContentTypeOptions`, `FinalContentType`                                       |
+| X-XSS-Protection enabled, Referrer-Policy missing or unsafe-url, Permissions-Policy not set | sweep                                       | `XXssProtection`, `ReferrerPolicy`, `PermissionsPolicy`                         |
+| Server information header exposed                                                           | sweep                                       | `ServerHeader`, `ServerHeaderHasVersion`, `XPoweredBy`                          |
+| SSH or SMTP port open                                                                       | sweep (from a cloud VM)                     | `Port22`, `Port22Banner`, `Port25`, `Port25Banner`                              |
+| DMARC policy is p=quarantine                                                                | sweep with `-MailHostFile`                  | `DmarcRecord`, `DmarcEffectivePolicy`, `DmarcInherited`, `DmarcPct`             |
+| DNSSEC not enabled                                                                          | sweep                                       | `ApexDnssecEnabled`                                                             |
+
+The sweep does not raise the X-Frame-Options finding when the CSP's
+`frame-ancestors` is `'none'` or `'self'` (without a wildcard), because browsers
+that support `frame-ancestors` ignore X-Frame-Options. A scanner may still list
+the finding; the `FrameAncestors` column is the evidence for arguing it down.
+X-XSS-Protection is flagged only when it is present and not `0`: the right fix is
+to remove it, not to add it.
 
 ## Setup
 
@@ -161,21 +170,21 @@ finding along with the matching rows from the risk-context CSV.
 The prompt produces paste blocks for a tracking sheet with these columns. If your
 sheet differs, update the column list in your filled-in prompt to match.
 
-| Column | Contents |
-| --- | --- |
-| A | URL |
-| B | Reported Risk (the scanner's rating) |
-| C | Actual Risk ("Same as reported" when the finding is accepted) |
-| D | Remediate Now (X) |
-| E | Remediate Later (X) |
-| F | Finding |
-| G | Research |
-| H | Action |
-| I | Message Sent to Prospect |
-| J | Next Steps |
-| K | Next Step Completed |
-| L | Category |
-| M | Summary |
+| Column | Contents                                                      |
+| ------ | ------------------------------------------------------------- |
+| A      | URL                                                           |
+| B      | Reported Risk (the scanner's rating)                          |
+| C      | Actual Risk ("Same as reported" when the finding is accepted) |
+| D      | Remediate Now (X)                                             |
+| E      | Remediate Later (X)                                           |
+| F      | Finding                                                       |
+| G      | Research                                                      |
+| H      | Action                                                        |
+| I      | Message Sent to Prospect                                      |
+| J      | Next Steps                                                    |
+| K      | Next Step Completed                                           |
+| L      | Category                                                      |
+| M      | Summary                                                       |
 
 ## Fixing what the review finds
 

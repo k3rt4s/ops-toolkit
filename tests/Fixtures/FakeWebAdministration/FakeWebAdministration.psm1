@@ -12,9 +12,9 @@ Instructions:
 - Set OPSTOOLKIT_TEST_IIS_REMOVESERVERHEADER to a JSON object keyed by site name
   holding the requestFiltering removeServerHeader value (true or false). A site
   that is absent reads false. The value "unsupported", for one site or as the whole
-  variable, makes the read return $null the way an IIS older than 10 version 1607 does.
+  variable, makes the read return $null the way an IIS without the attribute does.
 - Set OPSTOOLKIT_TEST_IIS_HSTS to a JSON object keyed by site name holding the native
-  hsts attributes (enabled, max-age, includeSubDomains). Absent attributes read
+  hsts attributes (enabled, max-age, includeSubDomains, redirectHttpToHttps). Absent attributes read
   false or 0. "unsupported" works as for removeServerHeader (IIS before 10 version 1709).
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record attempted configuration writes. Writes
   at MACHINE/WEBROOT/APPHOST record the site named in the filter's [@name='...'].

@@ -394,7 +394,7 @@ Describe 'Set-IisRecommendedSecurityHeaders preset contents' {
 
     It 'writes the documented value for each header added to Intranet' {
         $expected = @{
-            'Content-Security-Policy'           = "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+            'Content-Security-Policy'           = "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
             'Referrer-Policy'                   = 'strict-origin-when-cross-origin'
             'Permissions-Policy'                = 'geolocation=(), microphone=(), camera=()'
             'Cross-Origin-Opener-Policy'        = 'same-origin'
@@ -467,6 +467,77 @@ Describe 'Set-IisRecommendedSecurityHeaders -CspReportOnly' {
         @($names | Where-Object { $_ -eq 'Content-Security-Policy-Report-Only' }).Count | Should -Be 2
         @($names | Where-Object { $_ -eq 'Content-Security-Policy' }).Count | Should -Be 0
         $script:cspExec.Run.Summary.CspReportOnly | Should -BeTrue
+    }
+}
+
+Describe 'Set-IisRecommendedSecurityHeaders -CspReportUri' {
+    BeforeAll {
+        $script:reportUri = 'https://reports.example.com/csp'
+        $script:ruWhatIf = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'ru-whatif' -Argument @{ CspReportUri = $script:reportUri; WhatIf = $true }
+        $script:ruExec = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'ru-exec' -Argument @{ CspReportUri = $script:reportUri; Confirm = $false }
+        $script:ruReportOnly = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'ru-ro' -Argument @{ CspReportUri = $script:reportUri; CspReportOnly = $true; Confirm = $false }
+
+        function Get-WrittenValue {
+            param($Case, [string]$Header)
+            @($Case.Mutations | Where-Object { (Get-WrittenHeaderName $_) -eq $Header } |
+                    ForEach-Object { $_.Value -replace "^name=$([regex]::Escape($Header)),value=", '' } | Sort-Object -Unique)
+        }
+    }
+
+    It 'runs to completion in every mode' {
+        foreach ($case in $script:ruWhatIf, $script:ruExec, $script:ruReportOnly) {
+            $case.Run.ExitCode | Should -Be 0 -Because "the run failed: $($case.Run.Output)"
+        }
+        $script:ruExec.Run.Summary.CspReportUri | Should -Be $script:reportUri
+    }
+
+    It 'writes no configuration under -WhatIf' {
+        $script:ruWhatIf.Mutations.Count | Should -Be 0 -Because "-WhatIf wrote: $($script:ruWhatIf.Mutations | ConvertTo-Json -Compress)"
+    }
+
+    It 'adds Reporting-Endpoints and both reporting directives to the enforced policy' {
+        # Ten preset headers per site, two already correct on Default Web Site, plus the Server header on each.
+        $script:ruExec.Mutations.Count | Should -Be 20
+        Get-WrittenValue -Case $script:ruExec -Header 'Reporting-Endpoints' |
+            Should -Be @('csp-endpoint="https://reports.example.com/csp"')
+        Get-WrittenValue -Case $script:ruExec -Header 'Content-Security-Policy' |
+            Should -Be @("default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; report-uri https://reports.example.com/csp; report-to csp-endpoint")
+    }
+
+    It 'puts the reporting directives on the Report-Only policy under -CspReportOnly' {
+        Get-WrittenValue -Case $script:ruReportOnly -Header 'Content-Security-Policy-Report-Only' |
+            Should -Match 'report-to csp-endpoint$'
+        @(Get-WrittenValue -Case $script:ruReportOnly -Header 'Content-Security-Policy').Count | Should -Be 0
+        @(Get-WrittenValue -Case $script:ruReportOnly -Header 'Reporting-Endpoints').Count | Should -Be 1
+    }
+
+    It 'rejects <Uri> with no reads or writes' -ForEach @(
+        @{ Uri = 'http://reports.example.com/csp' }
+        @{ Uri = '/csp-reports' }
+        @{ Uri = 'https://reports.example.com/a;script-src *' }
+        @{ Uri = 'https://reports.example.com/a,b' }
+    ) {
+        $case = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name ('ru-bad-' + [guid]::NewGuid().ToString('N')) `
+            -Argument @{ CspReportUri = $Uri; Confirm = $false }
+
+        $case.Run.ExitCode | Should -Not -Be 0
+        $case.Mutations.Count | Should -Be 0 -Because "writes happened: $($case.Mutations | ConvertTo-Json -Compress)"
+        $case.Run.Output | Should -Match 'must be an absolute https'
+    }
+}
+
+Describe 'Set-IisRecommendedSecurityHeaders -CoopAllowPopups' {
+    BeforeAll {
+        $script:coopExec = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'coop-exec' -Argument @{ CoopAllowPopups = $true; Confirm = $false }
+    }
+
+    It 'sends same-origin-allow-popups on both sites and never same-origin' {
+        $script:coopExec.Run.ExitCode | Should -Be 0 -Because "the run failed: $($script:coopExec.Run.Output)"
+        $coop = @($script:coopExec.Mutations | Where-Object { (Get-WrittenHeaderName $_) -eq 'Cross-Origin-Opener-Policy' })
+        $coop.Count | Should -Be 2
+        @($coop | ForEach-Object { $_.Value } | Sort-Object -Unique) |
+            Should -Be @('name=Cross-Origin-Opener-Policy,value=same-origin-allow-popups')
+        $script:coopExec.Run.Summary.CoopAllowPopups | Should -BeTrue
     }
 }
 
@@ -570,7 +641,7 @@ Describe 'Set-IisRecommendedSecurityHeaders Server header removal' {
             @($rows | ForEach-Object { $_.Action } | Sort-Object -Unique) | Should -Be @('NotRun')
             @($rows | ForEach-Object { $_.Changed } | Sort-Object -Unique) | Should -Be @($false)
             @($rows | ForEach-Object { $_.Reason } | Sort-Object -Unique) |
-                Should -Be @('removeServerHeader not supported (needs IIS 10 version 1607 or later)')
+                Should -Be @('removeServerHeader not supported (needs Windows Server or Windows 10 version 1709 or later)')
         }
 
         # The header work still happens: 16 header writes, none counted for the Server header.
@@ -615,6 +686,8 @@ Describe 'Set-IisRecommendedSecurityHeaders -UseNativeHsts' {
         $script:natUnsupportedAll = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'nat-unsup-all' -Headers $script:headersWithSts -Hsts 'unsupported' -Argument ($script:natArgs + @{ Confirm = $false })
         $script:natUnsupportedOne = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'nat-unsup-one' -Headers $script:headersWithSts -Hsts $script:hstsOneUnsupported -Argument ($script:natArgs + @{ Confirm = $false })
         $script:natUnsupportedOneWhatIf = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'nat-unsup-one-whatif' -Headers $script:headersWithSts -Hsts $script:hstsOneUnsupported -Argument ($script:natArgs + @{ WhatIf = $true })
+        $script:natRedirect = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'nat-redirect' -Headers $script:headersWithSts -Hsts $script:hstsMixed -Argument ($script:natArgs + @{ RedirectHttpToHttps = $true; Confirm = $false })
+        $script:natRedirectWhatIf = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name 'nat-redirect-whatif' -Headers $script:headersWithSts -Hsts $script:hstsMixed -Argument ($script:natArgs + @{ RedirectHttpToHttps = $true; WhatIf = $true })
 
         function Get-HstsWrite {
             param($Case, [string]$Site)
@@ -676,6 +749,18 @@ Describe 'Set-IisRecommendedSecurityHeaders -UseNativeHsts' {
         @($script:natExec.Mutations | Where-Object { $_.Name -eq 'redirectHttpToHttps' }).Count | Should -Be 0
     }
 
+    It 'turns on redirectHttpToHttps once per site under -RedirectHttpToHttps, and previews it under -WhatIf' {
+        $script:natRedirect.Run.ExitCode | Should -Be 0 -Because "the run failed: $($script:natRedirect.Run.Output)"
+        $writes = @($script:natRedirect.Mutations | Where-Object { $_.Name -eq 'redirectHttpToHttps' })
+        $writes.Count | Should -Be 2
+        @($writes | ForEach-Object { $_.Site } | Sort-Object) | Should -Be @('Default Web Site', 'Intranet')
+        @($writes | ForEach-Object { $_.Value } | Sort-Object -Unique) | Should -Be @('True')
+        $script:natRedirect.Run.Summary.RedirectHttpToHttps | Should -BeTrue
+
+        $script:natRedirectWhatIf.Run.ExitCode | Should -Be 0
+        $script:natRedirectWhatIf.Mutations.Count | Should -Be 0
+    }
+
     It 'throws before any write when a site does not support native HSTS' {
         # Default Web Site would be written first, so zero writes proves the preflight ran first.
         foreach ($case in $script:natUnsupportedAll, $script:natUnsupportedOne, $script:natUnsupportedOneWhatIf) {
@@ -700,10 +785,13 @@ Describe 'Set-IisRecommendedSecurityHeaders conflicting parameters' {
         @{ Name = '-Headers with STS and -HstsMaxAgeSeconds'; Argument = @{ HstsMaxAgeSeconds = '600' }; Headers = 'customSts'; Fragment = 'already contains' }
         @{ Name = '-HstsIncludeSubDomains with -Headers lacking STS'; Argument = @{ HstsIncludeSubDomains = $true }; Headers = 'customOnly'; Fragment = 'do nothing here' }
         @{ Name = '-HstsMaxAgeSeconds with -Headers lacking STS'; Argument = @{ HstsMaxAgeSeconds = '600' }; Headers = 'customOnly'; Fragment = 'do nothing here' }
+        @{ Name = '-Headers with -CspReportUri'; Argument = @{ CspReportUri = 'https://reports.example.com/csp' }; Headers = 'customOnly'; Fragment = 'replaces the preset' }
+        @{ Name = '-Headers with -CoopAllowPopups'; Argument = @{ CoopAllowPopups = $true }; Headers = 'customOnly'; Fragment = 'replaces the preset' }
+        @{ Name = '-RedirectHttpToHttps without -UseNativeHsts'; Argument = @{ RedirectHttpToHttps = $true }; Headers = ''; Fragment = 'needs -UseNativeHsts' }
     ) {
+        $raw = if ($Headers) { @{ Headers = (Get-Variable -Name $Headers -Scope Script -ValueOnly) } } else { @{} }
         $case = Invoke-IisCase -Script 'Set-IisRecommendedSecurityHeaders' -Name ('conflict-' + [guid]::NewGuid().ToString('N')) `
-            -Argument ($Argument + @{ Confirm = $false }) `
-            -RawArgument @{ Headers = (Get-Variable -Name $Headers -Scope Script -ValueOnly) }
+            -Argument ($Argument + @{ Confirm = $false }) -RawArgument $raw
 
         $case.Run.ExitCode | Should -Not -Be 0
         $case.Mutations.Count | Should -Be 0 -Because "writes happened: $($case.Mutations | ConvertTo-Json -Compress)"

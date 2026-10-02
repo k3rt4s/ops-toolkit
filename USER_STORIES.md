@@ -590,6 +590,33 @@ Acceptance criteria:
   or `-BreakGlassUpn` values, When the collector is launched, Then every value
   reaches it as a list and none binds to another parameter.
 
+### Story: Contain a compromised account without losing the evidence
+
+As an incident responder, I want one command that preserves a user's inbox rules and
+forwarding, revokes their sessions, and disables the account, so that I stop the
+attacker without destroying what shows what they did.
+
+Status: shipped 2026-10-02 (`scripts/entra/Invoke-EntraUserContainment.ps1`)
+
+Acceptance criteria:
+
+- Given a list of users, When the script runs with or without `-WhatIf`, Then it
+  exports inbox rules and mailbox forwarding through Exchange Online before any change,
+  and under `-WhatIf` attempts no write while still writing the plan.
+- Given no Exchange Online session, or an Exchange cmdlet that comes from another
+  module, When the script runs, Then the export is reported NotAssessed with the
+  `Connect-ExchangeOnline` and `-ExportOnly` instruction, and containment still runs.
+- Given a user who is missing, unreadable, already disabled, or synced from
+  on-premises, When the script runs, Then it attempts nothing for a missing or
+  unreadable user, does not disable an already disabled account, and reports a synced
+  user as needing Active Directory while still revoking sessions.
+- Given `-ResetPassword`, When a cloud user is reset, Then the generated password is
+  shown once on the console and appears in no file, object, log or error; without the
+  switch no password write is attempted.
+- Given `-Rollback`, When it runs, Then it re-enables only the accounts that run
+  disabled, never one that was already disabled, and never touches passwords or
+  revoked sessions.
+
 ## Epic: Repository quality
 
 ### Story: Run the validation ritual as one command

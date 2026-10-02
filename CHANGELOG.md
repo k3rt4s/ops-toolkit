@@ -7,6 +7,24 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-10-02
 
+### Added: Invoke-EntraUserContainment.ps1
+
+- `scripts/entra/Invoke-EntraUserContainment.ps1` contains compromised Entra ID users.
+  It exports inbox rules and forwarding through Exchange Online first (also under
+  `-WhatIf`), then revokes sign-in sessions and disables the account, recording the
+  prior state. An account that is already disabled is not touched; a synced user gets
+  `RequiresOnPremises` with a pointer to Active Directory while sessions are still
+  revoked. A missing user is `NotFound`, an unreadable one `NotAssessed`, and neither
+  is written to.
+- `-ResetPassword` is opt-in: the password is generated with RandomNumberGenerator,
+  shown once on the console and kept out of every file, object and error message.
+  `-ExportOnly` makes no write; `-Rollback` re-enables only accounts the recorded run
+  disabled. Needs `User.Read.All`, `User.RevokeSessions.All` and
+  `User.EnableDisableAccount.All`, plus `User-PasswordProfile.ReadWrite.All` only with
+  `-ResetPassword`. Unverified against a live tenant.
+- `tests/Integration.StateChanging.Entra.Tests.ps1` runs the WhatIf and execute pair
+  against a stubbed Graph and a staged fake Exchange Online module.
+
 ### Changed: backlog scored
 
 - Scored the backlog with `ai_development/docs/board-scoring.md`. `FUTURE_FEATURES.md`'s

@@ -7,6 +7,21 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-10-02
 
+### Changed: Python requirements pinned, Dependabot added with a 7-day cooldown
+
+- The two `requirements.txt` files now pin exact versions (ai_development secure-coding
+  SC8): `scripts/email/thunderbird` takes `pandas==3.0.6`, `pyarrow==25.0.1`,
+  `tqdm==4.70.1`; `scripts/it-operations/utilities` takes `blake3==1.0.9`,
+  `tqdm==4.70.1`. Each is the newest release at least seven days old on 2026-10-02, so
+  blake3 stays on 1.0.9 (1.0.10 shipped 2026-09-29). The 2026-10-01 dependency audit
+  listed these five lines as unpinned and had no vulnerability findings for this repo.
+- `export_emails_to_parquet.py` and `compare_folders.py` were smoke-run on synthetic
+  input in a fresh `venvs\ops-toolkit` built from the pins. pandas 3 writes the text
+  columns as its string dtype; the Parquet files read back with the same rows.
+- `.github/dependabot.yml` runs weekly pip version updates for both folders, grouped
+  into one pull request, with `cooldown: default-days: 7`. There is no github-actions
+  entry because the repository has no workflows.
+
 ### Changed: IIS header preset gaps closed, posture sweep checks three more headers
 
 - The preset Content-Security-Policy adds `form-action 'self'`; `form-action` does not

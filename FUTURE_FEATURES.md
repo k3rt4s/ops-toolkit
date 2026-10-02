@@ -20,15 +20,13 @@ Azure incident-readiness talk" below.
 `pack-fanout-bind` was added on 2026-09-25 from the `cloud-ir-ready` landing review, on the
 developer's decision to backlog it rather than fix it in that cycle. It shipped on
 2026-09-29 and has left this index; see the Shipped 2026-09-29 heading below.
-`entra-contain` was the only scored item here until 2026-10-02, when the what's-left
-report indexed and scored the five open follow-ups below it: three from the
+`entra-contain` moved to the work board on 2026-10-02 on the developer's approval (see
+"Moved to the work board"). The same day the what's-left report indexed and scored the
+five open follow-ups below: three from the
 `cloud-ir-ready` landing review (see "Ingested 2026-09-24: Azure incident-readiness
 talk") and two from the `pack-fanout-bind` landing review (see "Shipped 2026-09-29:
 evidence-pack estate fan-out"). The declined empty-split wording item is a record, not
 work, and is not indexed.
-
-- **entra-contain** `-WhatIf`-guarded Entra identity containment script. `score: kind=feature gain=1/3/8 p=0.4 freq=2 horizon=3 hours=1.5/3/6 risk=0.1x4 rev=two-way conf=opinion flags=security id=entra-contain` `return: likelihood two suspected-compromise responses a year across client estates is the developer's guess, no count; impact each saves one to eight hours of ticket-gated session revocation and inbox-rule export, the talk's most common post-incident lesson; evidence opinion only, the Johansen digest at C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`
-  - `worker: sonnet 3/6/10 h`
 
 - **ir-consent-rsc** Grade user consent from `ManagePermissionGrantsForSelf.*` entries only, so Teams resource-specific consent entries stop turning Met into Partial. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/3 p=0.6 freq=2 hours=0.5/1/2 risk=0.05x1 rev=two-way conf=assessed id=ir-consent-rsc` `return: likelihood about 2 live runs a year, estimated, the collector has never run against a tenant; p 0.6 that the tenant carries a ManagePermissionGrantsForOwnedResource entry, estimated from the review's "commonly carries", nothing counted; impact each false Partial costs the operator about an hour checking consent settings that are already right, and puts a wrong finding in front of a client; evidence code path Get-UserConsentRecord, scripts\entra\Export-CloudIncidentReadiness.ps1 lines 691-708 on 2026-10-02, any assigned policy other than the two default ones grades Partial`
   - `worker: sonnet 0.5/1/2 h`
@@ -83,6 +81,10 @@ Pending. This heading is a record, not a live section; nothing here is scored tw
   section on 2026-09-24 as lane `cloud-ir-ready`, with its score block, on the developer's approval.
   Shipped 2026-09-25 as `scripts\entra\Export-CloudIncidentReadiness.ps1`, evidence-pack
   control IR-02.
+
+- entra-contain, `-WhatIf`-guarded Entra identity containment script. See "Ingested
+  2026-09-24: Azure incident-readiness talk". Moved to the work board In Progress section
+  on 2026-10-02, with its score block, on the developer's approval.
 
 ## Ready to pick up
 

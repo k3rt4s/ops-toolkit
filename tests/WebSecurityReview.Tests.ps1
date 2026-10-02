@@ -20,6 +20,7 @@ BeforeAll {
             'Hsts', 'HstsMaxAge', 'HstsIncludeSubDomains', 'HstsPreloadDirective', 'ApexPreloadStatus'
             'Csp', 'CspUnsafeInline', 'CspUnsafeEval', 'CspUnsafeSources', 'FrameAncestors'
             'XFrameOptions', 'XContentTypeOptions', 'ServerHeader', 'ServerHeaderHasVersion', 'XPoweredBy'
+            'XXssProtection', 'ReferrerPolicy', 'PermissionsPolicy'
             'WwwAuthenticate', 'AuthRequired', 'FinalUrl', 'FinalStatus', 'FinalContentType', 'FinalOnSameHost'
             'HasForm', 'HasPasswordField', 'LoginPathFound', 'LikelyDead', 'Port22', 'Port22Banner', 'Port25', 'Port25Banner'
             'IsMailHost', 'DmarcQueriedDomain', 'DmarcInherited', 'DmarcRecord', 'DmarcPolicy', 'DmarcSubdomainPolicy'
@@ -72,6 +73,83 @@ Describe 'Get-OpsWebApexDomain' {
     }
 }
 
+Describe 'Get-OpsWebHeaderHygieneFinding' {
+    BeforeAll {
+        # A response with every header right: no findings.
+        $script:Clean = @{ XFrameOptions = 'SAMEORIGIN'; FrameAncestors = ''; XXssProtection = ''; ReferrerPolicy = 'strict-origin-when-cross-origin'; PermissionsPolicy = 'camera=()' }
+    }
+
+    It 'returns nothing for a response with every header set well' {
+        @(Get-OpsWebHeaderHygieneFinding @script:Clean).Count | Should -Be 0
+    }
+
+    It 'flags X-Frame-Options <Xfo> with frame-ancestors <Fa>: <Expected>' -TestCases @(
+        @{ Xfo = ''; Fa = ''; Expected = $true }
+        @{ Xfo = 'ALLOW-FROM https://a.example'; Fa = ''; Expected = $true }
+        @{ Xfo = 'deny'; Fa = ''; Expected = $false }
+        @{ Xfo = ''; Fa = "'none'"; Expected = $false }
+        @{ Xfo = ''; Fa = "'self' https://partner.example"; Expected = $false }
+        @{ Xfo = ''; Fa = "'self' *"; Expected = $true }
+        @{ Xfo = ''; Fa = 'https:'; Expected = $true }
+    ) {
+        param($Xfo, $Fa, $Expected)
+        $headers = $script:Clean.Clone(); $headers.XFrameOptions = $Xfo; $headers.FrameAncestors = $Fa
+        (@(Get-OpsWebHeaderHygieneFinding @headers) -contains 'XfoNotDenyOrSameorigin') | Should -Be $Expected
+    }
+
+    It 'flags X-XSS-Protection <Value>: <Expected>' -TestCases @(
+        @{ Value = ''; Expected = $false }
+        @{ Value = '0'; Expected = $false }
+        @{ Value = '1'; Expected = $true }
+        @{ Value = '1; mode=block'; Expected = $true }
+    ) {
+        param($Value, $Expected)
+        $headers = $script:Clean.Clone(); $headers.XXssProtection = $Value
+        (@(Get-OpsWebHeaderHygieneFinding @headers) -contains 'XXssProtectionEnabled') | Should -Be $Expected
+    }
+
+    It 'flags Referrer-Policy <Value>: <Expected>' -TestCases @(
+        @{ Value = ''; Expected = $true }
+        @{ Value = 'unsafe-url'; Expected = $true }
+        @{ Value = 'no-referrer, unsafe-url'; Expected = $true }
+        @{ Value = 'unsafe-url, strict-origin-when-cross-origin'; Expected = $false }
+        @{ Value = 'no-referrer'; Expected = $false }
+    ) {
+        param($Value, $Expected)
+        $headers = $script:Clean.Clone(); $headers.ReferrerPolicy = $Value
+        (@(Get-OpsWebHeaderHygieneFinding @headers) -contains 'ReferrerPolicyWeak') | Should -Be $Expected
+    }
+
+    It 'flags a missing Permissions-Policy' {
+        $headers = $script:Clean.Clone(); $headers.PermissionsPolicy = ''
+        (@(Get-OpsWebHeaderHygieneFinding @headers) -join ',') | Should -Be 'PermissionsPolicyMissing'
+    }
+}
+
+Describe 'Test-ExternalSecurityPosture.ps1 catalog' {
+    BeforeAll {
+        # The sweep runs on load, so read its catalog and columns from the parse tree.
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $script:WebDir 'Test-ExternalSecurityPosture.ps1'), [ref]$null, [ref]$null)
+        $assignments = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)
+        $catalog = $assignments | Where-Object { $_.Left.Extent.Text -eq '$script:FindingCatalog' } | Select-Object -First 1
+        $script:CatalogKeys = @($catalog.Right.Expression.KeyValuePairs | ForEach-Object { $_.Item1.Value })
+        $columns = $assignments | Where-Object { $_.Left.Extent.Text -eq '$script:EvidenceColumns' } | Select-Object -First 1
+        $script:ColumnText = $columns.Right.Extent.Text
+    }
+
+    It 'has a catalog entry for every key the header helper can return' {
+        foreach ($key in 'XfoNotDenyOrSameorigin', 'XXssProtectionEnabled', 'ReferrerPolicyWeak', 'PermissionsPolicyMissing') {
+            $script:CatalogKeys | Should -Contain $key
+        }
+    }
+
+    It 'records the raw header values in the evidence columns' {
+        foreach ($column in 'XXssProtection', 'ReferrerPolicy', 'PermissionsPolicy') {
+            $script:ColumnText | Should -Match "'$column'"
+        }
+    }
+}
+
 Describe 'New-SecurityFindingsRiskContext.ps1' {
     BeforeAll {
         $evidence = @(
@@ -92,6 +170,7 @@ Describe 'New-SecurityFindingsRiskContext.ps1' {
             [pscustomobject]@{ Host = 'login.example.com'; Severity = 'Medium'; Finding = 'HTTP Strict Transport Security (HSTS) not enforced'; Category = 'SSL/TLS'; Evidence = 'x'; Remediation = 'x' }
             [pscustomobject]@{ Host = 'videos.example.com'; Severity = 'High'; Finding = 'Hostname does not match SSL certificate'; Category = 'SSL/TLS'; Evidence = 'x'; Remediation = 'x' }
             [pscustomobject]@{ Host = '192.0.2.10'; Severity = 'Medium'; Finding = 'Server information header exposed'; Category = 'Information Disclosure'; Evidence = 'x'; Remediation = 'x' }
+            [pscustomobject]@{ Host = 'login.example.com'; Severity = 'Low'; Finding = 'Referrer-Policy is missing or unsafe-url'; Category = 'HTTP Security Headers'; Evidence = 'x'; Remediation = 'x' }
         )
         $findingsPath = Join-Path $TestDrive 'findings.csv'
         $evidencePath = Join-Path $TestDrive 'evidence.csv'
@@ -110,7 +189,7 @@ Describe 'New-SecurityFindingsRiskContext.ps1' {
     }
 
     It 'produces one row per finding without failing on a DNS-failed first row' {
-        $script:Result.Count | Should -Be 5
+        $script:Result.Count | Should -Be 6
     }
 
     It 'marks a host that does not resolve as likely stale' {
@@ -135,6 +214,11 @@ Describe 'New-SecurityFindingsRiskContext.ps1' {
         $row = $script:Result | Where-Object { $_.Host -eq 'videos.example.com' }
         $row.Flags | Should -Match 'Dead'
         $row.EvidenceAgainstLowerRisk | Should -Match 'subdomain takeover'
+    }
+
+    It 'credits the browser default for a missing Referrer-Policy' {
+        $row = $script:Result | Where-Object { $_.Host -eq 'login.example.com' -and $_.Finding -like 'Referrer-Policy*' }
+        $row.EvidenceForLowerRisk | Should -Match 'strict-origin-when-cross-origin'
     }
 
     It 'recognizes the default HTTP.sys server header' {

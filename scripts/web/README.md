@@ -184,9 +184,11 @@ For IIS hosts, the repository's `scripts\iis\` folder has
 Preview with `-WhatIf` first, and check the defaults before applying them:
 `Set-IisRecommendedSecurityHeaders.ps1` sets a strict
 `Content-Security-Policy: default-src 'self'` (which can break pages that load
-scripts from other origins), HSTS with `includeSubDomains` (unsafe until every
-subdomain serves HTTPS), and `Cache-Control: no-cache, no-store`. Pass `-Headers`
-with only the headers a finding calls for, for example:
+scripts from other origins; `-CspReportOnly` previews it without blocking) and
+removes the `Server` and `X-Powered-By` headers. HSTS `includeSubDomains` and
+`Cache-Control: no-store` are opt-in switches. `docs\iis\security-headers.md`
+lists every header it sends and what each can break. Pass `-Headers` with only the
+headers a finding calls for, for example:
 
 ```powershell
 pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "Default Web Site" `

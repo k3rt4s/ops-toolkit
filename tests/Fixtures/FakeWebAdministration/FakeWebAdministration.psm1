@@ -9,7 +9,15 @@ Instructions:
 - Set OPSTOOLKIT_TEST_IIS_SITES to a semicolon-separated list of site names before
   running a script under test. Set OPSTOOLKIT_TEST_IIS_HEADERS to a JSON object
   keyed by site name holding the headers that site already has.
-- Set OPSTOOLKIT_TEST_MUTATION_LOG to record attempted configuration writes.
+- Set OPSTOOLKIT_TEST_IIS_REMOVESERVERHEADER to a JSON object keyed by site name
+  holding the requestFiltering removeServerHeader value (true or false). A site
+  that is absent reads false. The value "unsupported", for one site or as the whole
+  variable, makes the read return $null the way an IIS older than 10 version 1607 does.
+- Set OPSTOOLKIT_TEST_IIS_HSTS to a JSON object keyed by site name holding the native
+  hsts attributes (enabled, max-age, includeSubDomains). Absent attributes read
+  false or 0. "unsupported" works as for removeServerHeader (IIS before 10 version 1709).
+- Set OPSTOOLKIT_TEST_MUTATION_LOG to record attempted configuration writes. Writes
+  at MACHINE/WEBROOT/APPHOST record the site named in the filter's [@name='...'].
 - Add a cmdlet here only when a script under test actually calls it, and make it
   behave the way the real one does in the cases that matter.
 
@@ -56,6 +64,12 @@ function Write-FakeIisMutation {
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
 
+    # APPHOST-level writes carry no site in the path, only in the filter.
+    $siteName = ($PSPath -replace '^IIS:\\Sites\\', '')
+    if ($PSPath -like 'MACHINE/WEBROOT/APPHOST*' -and $Filter -match "\[@name='([^']*)'\]") {
+        $siteName = $Matches[1]
+    }
+
     $rendered = if ($Value -is [System.Collections.IDictionary]) {
         (($Value.Keys | Sort-Object | ForEach-Object { "$_=$($Value[$_])" }) -join ',')
     } else {
@@ -64,7 +78,7 @@ function Write-FakeIisMutation {
 
     Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
             Command = $Command
-            Site    = ($PSPath -replace '^IIS:\\Sites\\', '')
+            Site    = $siteName
             Filter  = $Filter
             Name    = $Name
             Value   = $rendered
@@ -90,6 +104,31 @@ function Get-FakeIisSiteHeader {
         })
 }
 
+function Get-FakeIisSiteSetting {
+    <#
+    .SYNOPSIS
+    Read one site's entry from a JSON fixture variable, or flag it unsupported.
+
+    .DESCRIPTION
+    Returns a result object with Supported and Value. Supported is false when the whole
+    variable, or the site's entry, is the string "unsupported". Value is $null when the
+    variable is unset or has no entry for the site.
+    #>
+    param([string]$EnvName, [string]$Site)
+
+    $raw = [Environment]::GetEnvironmentVariable($EnvName)
+    if ($raw -eq 'unsupported') { return [pscustomobject]@{ Supported = $false; Value = $null } }
+    if (-not $raw) { return [pscustomobject]@{ Supported = $true; Value = $null } }
+
+    $match = ($raw | ConvertFrom-Json).PSObject.Properties | Where-Object { $_.Name -eq $Site }
+    if (-not $match) { return [pscustomobject]@{ Supported = $true; Value = $null } }
+    if ($match.Value -is [string] -and $match.Value -eq 'unsupported') {
+        return [pscustomobject]@{ Supported = $false; Value = $null }
+    }
+
+    [pscustomobject]@{ Supported = $true; Value = $match.Value }
+}
+
 function Get-WebConfigurationProperty {
     [CmdletBinding()]
     param(
@@ -103,7 +142,32 @@ function Get-WebConfigurationProperty {
             })
     }
 
-    Get-FakeIisSiteHeader -Site ([string]$PSPath -replace '^IIS:\\Sites\\', '')
+    if ([string]$Filter -match 'requestFiltering') {
+        # The real cmdlet returns a ConfigurationAttribute whose Value holds the
+        # setting, and nothing at all for an attribute the installed IIS lacks.
+        $setting = Get-FakeIisSiteSetting -EnvName 'OPSTOOLKIT_TEST_IIS_REMOVESERVERHEADER' -Site ([string]$PSPath -replace '^IIS:\\Sites\\', '')
+        if (-not $setting.Supported) { return $null }
+        return [pscustomobject]@{ Value = [bool]$setting.Value }
+    }
+
+    if ([string]$Filter -match '/hsts$') {
+        if ([string]$Filter -notmatch "\[@name='([^']*)'\]") { return $null }
+        $setting = Get-FakeIisSiteSetting -EnvName 'OPSTOOLKIT_TEST_IIS_HSTS' -Site $Matches[1]
+        if (-not $setting.Supported) { return $null }
+
+        $attribute = [string]$Name
+        $current = if ($setting.Value) { $setting.Value.PSObject.Properties | Where-Object { $_.Name -eq $attribute } } else { $null }
+        $default = if ($attribute -eq 'max-age') { 0 } else { $false }
+        return [pscustomobject]@{ Value = if ($current) { $current.Value } else { $default } }
+    }
+
+    # Only the header collection is answered with headers. Any other filter reads
+    # nothing, so a new read cannot be mistaken for the header list.
+    if ([string]$Filter -match 'customHeaders') {
+        return Get-FakeIisSiteHeader -Site ([string]$PSPath -replace '^IIS:\\Sites\\', '')
+    }
+
+    $null
 }
 
 function Set-WebConfigurationProperty {

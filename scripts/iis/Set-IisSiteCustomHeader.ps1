@@ -33,7 +33,7 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [ValidatePattern("^[A-Za-z0-9!#$%&'*+\-.^_``|~]+$")]
+    [ValidatePattern("^[A-Za-z0-9!#$%&*+\-.^_``|~]+$")]
     [string]$HeaderName,
 
     [Parameter()]
@@ -62,6 +62,12 @@ Options:
 if (-not $SiteName -or -not $HeaderName -or -not $HeaderValue) {
     Show-Usage
     exit 2
+}
+
+# Horizontal tab is allowed in a header value; every other control character
+# (CR and LF in particular) is rejected.
+if ($HeaderValue -match '[\x00-\x08\x0A-\x1F\x7F]') {
+    throw "Header '$HeaderName' has a value containing control characters, which are not allowed."
 }
 
 Import-Module WebAdministration -ErrorAction Stop

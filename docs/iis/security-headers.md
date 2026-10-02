@@ -1,42 +1,64 @@
 # Security Headers Reference
 
-## Content-Security-Policy
+HTTP response security headers that `scripts\iis\Set-IisRecommendedSecurityHeaders.ps1` applies, why each one is set, what each can break, and which older headers to stop sending.
 
-Is an effective measure to protect your site from XSS attacks. By whitelisting sources of approved content, you can prevent the browser from loading malicious assets. frame-ancestors 
-Example: frame-ancestors https://DOMAIN.com https://*.DOMAIN.com http://DOMAIN.com http://*.DOMAIN.com (directive specifies valid parents that may embed a page using <frame>, <iframe>, <object>, <embed>, or <applet>.)
- 
-X-Powered-By (Only for IIS)
-A common non-standard HTTP response header
-Example: Apache 2.0.59 Commodore C64 (Random)
- 
+Reviewed 2026-10-01 against the OWASP HTTP Headers Cheat Sheet, the OWASP Secure Headers Project, MDN, and Microsoft's IIS configuration reference (sources at the end). Re-check them when you change the preset.
 
-X-Content-Type-Options
-Is a marker used by the server to indicate that the MIME types advertised
-Example: Nosniff (Search Engines to not Index)
- 
-Referrer-Policy
-Controls how much referrer information (sent via the Referer header) should be included with requests.
-Example: strict-origin (Only send the origin of the document as the referrer when the protocol security level stays the same (HTTPS→HTTPS), but don't send it to a less secure destination (HTTPS→HTTP))
- 
-X-XSS-Protection
-Response header is a feature of Internet Explorer, Chrome and Safari that stops pages from loading when they detect reflected cross-site scripting (XSS) attacks
-Example: 1; mode=block (Enables XSS filtering. Rather than sanitizing the page, the browser will prevent rendering of the page if an attack is detected)
- 
-Strict-Transport-Security
-Often abbreviated as HSTS, Lets a web site tell browsers that it should only be accessed using HTTPS, instead of using HTTP.
-Example: max-age=31536000; includeSubDomains (The time, in seconds, that the browser should remember that a site is only to be accessed using HTTPS.)
- 
-Feature-Policy
-Header provides a mechanism to allow and deny the use of browser features in its own frame, and in content within any <iframe> elements in the document.
-Example vibrate 'self' (An allowlist is a list of origins that takes one or more of the following values, separated by spaces)
- 
-Cache-Control
-Example: no-cache, no-store
- 
-Pragma
-Example: no-cache
+## What the preset sends
 
-Optional Only
+Run with `-WhatIf` first. The preset is a starting point for a typical server-rendered site; an application that embeds third-party content, is framed by another site, or serves assets to other sites needs some values changed with `-Headers`.
 
-Access-Control-Allow-Origin, CORS is blocked by default
-Response header indicates whether the response can be shared with requesting code from the given origin.
+| Header                            | Preset value                                                                     | Why                                                                                                                                                                                            | What it can break                                                                                                                                |
+| --------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Content-Security-Policy           | `default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'` | Limits where scripts, styles, frames and plugins may load from, and which sites may frame the page. The main defence in depth against XSS.                                                     | Inline scripts and styles, and anything loaded from another origin (CDNs, analytics, fonts). Use `-CspReportOnly` first.                         |
+| X-Content-Type-Options            | `nosniff`                                                                        | Stops the browser guessing a MIME type different from the declared `Content-Type`.                                                                                                             | Files served with a wrong `Content-Type`; fix the MIME map rather than drop the header.                                                          |
+| X-Frame-Options                   | `SAMEORIGIN`                                                                     | Clickjacking protection for browsers and scanners that do not read CSP `frame-ancestors`. Also still enforced while the CSP runs in Report-Only mode, where `frame-ancestors` is not enforced. | Pages another site legitimately frames. Change both this and `frame-ancestors` together.                                                         |
+| Strict-Transport-Security         | `max-age=31536000`                                                               | Tells browsers to use HTTPS only for this host for a year, so the first plain-HTTP request in a redirect is no longer interceptable.                                                           | A host that must still serve plain HTTP. Hard to undo: browsers keep the policy until `max-age` expires.                                         |
+| Referrer-Policy                   | `strict-origin-when-cross-origin`                                                | Sends only the origin, not the full URL, to other sites, and nothing on an HTTPS to HTTP downgrade.                                                                                            | Analytics that depend on full cross-site referrers.                                                                                              |
+| Permissions-Policy                | `geolocation=(), microphone=(), camera=()`                                       | Denies browser features the site does not use, so injected script cannot turn them on.                                                                                                         | A site that does use one of these features; allow it for `self` instead.                                                                         |
+| Cross-Origin-Opener-Policy        | `same-origin`                                                                    | Puts the page in its own browsing context group, cutting cross-window attacks and XS-Leaks.                                                                                                    | Sign-in flows that open a cross-origin popup and read `window.opener` (some OAuth and payment popups). Use `same-origin-allow-popups` for those. |
+| Cross-Origin-Resource-Policy      | `same-site`                                                                      | Stops other sites embedding this site's resources (images, scripts, JSON).                                                                                                                     | A host that serves assets to other sites, such as a CDN or shared static host. Use `cross-origin` there.                                         |
+| X-Permitted-Cross-Domain-Policies | `none`                                                                           | Forbids Flash and Acrobat style cross-domain policy files.                                                                                                                                     | Nothing current.                                                                                                                                 |
+
+Also changed on every run:
+
+- `X-Powered-By` is removed. It advertises the framework and version and protects nothing.
+- The `Server` header is removed by setting `removeServerHeader="true"` under `system.webServer/security/requestFiltering` (IIS 10 version 1607 or later). On an older IIS the script reports the site as `NotRun` rather than claiming success. `-KeepServerHeader` skips this. Responses that HTTP.sys sends before IIS sees the request (`Server: Microsoft-HTTPAPI/2.0`) need `DisableServerHeader` set to 2 under `HKLM\SYSTEM\CurrentControlSet\Services\HTTP\Parameters`, which this script does not touch.
+- `X-AspNet-Version` and `X-AspNetMvc-Version` come from the application, not IIS custom headers: set `enableVersionHeader="false"` on `httpRuntime` in the application's `web.config`, and `MvcHandler.DisableMvcResponseHeader = true` for MVC.
+
+## Options
+
+| Switch                   | Effect                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-CspReportOnly`         | Sends the policy as `Content-Security-Policy-Report-Only`. Browsers log what would have been blocked in the developer console and block nothing. Use it on first rollout, read the console on the main pages, then rerun without it. Report-Only does not enforce `frame-ancestors`, which is why the preset also sends X-Frame-Options.                                                                         |
+| `-HstsIncludeSubDomains` | Adds `includeSubDomains`. Only after every subdomain of the host serves HTTPS, because browsers will refuse plain HTTP on all of them. HSTS preload additionally needs `preload` and submission at hstspreload.org; this script never adds `preload`.                                                                                                                                                            |
+| `-HstsMaxAgeSeconds`     | HSTS lifetime, default 31536000 (one year). Start with something short, for example 300, on a host you are not yet sure of, and raise it once HTTPS is confirmed.                                                                                                                                                                                                                                                |
+| `-UseNativeHsts`         | Uses the site's built-in `<hsts>` setting (IIS 10 version 1709 or later) instead of a custom header. IIS then sends the header only on HTTPS responses, as RFC 6797 requires, and any existing custom `Strict-Transport-Security` header on the site is removed so it is not sent twice. The script stops before changing anything if the server does not support it. It does not turn on `redirectHttpToHttps`. |
+| `-IncludeNoStore`        | Adds `Cache-Control: no-store`. Only for sites that serve sensitive, per-user content on every page. On a whole site it stops browsers caching static files. Prefer setting it in the application on the responses that need it.                                                                                                                                                                                 |
+| `-KeepServerHeader`      | Leaves `removeServerHeader` alone.                                                                                                                                                                                                                                                                                                                                                                               |
+| `-Headers`               | Replaces the preset with exactly the headers you pass. Cannot be combined with `-CspReportOnly` or `-IncludeNoStore`, and the HSTS switches cannot be combined with a `Strict-Transport-Security` entry in it.                                                                                                                                                                                                   |
+
+## Do not send these any more
+
+| Header                                        | Why                                                                                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `X-XSS-Protection: 1; mode=block`             | The XSS filters it controlled have been removed from current browsers, and in older ones the filter itself could be abused to create XSS or leak data. OWASP recommends `X-XSS-Protection: 0` or not sending it, and relying on CSP. |
+| `Feature-Policy`                              | Replaced by `Permissions-Policy`, which uses a different syntax.                                                                                                                                                                     |
+| `Pragma: no-cache`                            | An HTTP/1.0 request directive with no defined meaning on a response. `Cache-Control` replaces it.                                                                                                                                    |
+| A fake `X-Powered-By` value                   | Spoofing the value advertises that someone is hiding something and stops nothing; remove the header instead.                                                                                                                         |
+| `Expect-CT`, `Public-Key-Pins`                | Both are obsolete and ignored by current browsers; a wrong `Public-Key-Pins` can lock users out of the site.                                                                                                                         |
+| `Access-Control-Allow-Origin: *` as a default | CORS is closed by default. Send it only from an application that is meant to be read cross-origin, with explicit origins.                                                                                                            |
+
+## Checking the result
+
+`scripts\web\Test-ExternalSecurityPosture.ps1`, `Test-HstsAndHttpExposure.ps1`, and `Test-ClickjackingProtection.ps1` read the headers from outside, the way a scanner does. A site with the default preset should still draw a finding for HSTS without `includeSubDomains` until you add it, which is intended: that flag is a decision about every subdomain, not about this one site.
+
+## Sources
+
+- OWASP HTTP Headers Cheat Sheet: <https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html>
+- OWASP Secure Headers Project: <https://owasp.org/www-project-secure-headers/>
+- MDN, X-XSS-Protection: <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-XSS-Protection>
+- MDN, Permissions-Policy: <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy>
+- MDN, X-Permitted-Cross-Domain-Policies: <https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Permitted-Cross-Domain-Policies>
+- Microsoft, IIS 10 version 1709 HSTS support: <https://learn.microsoft.com/en-us/iis/get-started/whats-new-in-iis-10-version-1709/iis-10-version-1709-hsts>
+- Microsoft, the site `<hsts>` element: <https://learn.microsoft.com/en-us/iis/configuration/system.applicationhost/sites/site/hsts>

@@ -5,6 +5,34 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-01
+
+### Changed: IIS security header preset brought up to current OWASP guidance
+
+- `scripts/iis/Set-IisRecommendedSecurityHeaders.ps1` preset now sends
+  Content-Security-Policy (`default-src 'self'; object-src 'none'; base-uri 'self';
+  frame-ancestors 'self'`), X-Content-Type-Options, X-Frame-Options `SAMEORIGIN`,
+  Referrer-Policy, Permissions-Policy, Cross-Origin-Opener-Policy `same-origin`,
+  Cross-Origin-Resource-Policy `same-site`, X-Permitted-Cross-Domain-Policies `none`,
+  and Strict-Transport-Security `max-age=31536000` without `includeSubDomains`.
+  `Pragma` and the site-wide `Cache-Control: no-cache, no-store` are gone from the default.
+- New switches: `-CspReportOnly` (sends the policy as
+  `Content-Security-Policy-Report-Only`), `-HstsIncludeSubDomains`, `-HstsMaxAgeSeconds`,
+  `-UseNativeHsts` (the site `<hsts>` element on IIS 10 1709+, which sends HSTS on HTTPS
+  only, and removes a custom STS header so it is not sent twice), `-IncludeNoStore`, and
+  `-KeepServerHeader`. Conflicting combinations with `-Headers` throw before any read.
+- Every run now removes the `Server` header through `requestFiltering`
+  `removeServerHeader` (IIS 10 1607+); an older server is reported `NotRun` per site.
+- All three header scripts reject a header name containing a single quote and a value
+  containing control characters (CR/LF header injection), before importing
+  WebAdministration.
+- `docs/iis/security-headers.md` rewritten: what each header does and can break, the
+  options, and the headers to stop sending (X-XSS-Protection, Feature-Policy, Pragma,
+  Expect-CT, Public-Key-Pins). `scripts/web/README.md` updated to match.
+- The fake WebAdministration module models `removeServerHeader` and the per-site `hsts`
+  element; the IIS integration spec grows to 62 tests, 42 of which fail against the
+  previous scripts.
+
 ## 2026-09-29
 
 ### Fixed: evidence-pack estate fan-out reached only the first target

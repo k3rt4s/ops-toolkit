@@ -20,10 +20,30 @@ Azure incident-readiness talk" below.
 `pack-fanout-bind` was added on 2026-09-25 from the `cloud-ir-ready` landing review, on the
 developer's decision to backlog it rather than fix it in that cycle. It shipped on
 2026-09-29 and has left this index; see the Shipped 2026-09-29 heading below.
-`entra-contain` is now the only scored item here.
+`entra-contain` was the only scored item here until 2026-10-02, when the what's-left
+report indexed and scored the five open follow-ups below it: three from the
+`cloud-ir-ready` landing review (see "Ingested 2026-09-24: Azure incident-readiness
+talk") and two from the `pack-fanout-bind` landing review (see "Shipped 2026-09-29:
+evidence-pack estate fan-out"). The declined empty-split wording item is a record, not
+work, and is not indexed.
 
 - **entra-contain** `-WhatIf`-guarded Entra identity containment script. `score: kind=feature gain=1/3/8 p=0.4 freq=2 horizon=3 hours=1.5/3/6 risk=0.1x4 rev=two-way conf=opinion flags=security id=entra-contain` `return: likelihood two suspected-compromise responses a year across client estates is the developer's guess, no count; impact each saves one to eight hours of ticket-gated session revocation and inbox-rule export, the talk's most common post-incident lesson; evidence opinion only, the Johansen digest at C:\Code_data\ingested_public_sources\digest_johansen_azure_incident_readiness.md`
   - `worker: sonnet 3/6/10 h`
+
+- **ir-consent-rsc** Grade user consent from `ManagePermissionGrantsForSelf.*` entries only, so Teams resource-specific consent entries stop turning Met into Partial. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/3 p=0.6 freq=2 hours=0.5/1/2 risk=0.05x1 rev=two-way conf=assessed id=ir-consent-rsc` `return: likelihood about 2 live runs a year, estimated, the collector has never run against a tenant; p 0.6 that the tenant carries a ManagePermissionGrantsForOwnedResource entry, estimated from the review's "commonly carries", nothing counted; impact each false Partial costs the operator about an hour checking consent settings that are already right, and puts a wrong finding in front of a client; evidence code path Get-UserConsentRecord, scripts\entra\Export-CloudIncidentReadiness.ps1 lines 691-708 on 2026-10-02, any assigned policy other than the two default ones grades Partial`
+  - `worker: sonnet 0.5/1/2 h`
+
+- **ir-responder-pim** Separate activated PIM assignments from permanent ones in the responder-role check, and count only `directoryScopeId` `/` eligibility toward tenant coverage. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/2 p=0.3 freq=2 hours=0.5/1.5/3 risk=0.05x2 rev=two-way conf=assessed id=ir-responder-pim` `return: likelihood about 2 live runs a year, estimated; p 0.3 that a responder holds an activated window or an administrative-unit eligibility at run time, opinion; impact a Met role reads Partial with a "standing assignment" finding, about an hour of the operator's time to disprove; evidence code path scripts\entra\Export-CloudIncidentReadiness.ps1 lines 1180-1206 on 2026-10-02, directoryRoles members counted as active and roleEligibilityScheduleInstances filtered on roleDefinitionId only`
+  - `worker: sonnet 1/2/4 h`
+
+- **ir-ual-session** Grade UAL ingestion NotAssessed when `Get-AdminAuditLogConfig` comes from Security & Compliance or on-prem Exchange rather than Exchange Online. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/4 p=0.1 freq=2 hours=0.5/1/2 risk=0.05x1 rev=two-way conf=assessed id=ir-ual-session` `return: likelihood about 2 live runs a year, estimated; p 0.1 that the operator's session has Connect-IPPSSession or on-prem Exchange loaded and not Exchange Online, opinion; impact a false NotMet on audit-log ingestion, an hour or more to disprove and a wrong remediation advised if nobody does; evidence code path scripts\entra\Export-CloudIncidentReadiness.ps1 lines 175-210 on 2026-10-02, Get-Command takes whichever module exports the cmdlet`
+  - `worker: sonnet 1/2/3 h`
+
+- **split-list-outputs** Fold the script-local `ConvertTo-OpsSplitList` in `Export-CloudIncidentReadiness.ps1` onto the `OpsToolkit.Reporting` copy and make its `.OUTPUTS` match what it returns. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.25/0.5/2 p=0.5 freq=1 hours=0.5/1/2 risk=0.1x1 rev=two-way conf=assessed id=split-list-outputs` `return: likelihood the function is touched about once a year, p 0.5, estimated, nothing counted; impact each touch costs about half an hour keeping two copies and an AST-lifting test in step, and a caller that skips the @() idiom hits a StrictMode error on an empty list; evidence the module copy and scripts\entra\Export-CloudIncidentReadiness.ps1 line 946, tests\Export-SecurityControlEvidencePack.Tests.ps1 lines 248-251 lift it from the script AST`
+  - `worker: sonnet 1.5/3/5 h`
+
+- **laps-typo** Rename `$posturePropbe` to `$postureProbe` at its declaration and two uses in `Export-LocalAdminAndLapsPosture.ps1`. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.05/0.1/0.25 p=0.3 freq=1 hours=0.1/0.2/0.5 rev=two-way conf=assessed id=laps-typo` `return: likelihood the script is read about once a year, p 0.3, estimated; impact a reader pauses a few minutes on a name that looks like a bug and is not; evidence scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1 lines 75, 169 and 171 on 2026-10-02, spelled the same at all three so it runs correctly`
+  - `worker: haiku 0.1/0.2/0.5 h`
 
 ## Moved to the work board
 
@@ -293,7 +313,9 @@ constraints. Strict validation passed all eight gates on the branch: 60 parser, 
 analyzer, 72 help, 4 shell, 110 stale-reference, 1 module, 611 Pester tests, MachineState
 clean, 0 warnings, 12 NotRun from an unelevated session.
 
-Four low, unscored follow-ups came out of the landing review. None is queued work.
+Four low follow-ups came out of the landing review. None is queued work. The first two
+are one item, `split-list-outputs`, and the last is `laps-typo`, both scored in the Scored
+index on 2026-10-02; the third was declined and stays here as the record.
 
 - Dedupe the script-local `ConvertTo-OpsSplitList` in
   `scripts\entra\Export-CloudIncidentReadiness.ps1` onto the exported
@@ -471,8 +493,8 @@ YouTube swEKKlN5BMA. Digest and portfolio evaluation:
   so that dependency is decided at pickup. Stays inside the "Considered and rejected"
   line: it reads configuration once, it never ingests or queries the logs themselves.
 
-Follow-ups from the `cloud-ir-ready` landing review, 2026-09-25. Unscored, low severity,
-each errs conservative (a pass is never overstated); score one when it is picked up.
+Follow-ups from the `cloud-ir-ready` landing review, 2026-09-25. Low severity, each errs
+conservative (a pass is never overstated); scored in the Scored index on 2026-10-02.
 The responder-role item goes first.
 
 - **Responder roles: activated PIM and administrative-unit scope.** The responder check

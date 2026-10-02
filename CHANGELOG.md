@@ -7,6 +7,13 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-10-02
 
+### Changed: backlog scored
+
+- Scored the backlog with `ai_development/docs/board-scoring.md`. `FUTURE_FEATURES.md`'s
+  Scored index now carries five more open follow-ups beside `entra-contain`: `ir-consent-rsc`,
+  `ir-responder-pim`, `ir-ual-session`, `split-list-outputs` and `laps-typo`. The review
+  is in the data root as `board_review_2026-10-02.md`.
+
 ### Changed: Python requirements pinned, Dependabot added with a 7-day cooldown
 
 - The two `requirements.txt` files now pin exact versions (ai_development secure-coding

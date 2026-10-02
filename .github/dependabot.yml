@@ -1,0 +1,16 @@
+# Weekly Dependabot version updates for the Python requirements, held for a 7-day cooldown (ai_development secure-coding SC8).
+# The two requirements files live in script subfolders, not the repo root, so each is listed.
+# No github-actions entry: the repository has no workflows. Add one with the same cooldown if a workflow is added.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directories:
+      - "/scripts/email/thunderbird"
+      - "/scripts/it-operations/utilities"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]

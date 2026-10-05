@@ -61,8 +61,58 @@ The script also stops the server announcing what it runs:
 - A deployment can wipe the headers. The script writes custom headers into the site's own `web.config`. A deployment that replaces that file removes them silently. Either have the developers put the same headers in the application's own `web.config` so they ship with every release, or rerun the script after each deployment and check from outside. Native HSTS (`-UseNativeHsts`) and server-level settings live outside the site's `web.config` and survive.
 - Set each header in one place. If the application also sends a content policy, the browser enforces both, and anything either one blocks is blocked. Duplicate X-Frame-Options values can also be misread by checkers. Decide whether IIS or the application owns each header.
 - Native HSTS is the better choice where IIS supports it. The custom header is also sent on plain-HTTP responses, where browsers ignore it as the HSTS standard requires (RFC 6797, section 8.1). It does no harm, but scanners may flag it. `-UseNativeHsts` sends it on HTTPS only.
-- `SAMEORIGIN` is a compromise. OWASP recommends `DENY`, which stops all framing. The preset uses `SAMEORIGIN` because many sites frame their own pages. If yours never does, pass `X-Frame-Options = 'DENY'` and `frame-ancestors 'none'` with `-Headers`.
+- `SAMEORIGIN` is a compromise. OWASP recommends `DENY`, which stops all framing. The preset uses `SAMEORIGIN` because many sites frame their own pages. For sites that are never framed, or that partners must embed, see [Who may frame a site](#who-may-frame-a-site).
 - The preset content policy is a starting point, not the strongest one. It lists allowed places, and a policy built on a list of places can still be bypassed in some cases (web.dev). The strongest form, a "strict" policy, marks each allowed script with a one-time code that must change on every page load. IIS cannot generate that code, so that step is the application developers' job.
+
+## Who may frame a site
+
+Framing is controlled by two headers that do different jobs. `X-Frame-Options` can only say nobody (`DENY`) or the same site (`SAMEORIGIN`). The content policy's `frame-ancestors` can also name specific partner sites, so it is the only way to allow them. Browsers that support `frame-ancestors` ignore `X-Frame-Options` when both are present, so send both: the policy does the real work, and `X-Frame-Options` satisfies scanners that check for it by name and older browsers.
+
+Pick one pattern per site:
+
+| Scenario                              | X-Frame-Options | frame-ancestors                                    | Use for                                                        |
+| ------------------------------------- | --------------- | -------------------------------------------------- | -------------------------------------------------------------- |
+| A. Never framed                       | `DENY`          | `'none'`                                           | APIs, webhooks, anything with no pages to show                 |
+| B. Framed only by itself (the preset) | `SAMEORIGIN`    | `'self'`                                           | Login pages and most sites                                     |
+| C. Embedded by named partners         | `SAMEORIGIN`    | `'self' https://partner.com https://*.partner.com` | A site whose pages a partner must show inside their own site   |
+| D. Embeddable anywhere, deliberately  | none            | `*`                                                | A public widget or status page that exists to be embedded      |
+
+Scenario B is what the script applies with no extra switches. Scenarios A and C replace the framing values with `-Headers`, which sends exactly the set you pass, so repeat the rest of the preset in the call.
+
+Before choosing, find out whether anything legitimately frames the site: search for `<iframe>` tags that point at it and ask the site owner. Adding `SAMEORIGIN` to a site a partner embeds breaks that partner's page.
+
+Rules for scenario C:
+
+- Keep `'self'`. Without it the site cannot frame its own pages.
+- List `https://` origins only. An `http://` source lets an unencrypted page host the frame, and anyone on the network can tamper with that page.
+- Write both `https://partner.com` and `https://*.partner.com`. The wildcard does not match the bare domain.
+- Keep `X-Frame-Options: SAMEORIGIN` alongside it. It does not block the partner, because browsers ignore it once `frame-ancestors` is present.
+- Do not use `X-Frame-Options: ALLOW-FROM`. It is obsolete and ignored by current browsers.
+- Session-replay and analytics tools can capture page content. On a page that shows personal or health information, a vendor like that needs a data-processing agreement (a BAA for PHI) before it is allowed.
+
+Examples (each is one `-Headers` call; scenario B needs none):
+
+```powershell
+# A. Never framed
+pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "api" -Headers @{
+  'Content-Security-Policy' = "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  'X-Frame-Options' = 'DENY'
+  'X-Content-Type-Options' = 'nosniff'
+  'Referrer-Policy' = 'strict-origin-when-cross-origin'
+}
+
+# C. Embedded by a partner (replace partner.com)
+pwsh -File .\scripts\iis\Set-IisRecommendedSecurityHeaders.ps1 -SiteName "portal" -Headers @{
+  'Content-Security-Policy' = "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://partner.com https://*.partner.com"
+  'X-Frame-Options' = 'SAMEORIGIN'
+  'X-Content-Type-Options' = 'nosniff'
+  'Referrer-Policy' = 'strict-origin-when-cross-origin'
+}
+```
+
+Add the remaining preset headers (Permissions-Policy, Cross-Origin-Opener-Policy, Cross-Origin-Resource-Policy, X-Permitted-Cross-Domain-Policies) to each call so `-Headers` does not leave them out. Afterward, confirm with `scripts\web\Test-ClickjackingProtection.ps1 -HostName <host> -ExtraPath '/login'`.
+
+If the application team later adds a full content policy, merge `frame-ancestors` into that one header. Two separate policies are both enforced, which makes them harder to manage and can block things neither author intended.
 
 ## What this does not cover
 

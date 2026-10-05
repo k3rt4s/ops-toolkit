@@ -39,6 +39,12 @@ The script also stops the server announcing what it runs:
 - `X-Powered-By` is removed. It tells an attacker the framework and version and protects nothing.
 - The `Server` header is removed by turning on IIS request filtering's `removeServerHeader`. Microsoft documents it as working on Windows Server or Windows 10 version 1709 and later. On an IIS that does not know the setting, the script reports the site as `NotRun` instead of claiming success. Use `-KeepServerHeader` to leave it alone.
 
+### Replacing X-Powered-By with a fixed value
+
+By default `X-Powered-By` tells anyone who asks which framework and version the site runs (for example `ASP.NET`), which hands an attacker a shortcut to known exploits. The preset removes it. Rater8 instead replaces it with the fixed value `Commodore 64`, a 1982 home computer that is plainly not what the site runs. A scanner or an attacker's tooling that reads the header finds nothing to match against its list of known framework versions. A person looking at the response sees at once that the header is a deliberate joke, which says the server was configured by someone paying attention. The real stack is not disclosed either way, so this gives the same protection as removing the header. It is not a security control on its own, so do not rely on it to deter an attacker; the headers and patching are what protect the site. Use the same value on every host, and never a real framework name or version.
+
+The preset only removes the header. To send a replacement, add it per site with `Set-IisSiteCustomHeader.ps1` (or `-Headers`, which must then repeat the rest of the preset).
+
 ## Options
 
 | Switch                      | What it does                                                                                                                                                                                                                                                                                               |
@@ -131,7 +137,6 @@ Headers are one control among several. These need their own work:
 | `X-XSS-Protection: 1; mode=block`             | It switched on an old browser filter that could itself be abused. MDN warns it "can create XSS vulnerabilities in otherwise safe websites". OWASP says not to set it, or to set it to `0`, and to rely on the content policy. The posture checker flags it. |
 | `Feature-Policy`                              | Replaced by `Permissions-Policy`, which uses a different syntax.                                                                                                                                                                                            |
 | `Pragma: no-cache`                            | An old request instruction with no defined meaning on a response. `Cache-Control` replaces it.                                                                                                                                                              |
-| A fake `X-Powered-By` value                   | Advertises that something is being hidden and stops nothing. Remove the header.                                                                                                                                                                             |
 | `Expect-CT`, `Public-Key-Pins`                | Obsolete. OWASP says not to use them; a wrong `Public-Key-Pins` value can lock visitors out of the site.                                                                                                                                                    |
 | `Access-Control-Allow-Origin: *` as a default | Sharing across sites is closed by default. Only an application meant to be read by other sites should open it, and only to named sites.                                                                                                                     |
 

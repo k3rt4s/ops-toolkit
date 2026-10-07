@@ -139,6 +139,29 @@ protection XML, auditpol CSV, firewall export) in its run folder.
 - `tests/Install-WorkstationBootstrap.Tests.ps1` pins parse, ASCII, unique package IDs and a
   no-change `-WhatIf` run.
 
+## 2026-10-07
+
+### Fixed: cloud incident-readiness grading (ir-ual-session, ir-responder-pim, ir-consent-rsc)
+
+- `scripts/entra/Export-CloudIncidentReadiness.ps1` grades UAL ingestion `NotAssessed`
+  when `Get-AdminAuditLogConfig` is served by a Security & Compliance or on-prem
+  Exchange session instead of Exchange Online, so an IPPS-only operator no longer gets
+  a false `NotMet`. The responder-role check now counts only permanent assignments as
+  standing access (an activated PIM window is reported separately) and only
+  `directoryScopeId` `/` eligibility toward tenant coverage; the active count is kept
+  when the eligibility read fails. User consent is graded from
+  `ManagePermissionGrantsForSelf.*` entries only, so Teams resource-specific consent
+  entries stop turning Met into Partial. Eleven Pester tests cover the three paths.
+  Still unverified against a live tenant.
+
+### Fixed: laps-typo
+
+- `Export-LocalAdminAndLapsPosture.ps1` reads `$postureProbe` at its declaration and
+  both uses (was `$posturePropbe`).
+
+Both were written on branch `feature/ops-toolkit-bugfixes` by the 2026-10-07 workspace
+bug sweep, then rebased onto master and landed on 2026-10-30.
+
 ## 2026-10-02
 
 ### Added: Invoke-EntraUserContainment.ps1

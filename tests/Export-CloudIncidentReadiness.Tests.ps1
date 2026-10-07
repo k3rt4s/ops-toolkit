@@ -119,6 +119,51 @@ Describe 'Get-UnifiedAuditLogIngestionRecord' {
     }
 }
 
+Describe 'Get-UnifiedAuditLogIngestionRecord session source' {
+    BeforeAll {
+        function New-FakeAuditConfigModule {
+            param([string]$SessionHost, [bool]$Enabled)
+            $module = New-Module -Name "FakeAuditCfg$([guid]::NewGuid().ToString('N'))" -ScriptBlock {
+                function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $script:Enabled } }
+                Export-ModuleMember -Function Get-AdminAuditLogConfig
+            }
+            & $module { param($e) $script:Enabled = $e } $Enabled
+            $module.PrivateData = @{ ImplicitSession = [pscustomobject]@{ ComputerName = $SessionHost } }
+            $module | Import-Module -Global -Force
+            $module
+        }
+    }
+
+    It 'is NotAssessed, not NotMet, when the cmdlet comes from a Security & Compliance session' {
+        $module = New-FakeAuditConfigModule -SessionHost 'ps.compliance.protection.outlook.com' -Enabled $false
+        try {
+            $record = Get-UnifiedAuditLogIngestionRecord
+            $record.Status | Should -Be 'NotAssessed'
+            $record.Finding | Should -Match 'not Exchange Online'
+        } finally {
+            Remove-Module -Name $module.Name -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'is NotAssessed when the cmdlet comes from on-premises Exchange' {
+        $module = New-FakeAuditConfigModule -SessionHost 'exch01.corp.example.local' -Enabled $false
+        try {
+            (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotAssessed'
+        } finally {
+            Remove-Module -Name $module.Name -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'still grades NotMet when the cmdlet comes from Exchange Online and ingestion is off' {
+        $module = New-FakeAuditConfigModule -SessionHost 'outlook.office365.com' -Enabled $false
+        try {
+            (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotMet'
+        } finally {
+            Remove-Module -Name $module.Name -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Get-OpsDiagnosticExportRecord' {
     It 'is not exported against an empty diagnostic settings array' {
         # Null shape: a subscription (or tenant) with no diagnostic settings at all.
@@ -227,6 +272,36 @@ Describe 'Get-ResponderRoleRecord' {
     }
 }
 
+Describe 'Get-ResponderAssignmentCount' {
+    It 'does not count a PIM activation window as a standing assignment' {
+        $members = @(@{ id = 'u1' }, @{ id = 'u2' })
+        $schedule = @(@{ principalId = 'u1'; assignmentType = 'Activated' }, @{ principalId = 'u2'; assignmentType = 'Assigned' })
+        $counts = Get-ResponderAssignmentCount -Member $members -ScheduleInstance $schedule -EligibleInstance @()
+        $counts.ActiveCount | Should -Be 1
+        $counts.ActivatedCount | Should -Be 1
+    }
+
+    It 'grades Met when the only member is an activated window and eligibility is tenant-wide' {
+        $counts = Get-ResponderAssignmentCount -Member @(@{ id = 'u1' }) -ScheduleInstance @(@{ principalId = 'u1'; assignmentType = 'Activated' }) -EligibleInstance @(@{ directoryScopeId = '/' })
+        (Get-ResponderRoleRecord -RoleName 'Global Reader' -ActiveCount $counts.ActiveCount -EligibleCount $counts.EligibleCount).Status | Should -Be 'Met'
+    }
+
+    It 'counts a member who is both permanently assigned and activated as standing' {
+        $counts = Get-ResponderAssignmentCount -Member @(@{ id = 'u1' }) -ScheduleInstance @(@{ principalId = 'u1'; assignmentType = 'Activated' }, @{ principalId = 'u1'; assignmentType = 'Assigned' }) -EligibleInstance @()
+        $counts.ActiveCount | Should -Be 1
+    }
+
+    It 'counts only directoryScopeId / eligibility toward tenant coverage' {
+        $eligible = @(@{ directoryScopeId = '/' }, @{ directoryScopeId = '/administrativeUnits/au-1' })
+        (Get-ResponderAssignmentCount -Member @() -ScheduleInstance @() -EligibleInstance $eligible).EligibleCount | Should -Be 1
+    }
+
+    It 'grades NotMet when the only eligibility is administrative-unit scoped' {
+        $counts = Get-ResponderAssignmentCount -Member @() -ScheduleInstance @() -EligibleInstance @(@{ directoryScopeId = '/administrativeUnits/au-1' })
+        (Get-ResponderRoleRecord -RoleName 'Global Reader' -ActiveCount $counts.ActiveCount -EligibleCount $counts.EligibleCount).Status | Should -Be 'NotMet'
+    }
+}
+
 Describe 'Get-BreakGlassAccountRecord' {
     It 'is Met when a FIDO2 key is registered' {
         (Get-BreakGlassAccountRecord -UserPrincipalName 'bg1@contoso.com' -LookupResult 'Found' -Fido2Registered $true).Status | Should -Be 'Met'
@@ -268,6 +343,23 @@ Describe 'Get-UserConsentRecord' {
     It 'is Partial when consent is limited to low-risk apps' {
         $policy = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-low') } }
         (Get-UserConsentRecord -AuthorizationPolicy $policy -OAuthGrantCount 1).Status | Should -Be 'Partial'
+    }
+}
+
+Describe 'Get-UserConsentRecord resource-specific consent entries' {
+    It 'is Met when only ManagePermissionGrantsForOwnedResource entries are assigned' {
+        $policy = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @('ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team', 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-chat') } }
+        (Get-UserConsentRecord -AuthorizationPolicy $policy -OAuthGrantCount 0).Status | Should -Be 'Met'
+    }
+
+    It 'still grades NotMet on the legacy self-consent entry alongside resource-specific entries' {
+        $policy = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.microsoft-user-default-legacy', 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team') } }
+        (Get-UserConsentRecord -AuthorizationPolicy $policy -OAuthGrantCount 0).Status | Should -Be 'NotMet'
+    }
+
+    It 'still grades Partial on a custom self-consent policy' {
+        $policy = @{ defaultUserRolePermissions = @{ permissionGrantPoliciesAssigned = @('ManagePermissionGrantsForSelf.my-custom-policy', 'ManagePermissionGrantsForOwnedResource.microsoft-dynamically-managed-permissions-for-team') } }
+        (Get-UserConsentRecord -AuthorizationPolicy $policy -OAuthGrantCount 0).Status | Should -Be 'Partial'
     }
 }
 

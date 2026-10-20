@@ -12,6 +12,7 @@ This folder contains active endpoint and general IT operations scripts for the o
 | `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                 |
 | `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                    |
 | `windows-hardening\`        | Workstation idle-lock and sleep posture, browser credential-theft surface hardening, plus system-level TLS/privacy/bloatware hardening and its compliance check. |
+| `workstation-setup\`        | Fresh Windows 11 workstation bootstrap: apps, VS Code, Python, modules, workspace clones, and a WhatIf preview of the hardening scripts. |
 | `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                   |
 
 ## Examples

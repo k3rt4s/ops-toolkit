@@ -5,6 +5,21 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-20
+
+### Added: Install-WorkstationBootstrap.ps1
+
+- `scripts/it-operations/workstation-setup/Install-WorkstationBootstrap.ps1` builds a fresh
+  Windows 11 workstation from Windows PowerShell and winget alone: packages in three groups
+  (Core, Comms, AiContainers), Git identity, VS Code extensions and a non-overwriting settings
+  merge, PowerShell modules, profile block, user environment variables, and gh-based workspace
+  clones. Nine resumable phases, idempotent, `-WhatIf` throughout, Windows PowerShell 5.1
+  compatible, no secrets or private repo names (the workspace repo is a parameter).
+- Phase 8 runs the `windows-hardening` scripts in `-WhatIf` preview only and prints the
+  apply commands; the bootstrap never applies hardening.
+- `tests/Install-WorkstationBootstrap.Tests.ps1` pins parse, ASCII, unique package IDs and a
+  no-change `-WhatIf` run.
+
 ## 2026-10-02
 
 ### Added: Invoke-EntraUserContainment.ps1

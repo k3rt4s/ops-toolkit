@@ -116,7 +116,9 @@ function Test-IsAdministrator {
 
 function Get-DesktopRegValue {
     param([Parameter(Mandatory = $true)][string]$Name)
-    (Get-ItemProperty -Path $script:DesktopRegPath -Name $Name -ErrorAction SilentlyContinue).$Name
+    # Strict mode throws on a missing property, and a fresh profile has none of these values.
+    $props = Get-ItemProperty -Path $script:DesktopRegPath -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $props -and $props.PSObject.Properties[$Name]) { $props.PSObject.Properties[$Name].Value }
 }
 
 # Query a power setting for the active AC scheme and return the value in minutes.
@@ -224,7 +226,9 @@ function Get-ForwardPlan {
     }
 
     if ($EnableMachineWideLock) {
-        $curMachine = (Get-ItemProperty -Path $script:PolicyRegPath -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue).InactivityTimeoutSecs
+        $machineProps = Get-ItemProperty -Path $script:PolicyRegPath -Name InactivityTimeoutSecs -ErrorAction SilentlyContinue
+        $curMachine = $null
+        if ($null -ne $machineProps -and $machineProps.PSObject.Properties['InactivityTimeoutSecs']) { $curMachine = $machineProps.InactivityTimeoutSecs }
         $items.Add([pscustomobject]@{
                 Category = 'MachineWideLock'; Setting = 'InactivityTimeoutSecs'; RequiresAdmin = $true
                 CurrentValue = if ($null -ne $curMachine) { $curMachine } else { 'absent' }

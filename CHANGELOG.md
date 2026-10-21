@@ -5,6 +5,23 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-21
+
+### Added: Export-ICloudDiagnostic.ps1
+
+- `scripts/it-operations/workstation-setup/Export-ICloudDiagnostic.ps1` gathers, read-only, the
+  iCloud package and its runtimes, Apple services, the Cloud Files filter driver, Store-app
+  policies, Schannel and .NET TLS settings, clock, Apple endpoint reachability, event log errors
+  and the newest iCloud log lines into one text report, saved to Proton Drive when found.
+
+### Fixed: workstation bootstrap first-run failures
+
+- Phase 5 no longer throws under strict mode on an empty settings object; winget hash
+  mismatches add a manual step; the NuGet provider install runs only on Windows PowerShell
+  and never fails the phase; phase 6 adopts a non-empty workspace folder instead of skipping
+  it and explains the gh device code; `Set-WorkstationLockPosture.ps1` previews without
+  throwing on absent registry values.
+
 ## 2026-10-20
 
 ### Added: Install-WorkstationBootstrap.ps1

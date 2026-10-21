@@ -7,6 +7,7 @@ Bootstraps a fresh Windows 11 workstation from nothing but Windows PowerShell an
 | Path                            | Purpose                                                                                                   |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `Install-WorkstationBootstrap.ps1` | One self-contained script, nine resumable phases, idempotent, `-WhatIf` supported, no secrets inside. |
+| `Export-ICloudDiagnostic.ps1` | Read-only iCloud for Windows health report, written to Proton Drive `My files\Laptop_Setup` when found, else the Desktop. |
 
 ## Phases
 
@@ -38,6 +39,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\Install-Workstatio
 ```
 
 Re-run any time; finished steps report `AlreadyPresent`. `-Phase 3,4` or `-Group Core,Comms` limit the run.
+
+If the `gh` login times out, run `gh auth login --web --git-protocol https` by hand first, then re-run with `-Phase 5,6,8` and the same parameters.
+
+iCloud diagnostic, one line from an elevated PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/k3rt4s/ops-toolkit/master/scripts/it-operations/workstation-setup/Export-ICloudDiagnostic.ps1 | iex
+```
 
 ## Hardening
 

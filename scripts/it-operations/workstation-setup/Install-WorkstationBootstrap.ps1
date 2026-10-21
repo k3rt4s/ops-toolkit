@@ -287,6 +287,11 @@ function Install-WingetPackage {
         $script:RebootHint = $true
         Add-Result $PhaseNumber $label 'Installed' 'reboot pending'
     }
+    elseif ($code -eq -1978335215) {
+        # 0x8A150011: the vendor shipped a newer installer than winget's manifest records. Never bypass the hash.
+        Add-Result $PhaseNumber $label 'Failed' 'winget exit -1978335215 (installer hash mismatch; vendor is ahead of the winget manifest)'
+        [void]$script:ManualSteps.Add(('Install {0} by hand from the vendor site, or re-run phase 3 later once winget catches up.' -f $Package.Note))
+    }
     else {
         Add-Result $PhaseNumber $label 'Failed' ('winget exit {0}' -f $code)
     }
@@ -334,7 +339,7 @@ function Invoke-ModuleInstall {
         if ($LASTEXITCODE -eq 0) { Add-Result $PhaseNumber $label 'AlreadyPresent'; continue }
         if (-not $PSCmdlet.ShouldProcess($label, 'Install-Module')) { Add-Result $PhaseNumber $label 'WhatIf' 'would install'; continue }
         $cmd = "`$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; " +
-        "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null; " +
+        "if (`$PSVersionTable.PSVersion.Major -lt 6) { try { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null } catch { } }; " +
         "Install-Module -Name '$m' -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop"
         & $HostExe -NoProfile -NonInteractive -Command $cmd | Out-Null
         if ($LASTEXITCODE -eq 0) { Add-Result $PhaseNumber $label 'Installed' } else { Add-Result $PhaseNumber $label 'Failed' ('exit {0}' -f $LASTEXITCODE) }
@@ -443,7 +448,7 @@ function Set-VsCodeSettingsMerge {
     if (-not $existing) { $existing = New-Object psobject }
     $added = New-Object System.Collections.ArrayList
     foreach ($k in $script:VsCodeSettings.Keys) {
-        if (-not ($existing.PSObject.Properties.Name -contains $k)) {
+        if (-not (@($existing.PSObject.Properties | ForEach-Object { $_.Name }) -contains $k)) {
             $existing | Add-Member -NotePropertyName $k -NotePropertyValue $script:VsCodeSettings[$k]
             [void]$added.Add($k)
         }
@@ -569,6 +574,25 @@ function Invoke-GitClone {
     if ($LASTEXITCODE -eq 0) { Add-Result $PhaseNumber ('clone ' + $Label) 'Applied' $Destination } else { Add-Result $PhaseNumber ('clone ' + $Label) 'Failed' ('git exit {0}' -f $LASTEXITCODE) }
 }
 
+function Invoke-GitAdopt {
+    # Turns an existing non-empty folder into a clone: init, fetch, then a non-forced checkout so a
+    # colliding untracked file stops the checkout instead of being overwritten.
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([int]$PhaseNumber, [string]$Git, [string]$Url, [string]$Destination, [string]$Label)
+    if (-not $PSCmdlet.ShouldProcess($Url, ('git init, fetch and checkout inside existing {0}' -f $Destination))) { Add-Result $PhaseNumber ('clone ' + $Label) 'WhatIf' $Destination; return }
+    & $Git -C $Destination init -q 2>$null | Out-Null
+    & $Git -C $Destination remote add origin $Url 2>$null | Out-Null
+    & $Git -C $Destination fetch -q origin 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Add-Result $PhaseNumber ('clone ' + $Label) 'Failed' ('git fetch exit {0}' -f $LASTEXITCODE); return }
+    & $Git -C $Destination remote set-head origin -a 2>$null | Out-Null
+    $head = (& $Git -C $Destination symbolic-ref --short refs/remotes/origin/HEAD 2>$null)
+    if (-not $head) { Add-Result $PhaseNumber ('clone ' + $Label) 'Failed' 'could not find the remote default branch'; return }
+    $branch = ([string]$head) -replace '^origin/', ''
+    & $Git -C $Destination checkout -B $branch --track $head 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Add-Result $PhaseNumber ('clone ' + $Label) 'Applied' ('existing folder adopted on ' + $branch) }
+    else { Add-Result $PhaseNumber ('clone ' + $Label) 'Failed' ('git checkout exit {0}; an untracked file collides with a tracked one' -f $LASTEXITCODE) }
+}
+
 function Invoke-Phase6Workspace {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param()
@@ -587,10 +611,14 @@ function Invoke-Phase6Workspace {
     $loggedIn = ($LASTEXITCODE -eq 0)
     if ($loggedIn) { Add-Result $p 'gh login' 'AlreadyPresent' }
     elseif ($PSCmdlet.ShouldProcess('GitHub', 'gh auth login (opens a browser)')) {
+        Write-Log 'gh login: a one-time code is shown next. Open https://github.com/login/device in any browser, enter it, and approve within a few minutes. The clipboard copy can fail in an elevated shell; type the code.'
         & $gh auth login --web --git-protocol https
         & $gh auth status 2>$null | Out-Null
         $loggedIn = ($LASTEXITCODE -eq 0)
-        if ($loggedIn) { Add-Result $p 'gh login' 'Applied' } else { Add-Result $p 'gh login' 'Failed' 'login did not complete; private clones will be skipped' }
+        if ($loggedIn) { Add-Result $p 'gh login' 'Applied' } else {
+            Add-Result $p 'gh login' 'Failed' 'login did not complete; private clones will be skipped'
+            [void]$script:ManualSteps.Add('Run gh auth login by hand, then re-run this script with -Phase 6 (plus -GitUserName, -GitUserEmail and -WorkspaceRepo) to clone the workspace and your repos.')
+        }
     }
     else { Add-Result $p 'gh login' 'WhatIf' 'would open a browser login' }
     if ($loggedIn) { & $gh auth setup-git 2>$null | Out-Null }
@@ -599,7 +627,7 @@ function Invoke-Phase6Workspace {
     $rootHasContent = (Test-Path -LiteralPath $WorkspaceRoot) -and (@(Get-ChildItem -LiteralPath $WorkspaceRoot -Force -ErrorAction SilentlyContinue).Count -gt 0)
     if ($WorkspaceRepo) {
         if (Test-Path -LiteralPath (Join-Path $WorkspaceRoot '.git')) { Add-Result $p 'workspace repo' 'AlreadyPresent' $WorkspaceRoot }
-        elseif ($rootHasContent) { Add-Result $p 'workspace repo' 'Skipped' ('{0} is not empty; clone it by hand or empty the folder' -f $WorkspaceRoot) }
+        elseif ($rootHasContent -and $loggedIn) { Invoke-GitAdopt -PhaseNumber $p -Git $git -Url $WorkspaceRepo -Destination $WorkspaceRoot -Label 'workspace repo' }
         elseif ($loggedIn) { Invoke-GitClone -PhaseNumber $p -Git $git -Url $WorkspaceRepo -Destination $WorkspaceRoot -Label 'workspace repo' }
         else { Add-Result $p 'workspace repo' 'Skipped' 'needs gh login' }
     }

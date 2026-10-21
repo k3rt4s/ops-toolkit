@@ -186,9 +186,9 @@ Invoke-Probe 'Network to Apple endpoints' {
     foreach ($h in 'setup.icloud.com', 'gateway.icloud.com', 'configuration.apple.com', 'idmsa.apple.com', 'www.apple.com') {
         $tcp = $false
         try { $c = New-Object Net.Sockets.TcpClient; $iar = $c.BeginConnect($h, 443, $null, $null); $tcp = $iar.AsyncWaitHandle.WaitOne(5000) -and $c.Connected; $c.Close() } catch { $tcp = $false }
+        # The machine's own TLS default is used, so a hardened or broken TLS setting shows up here.
         $https = ''
         try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $r = Invoke-WebRequest -Uri ('https://{0}/' -f $h) -UseBasicParsing -TimeoutSec 10 -Method Head -ErrorAction Stop
             $https = 'HTTP ' + [int]$r.StatusCode
         }
@@ -198,6 +198,7 @@ Invoke-Probe 'Network to Apple endpoints' {
         }
         '{0,-28} tcp443={1,-5} {2}' -f $h, $tcp, $https
     }
+    '.NET SecurityProtocol default: {0}' -f [Net.ServicePointManager]::SecurityProtocol
     & netsh.exe winhttp show proxy 2>&1
 }
 

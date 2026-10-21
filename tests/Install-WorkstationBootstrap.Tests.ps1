@@ -40,4 +40,20 @@ Describe 'Install-WorkstationBootstrap' {
             if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
         }
     }
+
+    It 'completes phase 5 under strict mode when VS Code has no settings.json yet' {
+        $root = Join-Path ([System.IO.Path]::GetTempPath()) ('wb5-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'appdata') -Force | Out-Null
+        try {
+            $cmd = '$env:APPDATA = ''{0}''; & ''{1}'' -WhatIf -Phase 5 -SkipRepoClone -ReportDirectory ''{2}'' -WorkspaceRoot ''{3}'' -DataRoot ''{4}''' -f `
+                (Join-Path $root 'appdata'), $script:ScriptPath, (Join-Path $root 'out'), (Join-Path $root 'Code'), (Join-Path $root 'Data')
+            $null = & pwsh -NoProfile -NonInteractive -Command $cmd 2>&1
+            $results = Get-ChildItem -LiteralPath (Join-Path $root 'out') -Recurse -Filter results.csv | Select-Object -First 1
+            $failed = @(Import-Csv -LiteralPath $results.FullName | Where-Object { $_.Item -like 'Phase 5 unexpected error*' })
+            $failed.Count | Should -Be 0
+        }
+        finally {
+            if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+        }
+    }
 }

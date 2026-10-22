@@ -377,6 +377,18 @@ function Invoke-Collector {
 
     try {
         $arguments = @('-NoProfile', '-NonInteractive', '-File', $scriptPath, '-OutputDirectory', $outputPath) + $targetArgument + $Argument
+        # Start-Process joins these with bare spaces, so any element with whitespace
+        # (an output directory under 'Proton Drive') is quoted, and a trailing
+        # backslash is doubled so it cannot escape the closing quote.
+        $arguments = @($arguments | ForEach-Object {
+                $value = [string]$_
+                if ($value -match '\s') {
+                    if ($value.EndsWith('\')) { $value += '\' }
+                    "`"$value`""
+                } else {
+                    $value
+                }
+            })
         $startParameters = @{
             FilePath = $pwshPath
             ArgumentList = $arguments

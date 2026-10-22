@@ -5,6 +5,28 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-22
+
+### Fixed: privacy and Schannel hardening wiped existing registry keys
+
+- `Set-Windows11PrivacyHardening.ps1` and `Set-WindowsSchannelTlsHardening.ps1` called
+  `New-Item -Force` before every registry write. On a key that already exists, that deletes
+  and recreates it, so each write wiped every other value and subkey in the key, and a later
+  write to the same key wiped the earlier one. A live privacy rollback emptied
+  `ContentDeliveryManager` (55 subkeys) and `Search`, and a TLS apply would have done the same
+  to `Internet Settings`, `WinHttp` and the .NET Framework version keys. Both now create the
+  key only when it is missing, as `Set-BrowserCredentialPosture.ps1` and
+  `Set-WorkstationLockPosture.ps1` already did. Anyone who ran either script for real before
+  this fix should restore the affected keys from its registry backup.
+
+### Fixed: registry backups and the state check failed on paths with spaces
+
+- Both scripts' `reg.exe export` backups passed the key and file path to `Start-Process`
+  unquoted, so a key name with a space (`Windows Search`, `Windows Feeds`, `Internet
+  Settings`) failed, and a report directory with a space (`Proton Drive`) failed every
+  backup. `Test-WindowsHardeningState.ps1` had the same defect when launching its plan runs,
+  so an output directory with a space produced no plans. All three now quote those arguments.
+
 ## 2026-10-21
 
 ### Added: Export-ICloudDiagnostic.ps1

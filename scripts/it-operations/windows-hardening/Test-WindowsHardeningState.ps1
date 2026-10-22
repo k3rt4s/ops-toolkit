@@ -128,9 +128,10 @@ foreach ($name in $Target) {
         # -OutputDirectory, and -SkipRegistryBackup keeps a verification pass from
         # leaving .reg exports of the machine's current state behind.
         $planLog = Join-Path $planDirectory 'plan-run.log'
+        # Start-Process joins these with bare spaces, so both paths are quoted.
         $arguments = @(
-            '-NoProfile', '-NonInteractive', '-File', $spec.Path
-            '-WhatIf', '-ReportDirectory', $planDirectory, '-SkipRegistryBackup'
+            '-NoProfile', '-NonInteractive', '-File', "`"$($spec.Path)`""
+            '-WhatIf', '-ReportDirectory', "`"$planDirectory`"", '-SkipRegistryBackup'
         )
         $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments `
             -NoNewWindow -Wait -PassThru -RedirectStandardOutput $planLog -RedirectStandardError "$planLog.err"

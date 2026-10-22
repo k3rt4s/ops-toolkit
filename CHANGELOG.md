@@ -17,15 +17,25 @@ that produced the current layout is described in the README under "What Changed"
   to `Internet Settings`, `WinHttp` and the .NET Framework version keys. Both now create the
   key only when it is missing, as `Set-BrowserCredentialPosture.ps1` and
   `Set-WorkstationLockPosture.ps1` already did. Anyone who ran either script for real before
-  this fix should restore the affected keys from its registry backup.
+  this fix should restore the affected keys from the run's `*-registry-backup-*` folder where
+  a `.reg` file exists for them. Keys whose names hold a space, and every key of a run whose
+  report directory held a space, were never backed up (next entry), and the scripts applied
+  their changes anyway.
 
-### Fixed: registry backups and the state check failed on paths with spaces
+### Fixed: child processes and registry backups failed on paths with spaces
 
-- Both scripts' `reg.exe export` backups passed the key and file path to `Start-Process`
-  unquoted, so a key name with a space (`Windows Search`, `Windows Feeds`, `Internet
-  Settings`) failed, and a report directory with a space (`Proton Drive`) failed every
-  backup. `Test-WindowsHardeningState.ps1` had the same defect when launching its plan runs,
-  so an output directory with a space produced no plans. All three now quote those arguments.
+- `Start-Process -ArgumentList` joins its elements with bare spaces on Windows PowerShell 5.1
+  and PowerShell 7 alike, so an unquoted element holding a space splits in two. Fixed in:
+  - `Set-Windows11PrivacyHardening.ps1` and `Set-WindowsSchannelTlsHardening.ps1`, whose
+    `reg.exe export` backups failed for a key name with a space (`Windows Search`, `Windows
+    Feeds`, `Internet Settings`) and for every key when the report directory held one.
+  - `Test-WindowsHardeningState.ps1`, which built no plans when its output directory held a
+    space.
+  - `Export-SecurityControlEvidencePack.ps1`, where every collector failed or misparsed its
+    arguments under an output directory with a space; it now quotes any argument holding
+    whitespace, including those its callers pass through.
+  - `Export-WindowsUpdateHealth.ps1`, whose history probe reported zero records, with no
+    error, when the temp folder held a space (a profile name with a space).
 
 ## 2026-10-21
 

@@ -5,6 +5,38 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-22
+
+### Fixed: privacy and Schannel hardening wiped existing registry keys
+
+- `Set-Windows11PrivacyHardening.ps1` and `Set-WindowsSchannelTlsHardening.ps1` called
+  `New-Item -Force` before every registry write. On a key that already exists, that deletes
+  and recreates it, so each write wiped every other value and subkey in the key, and a later
+  write to the same key wiped the earlier one. A live privacy rollback emptied
+  `ContentDeliveryManager` (55 subkeys) and `Search`, and a TLS apply would have done the same
+  to `Internet Settings`, `WinHttp` and the .NET Framework version keys. Both now create the
+  key only when it is missing, as `Set-BrowserCredentialPosture.ps1` and
+  `Set-WorkstationLockPosture.ps1` already did. Anyone who ran either script for real before
+  this fix should restore the affected keys from the run's `*-registry-backup-*` folder where
+  a `.reg` file exists for them. Keys whose names hold a space, and every key of a run whose
+  report directory held a space, were never backed up (next entry), and the scripts applied
+  their changes anyway.
+
+### Fixed: child processes and registry backups failed on paths with spaces
+
+- `Start-Process -ArgumentList` joins its elements with bare spaces on Windows PowerShell 5.1
+  and PowerShell 7 alike, so an unquoted element holding a space splits in two. Fixed in:
+  - `Set-Windows11PrivacyHardening.ps1` and `Set-WindowsSchannelTlsHardening.ps1`, whose
+    `reg.exe export` backups failed for a key name with a space (`Windows Search`, `Windows
+    Feeds`, `Internet Settings`) and for every key when the report directory held one.
+  - `Test-WindowsHardeningState.ps1`, which built no plans when its output directory held a
+    space.
+  - `Export-SecurityControlEvidencePack.ps1`, where every collector failed or misparsed its
+    arguments under an output directory with a space; it now quotes any argument holding
+    whitespace, including those its callers pass through.
+  - `Export-WindowsUpdateHealth.ps1`, whose history probe reported zero records, with no
+    error, when the temp folder held a space (a profile name with a space).
+
 ## 2026-10-21
 
 ### Added: Export-ICloudDiagnostic.ps1

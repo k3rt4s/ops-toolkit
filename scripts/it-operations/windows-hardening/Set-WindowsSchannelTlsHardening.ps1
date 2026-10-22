@@ -366,7 +366,9 @@ function Export-RegistryBackup {
         $status = 'Skipped'
 
         if ($PSCmdlet.ShouldProcess($export.Key, "Export registry backup to $path")) {
-            $process = Start-Process -FilePath reg.exe -ArgumentList @('export', $export.Key, $path, '/y') -NoNewWindow -Wait -PassThru
+            # Start-Process joins -ArgumentList with bare spaces, so the key and path are
+            # quoted here or a space in either ('Internet Settings', 'Proton Drive') splits it.
+            $process = Start-Process -FilePath reg.exe -ArgumentList @('export', "`"$($export.Key)`"", "`"$path`"", '/y') -NoNewWindow -Wait -PassThru
             $exitCode = $process.ExitCode
             $status = if ($exitCode -eq 0) { 'Exported' } else { 'Failed' }
         }
@@ -394,7 +396,11 @@ function Set-PlannedRegistryValue {
     }
 
     if ($PSCmdlet.ShouldProcess("$($Item.RegistryPath)\$($Item.ValueName)", "Set $($Item.PropertyType) to $($Item.DesiredValue)")) {
-        New-Item -Path $Item.RegistryPath -Force | Out-Null
+        # New-Item -Force on an existing key deletes and recreates it, wiping its
+        # other values and subkeys, so it runs only when the key is missing.
+        if (-not (Test-Path -LiteralPath $Item.RegistryPath)) {
+            New-Item -Path $Item.RegistryPath -Force | Out-Null
+        }
         New-ItemProperty -Path $Item.RegistryPath -Name $Item.ValueName -Value $Item.DesiredValue -PropertyType $Item.PropertyType -Force | Out-Null
         return $true
     }

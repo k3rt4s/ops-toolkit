@@ -277,8 +277,10 @@ $probeResult | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath -E
             throw 'No PowerShell executable was found for the update history probe.'
         }
 
+        # The probe paths sit under the temp folder, which holds a space when the
+        # profile name does, and Start-Process joins -ArgumentList unquoted.
         $historyProcess = Start-Process -FilePath $powerShellPath `
-            -ArgumentList @('-NoProfile', '-File', $historyProbeScript, '-History', [string]$History, '-OutputPath', $historyProbeOutput) `
+            -ArgumentList @('-NoProfile', '-File', "`"$historyProbeScript`"", '-History', [string]$History, '-OutputPath', "`"$historyProbeOutput`"") `
             -RedirectStandardOutput $historyProbeStdOut `
             -RedirectStandardError $historyProbeStdErr `
             -PassThru `

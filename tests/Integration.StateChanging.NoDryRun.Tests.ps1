@@ -48,7 +48,7 @@ Describe 'Send-AdSecurityEmailReport' {
         $script:reportFixture = @'
 function Send-MailMessage {
     param($SmtpServer, $From, $To, $Subject, $Body, [switch]$BodyAsHtml)
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value (
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value (
         [pscustomobject]@{ Command = 'Send-MailMessage'; Recipients = ($To -join ';') } | ConvertTo-Json -Compress)
 }
 $global:FakeAdData = @{
@@ -141,7 +141,7 @@ Describe 'Invoke-DiskMaintenance' {
         $script:diskFixture = @'
 function Start-Process {
     param($FilePath, $ArgumentList, [switch]$Wait, [switch]$NoNewWindow, [switch]$PassThru)
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value (
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value (
         [pscustomobject]@{ Command = $FilePath; Arguments = ($ArgumentList -join ' ') } | ConvertTo-Json -Compress)
     [pscustomobject]@{ ExitCode = 0 }
 }

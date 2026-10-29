@@ -242,13 +242,15 @@ function Get-ForwardPlan {
 
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
+    # Exact name: a rollback run's own lock-posture-rollback-plan-* and -state-* files also match the wildcard.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter 'lock-posture-rollback-*.json' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^lock-posture-rollback-\d{8}_\d{6}\.json$' } |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
-    if (-not $file) { throw "No lock-posture-rollback-*.json found in $ReportDirectory. Nothing to roll back." }
+    if (-not $file) { throw "No lock-posture-rollback-<timestamp>.json found in $ReportDirectory. Nothing to roll back." }
     $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()

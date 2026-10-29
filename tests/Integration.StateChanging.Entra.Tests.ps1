@@ -48,7 +48,7 @@ $global:FakeGraphUsers = @{
 
 function Write-FakeLog {
     param([hashtable]$Data)
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value ($Data | ConvertTo-Json -Depth 6 -Compress)
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value ($Data | ConvertTo-Json -Depth 6 -Compress)
 }
 
 function Invoke-MgGraphRequest {
@@ -79,7 +79,7 @@ function Invoke-MgGraphRequest {
     }
     Write-FakeLog -Data $entry
     if ($secret) {
-        Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_SECRET_LOG -Encoding utf8 -Value (@{ Path = $path; Password = $secret } | ConvertTo-Json -Compress)
+        Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_SECRET_LOG -Encoding utf8 -WhatIf:$false -Value (@{ Path = $path; Password = $secret } | ConvertTo-Json -Compress)
         # A server that echoes the request back in its error is the leak the script must survive.
         if ($global:EchoBodyOnPasswordFailure) { throw "Bad request. The request body was: $Body" }
     }
@@ -118,7 +118,7 @@ $global:FakeExoRules = @{
         Set-Content -LiteralPath (Join-Path $dir "$Name.psm1") -Encoding utf8 -Value @'
 function Write-FakeExoLog {
     param([hashtable]$Data)
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value ($Data | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value ($Data | ConvertTo-Json -Compress)
 }
 function Get-Mailbox {
     [CmdletBinding()] param($Identity)

@@ -165,3 +165,27 @@ Describe 'export_emails_to_parquet.py path parameters' {
             -RequiredFlags @('--source-dir', '--output-dir')
     }
 }
+
+# The 2026-10-29 Windows 11 hardening scripts follow the same rule: no default report folder,
+# and the BitLocker script has no default for where its recovery key goes.
+Describe '<_.Leaf> path parameters' -ForEach @(
+    @{ Leaf = 'Set-WindowsDefenderHardening.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsCredentialProtection.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsNetworkProtocolHardening.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsExploitMitigation.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsAuditLogging.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsRemoteAccessPosture.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsLocalAccountPolicy.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WindowsFirewallBaseline.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Set-WdacAuditPolicy.ps1'; Required = @('ReportDirectory') }
+    @{ Leaf = 'Enable-BitLockerOsVolume.ps1'; Required = @('ReportDirectory', 'RecoveryKeyDirectory') }
+) {
+    It 'marks its path parameters mandatory' {
+        $mandatory = Get-MandatoryParameterNames -RelativePath ('scripts\it-operations\windows-hardening\' + $_.Leaf)
+        foreach ($name in $_.Required) { $mandatory | Should -Contain $name }
+    }
+
+    It 'makes no change on a no-argument run' {
+        Assert-NoArgumentRunMakesNoChange -RelativePath ('scripts\it-operations\windows-hardening\' + $_.Leaf) -Tag ($_.Leaf -replace '\.ps1$', '')
+    }
+}

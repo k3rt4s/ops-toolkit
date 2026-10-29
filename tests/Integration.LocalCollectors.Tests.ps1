@@ -433,8 +433,10 @@ Describe 'Test-WindowsHardeningState against this machine' {
     }
 
     It 'counts every checked item into exactly one outcome' {
-        $script:hardening.ItemsChecked | Should -Be $script:items.Count
-        $counted = $script:hardening.CompliantCount + $script:hardening.DriftedCount + $script:hardening.NotConfiguredCount
+        # Unread, ReportOnly, Precondition and NotCheckedRemotely rows are listed but are not checked items.
+        $verdictRows = @($script:items | Where-Object { $_.State -notin @('Unread', 'ReportOnly', 'Precondition', 'NotCheckedRemotely') })
+        $script:hardening.ItemsChecked | Should -Be $verdictRows.Count
+        $counted = $script:hardening.CompliantCount + $script:hardening.DriftedCount + $script:hardening.NotConfiguredCount + $script:hardening.FailedCount
         $counted | Should -Be $script:hardening.ItemsChecked
     }
 

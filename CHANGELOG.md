@@ -5,6 +5,76 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-29
+
+### Added: standalone Windows 11 hardening scripts
+
+Eleven new scripts under `scripts\it-operations\windows-hardening\` harden a Windows 11 machine
+that is not joined to a domain: ten change state and one, `Export-WdacAuditEvent.ps1`, only
+reads. Every state-changing one takes a required `-ReportDirectory`,
+writes a plan and a state file, applies only from an elevated shell, records each prior value
+in a rollback JSON that `-Rollback` replays, and reports a setting it cannot read as skipped,
+never as compliant. None of them has been run elevated against a real machine yet; the
+elevated halves of their tests are skipped on an unelevated runner.
+
+- `Set-WindowsDefenderHardening.ps1`: fourteen attack surface reduction rules, Controlled
+  Folder Access and network protection, all in audit mode by default; PUA, cloud protection
+  and sample submission. A forward run never lowers a stronger setting, and exclusions are
+  never touched. Allowed applications are added before the Controlled Folder Access mode
+  changes, so an interrupted run never leaves block mode on without them.
+- `Set-WindowsCredentialProtection.ps1`: LSA protection without a UEFI lock, WDigest caching
+  off, NTLMv2 only and no LM hash. Credential Guard, memory integrity, the UEFI lock and DMA
+  protection are opt-in.
+- `Set-WindowsNetworkProtocolHardening.ps1`: SMBv1 and PowerShell 2.0 off, SMB signing
+  required, LLMNR and NetBIOS over TCP/IP off, opt-in mDNS off.
+- `Set-WindowsExploitMitigation.ps1`: system-wide DEP, ASLR, SEHOP and CFG after exporting the
+  current configuration; opt-in mandatory ASLR and Office internet-macro blocking.
+- `Set-WindowsAuditLogging.ps1`: script-block and module logging, process command lines,
+  fourteen advanced audit subcategories by GUID, and larger logs, after an auditpol backup.
+- `Set-WindowsRemoteAccessPosture.ps1` and `Set-WindowsLocalAccountPolicy.ps1`: Remote Desktop
+  NLA and TLS, Remote Assistance off, lockout, Guest off and UAC on the secure desktop, with
+  the disruptive changes opt-in and refused when they would lock the operator out.
+- `Set-WindowsFirewallBaseline.ps1`: all three profiles pinned on with inbound blocked and
+  dropped packets logged, after a netsh export, with opt-in inbound rule cleanup.
+- `Set-WdacAuditPolicy.ps1` and `Export-WdacAuditEvent.ps1`: an audit-only WDAC base policy
+  from a Microsoft example, with no enforce switch, and a report of what it would have blocked.
+  The audit and unsigned-policy rule options (3 and 6) are forced on, since the policy is
+  deployed unsigned.
+- `Enable-BitLockerOsVolume.ps1`: TPM, XTS-AES 256, used space only. The recovery password
+  goes to an operator-named folder off the system drive and is read back before encryption
+  starts; it never appears in a report or log. A substituted or mapped drive is followed to
+  its target, a UNC path back to this computer is refused, and a drive it cannot look up is
+  refused rather than passed; a UNC path to this machine's own LAN address or a DNS alias is
+  not yet detected. A live run from an unelevated shell fails and exits non-zero instead of
+  skipping.
+
+`Install-WorkstationBootstrap.ps1` phase 8 previews all fifteen state-changing hardening scripts, the five that
+were already there and the ten new ones, with `-WhatIf` and prints their apply commands. The BitLocker preview needs the new
+`-BitLockerRecoveryKeyDirectory`; without it BitLocker is `Skipped` and its apply command
+carries a placeholder. A phase 8 test checks every listed script exists and the skip.
+
+`Test-WindowsHardeningState.ps1` verifies the ten new targets by name (`-Target Defender,
+Firewall,BitLocker` and so on). It runs each new script with `-WhatIf` and maps its apply-state
+results; BitLocker is read with `Get-BitLockerVolume` and never touches a key protector. An
+item it cannot read is `Unread`, and an unread or remotely unchecked item now keeps `Passed`
+false, so `-FailOnDrift` exits 1 on it; this also applies to the services and scheduled tasks a
+remote `Privacy` run cannot read, which used to pass. Neither counts toward `ItemsChecked`. The default is still `SchannelTls` and
+`Privacy`, because the evidence pack runs the checker with no `-Target` and does not yet read
+`UnreadCount`. A run of the new targets leaves the scripts' own restore points (exploit
+protection XML, auditpol CSV, firewall export) in its run folder.
+
+### Fixed: test recorders passed under -WhatIf whether or not a script was gated
+
+- Stub recorders injected into a script's runspace inherited the caller's `-WhatIf`, so the
+  `Add-Content` behind each recorder was itself skipped and a "no mutation under -WhatIf"
+  assertion could not fail. The recorders now pass `-WhatIf:$false`, and
+  `tests\TestHelpers.MutationRecorder.Tests.ps1` proves an ungated write is caught. The live
+  recorder exposed one stub that recorded a read (`pip cache dir`), now answered unrecorded.
+- `Set-WorkstationLockPosture.ps1`, `Set-BrowserCredentialPosture.ps1` and
+  `Set-WorkstationPerformance.ps1` picked the newest `<prefix>-rollback-*.json`, which after a
+  `-Rollback` preview was the rollback plan file itself, so the next rollback failed. Each now
+  matches only the exact `<prefix>-rollback-<yyyyMMdd_HHmmss>.json` name.
+
 ## 2026-10-22
 
 ### Fixed: privacy and Schannel hardening wiped existing registry keys

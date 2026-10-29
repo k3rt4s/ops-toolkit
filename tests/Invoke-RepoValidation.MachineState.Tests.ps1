@@ -141,10 +141,13 @@ Describe 'Get-MachineStateSnapshot' {
         # If a script starts changing something not on this list, the guard goes blind
         # to it. That is how the incident happened, so the list is asserted rather than
         # assumed.
-        foreach ($probe in @('DefenderExclusionPath', 'DefenderExclusionProcess', 'ScheduledTasks', 'Printers', 'PSDrives',
+        $probes = @(
+            'DefenderExclusionPath', 'DefenderExclusionProcess', 'ScheduledTasks', 'Printers', 'PSDrives',
             'DefenderAsrRules', 'DefenderControlledFolderAccess', 'DefenderNetworkProtection', 'DefenderPuaProtection',
             'FirewallProfiles', 'FirewallDisabledRuleCount', 'BitLockerOsVolume', 'CodeIntegrityPolicies',
-            'Smb1Protocol', 'LsaAndCredentialRegistry', 'AuditPolicy', 'LocalAccountLockout')) {
+            'Smb1Protocol', 'LsaAndCredentialRegistry', 'AuditPolicy', 'LocalAccountLockout'
+        )
+        foreach ($probe in $probes) {
             $script:snapshot.ContainsKey($probe) | Should -BeTrue -Because "$probe must be watched"
         }
     }

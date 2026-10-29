@@ -41,6 +41,44 @@ Describe 'Install-WorkstationBootstrap' {
         }
     }
 
+    It 'previews every hardening script in phase 8 and skips BitLocker without a recovery key folder' {
+        $root = Join-Path ([System.IO.Path]::GetTempPath()) ('wb8-' + [guid]::NewGuid().ToString('N'))
+        $hardening = Join-Path $root 'Code\projects\ops-toolkit\scripts\it-operations\windows-hardening'
+        New-Item -ItemType Directory -Path $hardening -Force | Out-Null
+        Copy-Item -Path (Join-Path $PSScriptRoot '..\scripts\it-operations\windows-hardening\*.ps1') -Destination $hardening
+        try {
+            $runs = @(
+                @{ Name = 'nokey'; Extra = @() },
+                @{ Name = 'key'; Extra = @('-BitLockerRecoveryKeyDirectory', (Join-Path $root 'usb')) }
+            )
+            $byRun = @{}
+            foreach ($run in $runs) {
+                $out = Join-Path $root ('out-' + $run.Name)
+                $extra = $run.Extra
+                $null = & pwsh -NoProfile -NonInteractive -File $script:ScriptPath -WhatIf -Phase '8' -SkipRepoClone `
+                    -ReportDirectory $out -WorkspaceRoot (Join-Path $root 'Code') -DataRoot (Join-Path $root 'Data') @extra 2>&1
+                $LASTEXITCODE | Should -Be 0
+                $csv = Get-ChildItem -LiteralPath $out -Recurse -Filter results.csv | Select-Object -First 1
+                $byRun[$run.Name] = @(Import-Csv -LiteralPath $csv.FullName | Where-Object { $_.Item -like 'Hardening preview *' })
+            }
+
+            $noKey = $byRun['nokey']
+            @($noKey | Where-Object { $_.Detail -like 'script not found*' }).Count | Should -Be 0
+            @($noKey | Where-Object Status -eq 'WhatIf').Count | Should -Be 14
+            $bl = @($noKey | Where-Object Item -eq 'Hardening preview BitLocker OS volume')
+            $bl.Count | Should -Be 1
+            $bl[0].Status | Should -Be 'Skipped'
+            $bl[0].Detail | Should -Match 'BitLockerRecoveryKeyDirectory'
+
+            $withKey = $byRun['key']
+            @($withKey | Where-Object Status -eq 'WhatIf').Count | Should -Be 15
+            Test-Path (Join-Path $root 'usb') | Should -BeFalse
+        }
+        finally {
+            if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+        }
+    }
+
     It 'completes phase 5 under strict mode when VS Code has no settings.json yet' {
         $root = Join-Path ([System.IO.Path]::GetTempPath()) ('wb5-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path (Join-Path $root 'appdata') -Force | Out-Null

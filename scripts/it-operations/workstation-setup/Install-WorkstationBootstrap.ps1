@@ -11,8 +11,9 @@ Instructions:
 - Run with -WhatIf first. It lists every package, setting, and clone it would touch and changes nothing.
 - Safe to re-run. Every step checks current state first, so a failed or interrupted run resumes by
   running the same command again. Use -Phase to run only some phases.
-- Hardening is PREVIEW ONLY here. Phase 8 runs the five Windows 11 hardening scripts with -WhatIf and
-  prints the apply commands. Nothing is hardened until you run those commands yourself.
+- Hardening is PREVIEW ONLY here. Phase 8 runs each Windows 11 hardening script with -WhatIf and
+  prints the apply commands. Nothing is hardened until you run those commands yourself. The
+  BitLocker preview runs only when -BitLockerRecoveryKeyDirectory names a folder off the system drive.
 - Writes a run folder under -ReportDirectory with a log, results.csv/json, and summary.json.
 - Reboots are never forced. If Docker Desktop or WSL needs one, the summary says so.
 
@@ -24,7 +25,7 @@ Phases:
  5 Editor and shell   VS Code extensions and settings, Windows Terminal, PowerShell profile, env vars
  6 Workspace          folder layout, gh login, clone ops-toolkit, optional private workspace repo and repos
  7 Docker and WSL     WSL kernel update (only when the AiContainers group is chosen)
- 8 Hardening preview  five hardening scripts in -WhatIf, plans written to the report folder
+ 8 Hardening preview  each hardening script in -WhatIf, plans written to the data root
  9 Summary            results, manual steps, apply commands
 
 Purpose:
@@ -90,6 +91,11 @@ param(
 
     [Parameter()]
     [switch]$SkipRepoClone,
+
+    # Folder off the system drive (a USB stick or a mapped share) for the BitLocker recovery key.
+    # Passed to Enable-BitLockerOsVolume.ps1; without it phase 8 skips the BitLocker preview.
+    [Parameter()]
+    [string]$BitLockerRecoveryKeyDirectory,
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -670,13 +676,30 @@ function Invoke-Phase7DockerWsl {
 function Get-HardeningCommand {
     param([string]$OpsRoot)
     $dir = Join-Path $OpsRoot 'scripts\it-operations\windows-hardening'
-    @(
-        [pscustomobject]@{ Name = 'Privacy and telemetry'; Script = (Join-Path $dir 'Set-Windows11PrivacyHardening.ps1') }
-        [pscustomobject]@{ Name = 'Schannel TLS 1.2-only'; Script = (Join-Path $dir 'Set-WindowsSchannelTlsHardening.ps1') }
-        [pscustomobject]@{ Name = 'Workstation lock posture'; Script = (Join-Path $dir 'Set-WorkstationLockPosture.ps1') }
-        [pscustomobject]@{ Name = 'Browser credential posture'; Script = (Join-Path $dir 'Set-BrowserCredentialPosture.ps1') }
-        [pscustomobject]@{ Name = 'AppX bloatware removal'; Script = (Join-Path $dir 'Remove-WindowsProvisionedBloatwareApps.ps1') }
+    # Listed in the order the apply commands are printed. Extra holds arguments beyond -ReportDirectory;
+    # BitLocker is last because its recovery key has to be stored off the machine before it runs.
+    $list = @(
+        @('Privacy and telemetry', 'Set-Windows11PrivacyHardening.ps1'),
+        @('Schannel TLS 1.2-only', 'Set-WindowsSchannelTlsHardening.ps1'),
+        @('Workstation lock posture', 'Set-WorkstationLockPosture.ps1'),
+        @('Browser credential posture', 'Set-BrowserCredentialPosture.ps1'),
+        @('AppX bloatware removal', 'Remove-WindowsProvisionedBloatwareApps.ps1'),
+        @('Defender hardening', 'Set-WindowsDefenderHardening.ps1'),
+        @('Credential protection', 'Set-WindowsCredentialProtection.ps1'),
+        @('Network protocol hardening', 'Set-WindowsNetworkProtocolHardening.ps1'),
+        @('Exploit mitigation', 'Set-WindowsExploitMitigation.ps1'),
+        @('Audit logging', 'Set-WindowsAuditLogging.ps1'),
+        @('Remote access posture', 'Set-WindowsRemoteAccessPosture.ps1'),
+        @('Local account policy', 'Set-WindowsLocalAccountPolicy.ps1'),
+        @('Firewall baseline', 'Set-WindowsFirewallBaseline.ps1'),
+        @('WDAC audit policy', 'Set-WdacAuditPolicy.ps1')
     )
+    foreach ($entry in $list) {
+        [pscustomobject]@{ Name = $entry[0]; Script = (Join-Path $dir $entry[1]); Extra = @(); NeedsKeyDirectory = $false }
+    }
+    $blArgs = @()
+    if ($BitLockerRecoveryKeyDirectory) { $blArgs = @('-RecoveryKeyDirectory', $BitLockerRecoveryKeyDirectory) }
+    [pscustomobject]@{ Name = 'BitLocker OS volume'; Script = (Join-Path $dir 'Enable-BitLockerOsVolume.ps1'); Extra = $blArgs; NeedsKeyDirectory = $true }
 }
 
 function Invoke-Phase8HardeningPreview {
@@ -690,11 +713,17 @@ function Invoke-Phase8HardeningPreview {
     }
     if (-not $pwsh) { Add-Result $p 'Hardening preview' 'Skipped' 'pwsh not installed'; return }
     foreach ($h in (Get-HardeningCommand -OpsRoot $opsRoot)) {
+        if (-not (Test-Path -LiteralPath $h.Script)) { Add-Result $p ('Hardening preview ' + $h.Name) 'Skipped' ('script not found: ' + $h.Script); continue }
+        if ($h.NeedsKeyDirectory -and -not $BitLockerRecoveryKeyDirectory) {
+            Add-Result $p ('Hardening preview ' + $h.Name) 'Skipped' 'needs -BitLockerRecoveryKeyDirectory, a folder off the system drive'
+            continue
+        }
         # Always -WhatIf: this phase has no apply path by design.
         if ($WhatIfPreference) { Add-Result $p ('Hardening preview ' + $h.Name) 'WhatIf' 'would run the script with -WhatIf'; continue }
         $out = Join-Path $planDir (($h.Name -replace '[^A-Za-z0-9]+', '-'))
         New-Item -ItemType Directory -Path $out -Force | Out-Null
-        & $pwsh -NoProfile -ExecutionPolicy Bypass -File $h.Script -ReportDirectory $out -WhatIf | Out-Null
+        $extra = @($h.Extra)
+        & $pwsh -NoProfile -ExecutionPolicy Bypass -File $h.Script -ReportDirectory $out -WhatIf @extra | Out-Null
         if ($LASTEXITCODE -eq 0) { Add-Result $p ('Hardening preview ' + $h.Name) 'Applied' ('plan written to ' + $out) }
         else { Add-Result $p ('Hardening preview ' + $h.Name) 'Failed' ('exit {0}' -f $LASTEXITCODE) }
     }
@@ -703,10 +732,18 @@ function Invoke-Phase8HardeningPreview {
     foreach ($h in (Get-HardeningCommand -OpsRoot $opsRoot)) {
         $leaf = Split-Path -Leaf $h.Script
         $applyDir = Join-Path $DataRoot ('workspace\hardening-applied\' + ($h.Name -replace '[^A-Za-z0-9]+', '-'))
-        [void]$script:ManualSteps.Add(('  pwsh -File .\{0}\{1} -ReportDirectory "{2}"' -f $scriptDir, $leaf, $applyDir))
+        $line = '  pwsh -File .\{0}\{1} -ReportDirectory "{2}"' -f $scriptDir, $leaf, $applyDir
+        if ($h.NeedsKeyDirectory) {
+            $keyDir = '<folder off the system drive>'
+            if ($BitLockerRecoveryKeyDirectory) { $keyDir = $BitLockerRecoveryKeyDirectory }
+            $line += (' -RecoveryKeyDirectory "{0}"' -f $keyDir)
+        }
+        [void]$script:ManualSteps.Add($line)
     }
     [void]$script:ManualSteps.Add('  Verify afterwards: pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1')
     [void]$script:ManualSteps.Add('  The AppX removal script needs -RemoveProvisionedPackages -InstalledPackageScope AllUsers to remove for new users too; read its header first.')
+    [void]$script:ManualSteps.Add('  Credential protection and the BitLocker hardware test take effect after a restart. Run BitLocker last, then move its recovery key file somewhere safe off this machine.')
+    [void]$script:ManualSteps.Add('  The WDAC policy is audit only. Review its events with Export-WdacAuditEvent.ps1 before considering enforcement.')
 }
 
 function Invoke-Phase9Summary {

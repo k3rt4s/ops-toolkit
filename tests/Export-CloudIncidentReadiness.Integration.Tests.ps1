@@ -45,7 +45,7 @@ function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEn
 
 function Invoke-AzRestMethod {
     param(`$Path, `$Method, `$ErrorAction)
-    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -Value ('AZ:' + `$Method + ':' + `$Path)
+    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -WhatIf:`$false -Value ('AZ:' + `$Method + ':' + `$Path)
 
     if (`$Path -like '*microsoft.aadiam/diagnosticSettings*') {
         `$body = @{ value = @(
@@ -99,7 +99,7 @@ function Invoke-AzRestMethod {
 
 function Invoke-MgGraphRequest {
     param(`$Method, `$Uri, `$OutputType, `$ErrorAction)
-    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -Value ('MG:' + `$Method + ':' + `$Uri)
+    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -WhatIf:`$false -Value ('MG:' + `$Method + ':' + `$Uri)
 
     if (`$Uri -eq 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies') {
         return @{
@@ -288,7 +288,7 @@ function Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEn
 
 function Invoke-AzRestMethod {
     param(`$Path, `$Method, `$ErrorAction)
-    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -Value ('AZ:' + `$Method + ':' + `$Path)
+    Add-Content -LiteralPath `$env:OPSTOOLKIT_TEST_CALL_LOG -Encoding utf8 -WhatIf:`$false -Value ('AZ:' + `$Method + ':' + `$Path)
     throw 'Invoke-AzRestMethod must not be called once the tenant mismatch is detected.'
 }
 

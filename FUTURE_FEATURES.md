@@ -43,6 +43,52 @@ work, and is not indexed.
 - **laps-typo** Rename `$posturePropbe` to `$postureProbe` at its declaration and two uses in `Export-LocalAdminAndLapsPosture.ps1`. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.05/0.1/0.25 p=0.3 freq=1 hours=0.1/0.2/0.5 rev=two-way conf=assessed id=laps-typo` `return: likelihood the script is read about once a year, p 0.3, estimated; impact a reader pauses a few minutes on a name that looks like a bug and is not; evidence scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1 lines 75, 169 and 171 on 2026-10-02, spelled the same at all three so it runs correctly`
   - `worker: haiku 0.1/0.2/0.5 h`
 
+Six items were filed on 2026-10-29 when the standalone Windows 11 hardening scripts landed.
+Five are below; the sixth, domain-joined variants (hard-domain, score 0.0), went to
+`BOARD_DEFERRED_2026.md` beside the board. pack-unread and the seven items after
+hard-omitted-settings came out of the pre-push review the same day. Detail, and the list of
+facts the scripts assume but nobody has checked on a real machine, is under "Ingested
+2026-10-29: standalone Windows 11 hardening follow-ups" below.
+
+- **hard-elevated-run** Run every hardening spec elevated on a disposable Windows 11 VM, then run each script for real there and check the unverified facts listed below. `score: kind=prevent gain=2/6/20 p=0.5 hours=2/4/8 risk=0.1x2 rev=two-way conf=assessed flags=security id=hard-elevated-run` `return: likelihood the scripts are applied to at least one real machine soon, p 0.5 that one of the 22 unverified facts is wrong in a way that matters, estimated, nothing run; impact a wrong registry value, cmdlet shape or event field means a control reads compliant when it is not, or a rollback that does not restore, about 2 to 20 hours to find and repair on a live machine; evidence the elevated It blocks in tests\Integration.StateChanging.Hardening*.Tests.ps1 are skipped on the unelevated runner on 2026-10-29, and the unverified list below`
+  - `worker: sonnet 2/4/8 h, on a VM the developer provides`
+
+- **wdac-enforce** Add a reviewed path from the audit-only WDAC policy to an enforced one: supplemental allow rules from `Export-WdacAuditEvent.ps1` output, then an explicit enforce step with its own rollback. `score: kind=feature gain=2/4/10 p=0.4 hours=4/8/16 risk=0.2x4 rev=two-way conf=opinion flags=security id=wdac-enforce` `return: likelihood wanted once the audit policy has run a few weeks, p 0.4, opinion; impact enforcement blocks unapproved executables, but a wrong policy can stop the machine booting into a usable state, about 4 hours to recover; evidence Set-WdacAuditPolicy.ps1 has no enforce switch by the developer's 2026-10-29 decision`
+  - `worker: sonnet 4/8/16 h`
+
+- **bitlocker-tpm-pin** Offer a TPM plus PIN protector on `Enable-BitLockerOsVolume.ps1`, behind a switch, with the PIN taken as a SecureString and never logged. `score: kind=feature gain=1/2/6 p=0.3 hours=1.5/3/6 risk=0.1x2 rev=two-way conf=opinion flags=security id=bitlocker-tpm-pin` `return: likelihood wanted for a laptop that travels, p 0.3, opinion; impact pre-boot authentication closes the stolen-laptop cold-boot and DMA paths a TPM-only protector leaves open, a few hours of exposure analysis per incident avoided; evidence the script adds TPM only, and the fake BitLocker module already accepts -TpmAndPinProtector`
+  - `worker: sonnet 1.5/3/6 h`
+
+- **pack-unread** Have `Export-SecurityControlEvidencePack.ps1` read the hardening checker's `UnreadCount` and `Passed`, report CFG-01 as NotAssessed or Partial while items are unread, and then pass the standalone-machine targets to the checker. `score: kind=prevent gain=1/3/8 p=0.3 hours=1.5/3/6 risk=0.1x2 rev=two-way conf=opinion flags=security id=pack-unread` `return: likelihood the pack is run on a machine hardened by the new scripts, p 0.3, opinion; impact today CFG-01 reads Met from TotalDrift, ItemsChecked and CompliantCount alone, so if the new targets were added without this an unread control would vanish from the counts and the control would read as met in a questionnaire; evidence Export-SecurityControlEvidencePack.ps1 lines 1110-1123 and the checker's default kept at SchannelTls and Privacy on 2026-10-29 for that reason`
+  - `worker: sonnet 1.5/3/6 h`
+
+- **hard-offhost** Off-host copies of what the scripts produce on the machine: forward the new audit and Code Integrity events, and record where the BitLocker recovery key was moved. `score: kind=prevent gain=1/3/10 p=0.2 hours=3/6/12 rev=two-way conf=opinion flags=security id=hard-offhost` `return: likelihood an incident on a hardened machine, p 0.2 a year, opinion; impact logs that live only on the compromised machine can be cleared, and a key file nobody can find makes recovery a rebuild, several hours either way; evidence Set-WindowsAuditLogging.ps1 sizes local logs only and Enable-BitLockerOsVolume.ps1 writes one key file to the operator's folder`
+  - `worker: sonnet 3/6/12 h`
+
+- **hard-omitted-settings** Add the settings left out because no supported value could be verified: WPAD on a standalone machine, the 24H2 Administrator Protection value, and ASR rules beyond the fourteen documented ones. `score: kind=feature gain=0.5/1/4 p=0.3 hours=1/2/4 rev=two-way conf=opinion flags=security id=hard-omitted-settings` `return: likelihood Microsoft documents each setting, p 0.3 within a year, opinion; impact each closes one more path, under an hour of exposure each; evidence the WPAD and Administrator Protection omissions are stated in the help of Set-WindowsNetworkProtocolHardening.ps1 and Set-WindowsLocalAccountPolicy.ps1, and Set-WindowsDefenderHardening.ps1 plans fourteen rules, on 2026-10-29`
+  - `worker: sonnet 1/2/4 h`
+
+- **legacy-undetermined-pass** Make `Test-WindowsHardeningState.ps1` count a local legacy row it cannot classify as unread: the Privacy plan's service and scheduled-task actions map to `Other:*` and a legacy `Skipped` row stays `Skipped`, and neither keeps `Passed` false. Pre-dates this branch; the developer decides whether an unclassified row should fail the run. `score: kind=prevent gain=1/3/8 p=0.4 hours=1/2/4 risk=0.1x2 rev=two-way conf=assessed flags=security id=legacy-undetermined-pass` `return: likelihood a Privacy run hits a service or task row, p 0.4, estimated from the plan emitting DisableService, EnableService, Missing, DisableScheduledTask and EnableScheduledTask; impact an undetermined row folds into a pass, so a drifted service reads compliant in a report; evidence the legacy mapping in Test-WindowsHardeningState.ps1 around lines 524-531 and Passed on master read driftCount, notEnforced and unchecked only, on 2026-10-29`
+  - `worker: sonnet 1/2/4 h`
+
+- **hard-rollback-validate** Validate each rollback JSON entry against the control set the script manages (registry path and value name, service, rule id) before an elevated `-Rollback` applies it, and refuse the file on any entry outside that set. `score: kind=prevent gain=1/3/10 p=0.15 hours=1.5/3/6 risk=0.1x2 rev=two-way conf=opinion flags=security id=hard-rollback-validate` `return: likelihood a rollback file is edited or replaced in the report folder, p 0.15, opinion; impact an elevated rollback writes whatever the file names, so a tampered file becomes an arbitrary elevated registry write; evidence the ten state-changing hardening scripts read the newest *rollback*.json under -ReportDirectory and apply its entries as recorded, on 2026-10-29`
+  - `worker: sonnet 1.5/3/6 h`
+
+- **hard-rollback-chain** Mark a rollback file consumed after it applies, or pick it by the run it belongs to rather than `LastWriteTime`, so a second `-Rollback` does not replay the first one. `score: kind=prevent gain=0.5/1/3 p=0.2 hours=1/2/4 rev=two-way conf=opinion id=hard-rollback-chain` `return: likelihood an operator runs -Rollback twice or after a later apply, p 0.2, opinion; impact the replay restores values from before an earlier run, undoing a later deliberate change, about an hour to notice and redo; evidence the rollback file is chosen by LastWriteTime and left in place after use in the hardening scripts on 2026-10-29`
+  - `worker: sonnet 1/2/4 h`
+
+- **hard-whatif-unelevated** Let an unelevated `-WhatIf` show each planned change as `Previewed` instead of `Skipped: requires elevation`, by reading what can be read unelevated and marking the rest unread. `score: kind=feature gain=0.25/0.5/2 p=0.5 hours=1/2/4 rev=two-way conf=opinion id=hard-whatif-unelevated` `return: likelihood the bootstrap's phase 8 preview runs unelevated, p 0.5, opinion; impact the preview lists skips rather than the planned changes, so the operator learns less before applying; evidence elevation is checked before ShouldProcess in the hardening scripts, the same order as the five older ones, on 2026-10-29`
+  - `worker: sonnet 1/2/4 h`
+
+- **hard-confirm-impact** Make `ConfirmImpact = 'High'` prompt as declared: `Invoke-PlanItem` calls `ShouldProcess` at its own Medium default, so the declared impact never raises a prompt. `score: kind=debt gain=0.1/0.25/1 p=0.3 hours=0.5/1/2 rev=two-way conf=assessed id=hard-confirm-impact` `return: likelihood an operator relies on a confirmation prompt, p 0.3, estimated; impact a High-impact change applies without the prompt the attribute promises, minutes of surprise each time; evidence the hardening scripts declare High and route through Invoke-PlanItem, the same pattern as the existing ones, on 2026-10-29`
+  - `worker: sonnet 0.5/1/2 h`
+
+- **file-comma-validateset** Fix the `pwsh -File` examples that pass a comma list to a `ValidateSet` parameter, which `-File` passes as one string and the set rejects: `Invoke-DiskSpaceReclaim.ps1` lines 46, 51 and 105 (`-Target`), `New-AzKeyVaultServicePrincipal.ps1` lines 23 and 105 (`-CertificatePermissions`), and `Invoke-RepoValidation.ps1` line 24 (`-Gate`). `score: kind=debt gain=0.1/0.25/0.5 p=0.6 hours=0.25/0.5/1 rev=two-way conf=assessed id=file-comma-validateset` `return: likelihood someone copies an example, p 0.6, estimated; impact the copied command fails with a validation error, a few minutes to rewrite it; evidence pwsh -File with -T Aa,Bb rejected by ValidateSet in both pwsh and powershell.exe on 2026-10-29, and the hardening README examples moved to the -Command form the same day`
+  - `worker: haiku 0.25/0.5/1 h`
+
+- **fake-contracts** Make the test fake modules behave like the cmdlets they stand in for: a consistent `ShouldProcess` rule across the fakes, and read fakes that honour their filter parameters instead of returning everything. `score: kind=debt gain=0.25/1/3 p=0.3 hours=1.5/3/6 rev=two-way conf=opinion id=fake-contracts` `return: likelihood a test passes against a fake that a real cmdlet would fail, p 0.3, opinion; impact a defect ships behind a green suite, an hour or more to find on a machine; evidence the fakes under tests handle ShouldProcess differently from one another and the read fakes ignore filters, found in the 2026-10-29 review`
+  - `worker: sonnet 1.5/3/6 h`
+
 ## Moved to the work board
 
 Five features left this index on 2026-09-06 when the developer approved them. Their
@@ -400,11 +446,56 @@ to this section for the later move). `docs\legacy-script-inventory.md` and
 `archive\legacy-scripts\` were left untouched as historical record of the repo's state at
 the time each was written.
 
+## Ingested 2026-10-29: standalone Windows 11 hardening follow-ups
+
+The eleven scripts that landed on 2026-10-29 were built and tested against fake modules and
+stubs on an unelevated runner. The developer chose to build only, so nothing was applied to
+any machine. The scored items are in the index above. These are the facts the scripts rely
+on that nobody has checked against a real Windows 11 machine; `hard-elevated-run` checks them.
+
+Defender, credentials, protocols, exploit and audit (`Set-WindowsDefenderHardening.ps1`
+through `Set-WindowsAuditLogging.ps1`):
+
+- `Add-MpPreference` adds one ASR rule id and action without disturbing the other rules.
+- The Smart App Control `VerifiedAndReputablePolicyState` values read as reported.
+- `Dnscache` `EnableMDNS` turns off the mDNS responder.
+- The text a missing optional feature returns from `Get-WindowsOptionalFeature`.
+- The nested HVCI key path for memory integrity.
+- The object shapes `Get-ProcessMitigation -System` returns.
+- Module Logging's `*` value name under `ModuleNames`.
+- Office Click-to-Run detection through the 16.0 install roots.
+- `auditpol` current-setting parsing, which matches English words only.
+
+Remote access, accounts and firewall:
+
+- The WinRM listener registry path read for the report-only row.
+- `AllowInboundRules False` on the local persistent store.
+- Application filter binding when a program rule's path is missing.
+- `netsh advfirewall export` failing unelevated, which the script treats as a warning.
+
+BitLocker and WDAC:
+
+- The JSON shape `CiTool --list-policies --json` returns, whether `--update-policy` and
+  `--remove-policy` also answer in JSON, and which GUID form, braced or bare, each accepts.
+- `Set-CIPolicyIdInfo -ResetPolicyID` giving the base and policy IDs the script expects.
+- The Code Integrity event field names `Export-WdacAuditEvent.ps1` reads for 3076, 3077 and 3089.
+- The ConfigCI module loading under PowerShell 7.
+- `Add-BitLockerKeyProtector` on a fully decrypted volume.
+- The restart the BitLocker hardware test needs, and the state the volume reads in until then.
+- Whether removing a WDAC policy with CiTool needs a restart to take effect.
+- The `HvciOptions` value in the in-box example policies on current builds, and
+  `Set-RuleOption -Option 6` taking on them.
+- Whether `Get-BitLockerVolume` needs elevation (the script assumes it does).
+
+Two omissions are deliberate and stay out until a supported value is documented: WPAD and
+the 24H2 Administrator Protection setting (`hard-omitted-settings`).
+
 ## Residual risk, not a backlog item
 
-All 48 scripts have automated coverage, including all 24 that change something.
-`Send-AdSecurityEmailReport` and `Invoke-DiskMaintenance` gained `-WhatIf` on
-2026-08-17, which is what made the last two coverable.
+All 48 scripts had automated coverage on 2026-08-17, including all 24 that change
+something; `Send-AdSecurityEmailReport` and `Invoke-DiskMaintenance` gained `-WhatIf` that
+day, which is what made the last two coverable. The eleven hardening scripts added on
+2026-10-29 each have an integration test file, but their elevated halves have not run.
 
 Every covered script runs end to end in the test suite against a stubbed back end. What
 no test here can establish is that a real Graph endpoint, domain controller, or Exchange

@@ -232,13 +232,17 @@ function Use-FakeActiveDirectory {
 function Use-FakeSystemModule {
     <#
     .SYNOPSIS
-    Stage fake ScheduledTasks, Defender, and PrintManagement modules and return the PSModulePath entry.
+    Stage a fake module for every .psm1 in tests\Fixtures\FakeSystemModules and return the PSModulePath entry.
 
     .DESCRIPTION
     Defining a same-named function in the caller's scope shadows the cmdlets in
-    Microsoft.PowerShell.Management, but it does not reliably shadow the commands these
-    three modules export. Relying on it let a test run disable four real scheduled tasks
-    and add three real Defender path exclusions on a development machine.
+    Microsoft.PowerShell.Management, but it does not reliably shadow the commands the
+    system modules export. Relying on it let a test run disable four real scheduled
+    tasks and add three real Defender path exclusions on a development machine.
+
+    Every .psm1 in tests\Fixtures\FakeSystemModules is staged, and the module name is
+    the file's base name. A new subsystem is covered by adding a file there, for example
+    NetSecurity.psm1; no list in this function needs editing.
 
     Staging a module of the same name earlier on PSModulePath means the real module is
     never loaded, so there is nothing to shadow. That is the approach already used for
@@ -256,7 +260,7 @@ function Use-FakeSystemModule {
     $staging = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fakesys-$([guid]::NewGuid().ToString('N'))"
     $source = Join-Path $PSScriptRoot 'Fixtures\FakeSystemModules'
 
-    foreach ($name in @('ScheduledTasks', 'Defender', 'PrintManagement')) {
+    foreach ($name in @(Get-ChildItem -LiteralPath $source -Filter '*.psm1' -File | ForEach-Object { $_.BaseName })) {
         $moduleDirectory = Join-Path $staging $name
         New-Item -ItemType Directory -Path $moduleDirectory -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $source "$name.psm1") `
@@ -317,7 +321,7 @@ function Get-WindowsMutationStubText {
 
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target, [string]`$Detail)
-    Add-Content -LiteralPath '$MutationLogPath' -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath '$MutationLogPath' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{
         Command = `$Command; Target = `$Target; Detail = `$Detail } | ConvertTo-Json -Compress)
 }
 
@@ -371,9 +375,9 @@ function Remove-AppxProvisionedPackage { param([switch]`$Online, `$PackageName, 
 function Disable-ScheduledTask { param(`$TaskName, `$TaskPath, `$ErrorAction) Write-OpsTestMutation -Command 'Disable-ScheduledTask' -Target "`$TaskPath`$TaskName" -Detail '' }
 function Enable-ScheduledTask { param(`$TaskName, `$TaskPath, `$ErrorAction) Write-OpsTestMutation -Command 'Enable-ScheduledTask' -Target "`$TaskPath`$TaskName" -Detail '' }
 function Clear-RecycleBin { param(`$DriveLetter, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Clear-RecycleBin' -Target ([string]`$DriveLetter) -Detail '' }
-function Set-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Set-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
-function Add-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Add-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
-function Remove-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-MpPreference' -Target ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') -Detail '' }
+function Set-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$EnableControlledFolderAccess, `$EnableNetworkProtection, `$PUAProtection, `$MAPSReporting, `$SubmitSamplesConsent, `$CloudBlockLevel, `$CloudExtendedTimeout, `$ErrorAction) Write-OpsTestMutation -Command 'Set-MpPreference' -Target `$(if (`$PSBoundParameters.ContainsKey('ExclusionPath') -or `$PSBoundParameters.ContainsKey('ExclusionProcess')) { ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') } else { ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'Force','ErrorAction' } | Sort-Object) -join ';') }) -Detail ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'ExclusionPath','ExclusionProcess','Force','ErrorAction' } | Sort-Object | ForEach-Object { "`$_=" + ((@(`$PSBoundParameters[`$_]) | ForEach-Object { [string]`$_ }) -join ',') }) -join ';') }
+function Add-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$AttackSurfaceReductionRules_Ids, `$AttackSurfaceReductionRules_Actions, `$ControlledFolderAccessAllowedApplications, `$ErrorAction) Write-OpsTestMutation -Command 'Add-MpPreference' -Target `$(if (`$PSBoundParameters.ContainsKey('ExclusionPath') -or `$PSBoundParameters.ContainsKey('ExclusionProcess')) { ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') } elseif (`$PSBoundParameters.ContainsKey('AttackSurfaceReductionRules_Ids')) { @(`$AttackSurfaceReductionRules_Ids) -join ';' } elseif (`$PSBoundParameters.ContainsKey('ControlledFolderAccessAllowedApplications')) { @(`$ControlledFolderAccessAllowedApplications) -join ';' } else { ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'Force','ErrorAction' } | Sort-Object) -join ';') }) -Detail ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'ExclusionPath','ExclusionProcess','Force','ErrorAction' } | Sort-Object | ForEach-Object { "`$_=" + ((@(`$PSBoundParameters[`$_]) | ForEach-Object { [string]`$_ }) -join ',') }) -join ';') }
+function Remove-MpPreference { param(`$ExclusionPath, `$ExclusionProcess, [switch]`$Force, `$AttackSurfaceReductionRules_Ids, `$ControlledFolderAccessAllowedApplications, `$ErrorAction) Write-OpsTestMutation -Command 'Remove-MpPreference' -Target `$(if (`$PSBoundParameters.ContainsKey('ExclusionPath') -or `$PSBoundParameters.ContainsKey('ExclusionProcess')) { ((@(`$ExclusionPath) + @(`$ExclusionProcess)) -join ';') } elseif (`$PSBoundParameters.ContainsKey('AttackSurfaceReductionRules_Ids')) { @(`$AttackSurfaceReductionRules_Ids) -join ';' } elseif (`$PSBoundParameters.ContainsKey('ControlledFolderAccessAllowedApplications')) { @(`$ControlledFolderAccessAllowedApplications) -join ';' } else { ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'Force','ErrorAction' } | Sort-Object) -join ';') }) -Detail ((`$PSBoundParameters.Keys | Where-Object { `$_ -notin 'ExclusionPath','ExclusionProcess','Force','ErrorAction' } | Sort-Object | ForEach-Object { "`$_=" + ((@(`$PSBoundParameters[`$_]) | ForEach-Object { [string]`$_ }) -join ',') }) -join ';') }
 
 # Function names may contain dots, and PowerShell resolves functions before
 # applications, so these shadow the real executables.
@@ -386,7 +390,12 @@ function powercfg { Write-OpsTestMutation -Command 'powercfg' -Target (`$args -j
 # caches, which is a change to the machine even though no test asserts on it. wsl and
 # diskpart.exe matter more still, because between them they stop every WSL distro and
 # attach a virtual disk.
-function pip { Write-OpsTestMutation -Command 'pip' -Target (`$args -join ' ') -Detail '' }
+# "pip cache dir" is the planner's read of where the cache lives, so it answers nothing
+# (no size estimate) rather than recording, the same split the docker stub makes below.
+function pip {
+    if ((`$args -join ' ') -eq 'cache dir') { return }
+    Write-OpsTestMutation -Command 'pip' -Target (`$args -join ' ') -Detail ''
+}
 function npm { Write-OpsTestMutation -Command 'npm' -Target (`$args -join ' ') -Detail '' }
 function wsl { Write-OpsTestMutation -Command 'wsl' -Target (`$args -join ' ') -Detail '' }
 function wsl.exe { Write-OpsTestMutation -Command 'wsl.exe' -Target (`$args -join ' ') -Detail '' }
@@ -408,6 +417,134 @@ function docker {
 "@
 }
 
+function Get-OpsMutationRecord {
+    <#
+    .SYNOPSIS
+    Read the machine changes a run attempted, as objects.
+
+    .PARAMETER Path
+    Mutation log written by the stubs from Get-WindowsMutationStubText.
+
+    .OUTPUTS
+    Objects with Command, Target and Detail. Empty when the log does not exist.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    @(Get-Content -LiteralPath $Path | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+function Invoke-OpsWindowsScriptPair {
+    <#
+    .SYNOPSIS
+    Run one script with -WhatIf and again executing, returning both results and logs.
+
+    .DESCRIPTION
+    The pair is the unit of meaning. A -WhatIf run that attempts nothing says
+    nothing on its own, because a script that has stopped working also attempts
+    nothing; the executing run is what proves the suppressed path was reachable.
+
+    .PARAMETER WorkRoot
+    Existing directory that receives the two mutation logs.
+
+    .PARAMETER ModulePath
+    Directory from Use-FakeSystemModule, prepended to PSModulePath for both runs.
+
+    .PARAMETER RelativePath
+    Script under test, relative to the repository root.
+
+    .PARAMETER Argument
+    Parameters passed to the script. -WhatIf and -Confirm:$false are added per run.
+
+    .PARAMETER Tag
+    Prefix for the two log file names.
+
+    .PARAMETER ExtraSetup
+    Setup text appended after the stubs, for a script that needs a stub or a
+    redirected environment the shared set deliberately does not carry.
+
+    .PARAMETER FixtureEnvironment
+    Setup text that tells the staged modules what already exists on the pretend
+    machine. Defaults to the scheduled task, Defender exclusion and printer fixture.
+
+    .OUTPUTS
+    PSCustomObject with WhatIf, WhatIfLog, Execute and ExecuteLog.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$WorkRoot,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ModulePath,
+
+        [string]$RelativePath,
+        [hashtable]$Argument = @{},
+        [string]$Tag,
+        [string]$ExtraSetup = '',
+        [string]$FixtureEnvironment = @"
+
+`$env:OPSTOOLKIT_TEST_TASKS = '\Microsoft\Windows\Customer Experience Improvement Program\|Consolidator|Ready;\Microsoft\Windows\Feedback\Siuf\|DmClient|Ready'
+`$env:OPSTOOLKIT_TEST_MP_EXCLUSIONPATH = ''
+`$env:OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS = ''
+`$env:OPSTOOLKIT_TEST_PRINTERS = ''
+"@
+    )
+
+    $whatIfLog = Join-Path $WorkRoot "$Tag-whatif.log"
+    $executeLog = Join-Path $WorkRoot "$Tag-execute.log"
+
+    $whatIfArgument = $Argument.Clone()
+    $whatIfArgument.WhatIf = $true
+    $executeArgument = $Argument.Clone()
+    $executeArgument.Confirm = $false
+
+    # The fixture environment is appended to the stub text so the staged modules
+    # know what already exists on the pretend machine.
+    [pscustomobject]@{
+        WhatIf     = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $ModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $whatIfLog) + $FixtureEnvironment + $ExtraSetup) -Argument $whatIfArgument
+        WhatIfLog  = $whatIfLog
+        Execute    = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $ModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $executeLog) + $FixtureEnvironment + $ExtraSetup) -Argument $executeArgument
+        ExecuteLog = $executeLog
+    }
+}
+
+function Assert-OpsNoChangeUnderWhatIf {
+    <#
+    .SYNOPSIS
+    Assert a -WhatIf run completed and attempted nothing.
+
+    .DESCRIPTION
+    The exit-code check is not decoration. A run that died before reaching any
+    change also leaves an empty log, so without it this assertion passes for a
+    script that is completely broken.
+
+    .PARAMETER Pair
+    Result of Invoke-OpsWindowsScriptPair.
+
+    .PARAMETER IgnoreCommand
+    Recorded command names to leave out of the check.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Pair,
+
+        [string[]]$IgnoreCommand = @()
+    )
+
+    $Pair.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($Pair.WhatIf.Output)"
+    $mutations = @(Get-OpsMutationRecord -Path $Pair.WhatIfLog | Where-Object { $_.Command -notin $IgnoreCommand })
+    $mutations.Count | Should -Be 0 -Because "-WhatIf attempted: $($mutations | ConvertTo-Json -Compress)"
+}
 
 function Use-FakeWebAdministration {
     <#
@@ -698,6 +835,9 @@ Export-ModuleMember -Function @(
     'Use-FakeActiveDirectory'
     'Use-FakeSystemModule'
     'Get-WindowsMutationStubText'
+    'Get-OpsMutationRecord'
+    'Invoke-OpsWindowsScriptPair'
+    'Assert-OpsNoChangeUnderWhatIf'
     'Use-FakeWebAdministration'
     'Use-FakePlaceholderModule'
     'Invoke-ScriptUnderTest'

@@ -81,7 +81,7 @@ See [docs/retirement-review.md](docs/retirement-review.md) for the full keep/ret
 | `scripts\it-operations\utilities\`            | General endpoint and admin utilities                                                                                                                         |
 | `scripts\it-operations\windows-file-cleanup\` | File, temp-folder, and cache reclaim helpers                                                                                                                 |
 | `scripts\it-operations\lifecycle\`            | OS support lifecycle, upgrade readiness, and update health                                                                                                   |
-| `scripts\it-operations\windows-hardening\`    | Workstation idle-lock, sleep, browser credential, BitLocker, local admin posture, plus system-level TLS/privacy/bloatware hardening and its compliance check |
+| `scripts\it-operations\windows-hardening\`    | Windows 11 hardening (TLS, privacy, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and a compliance check |
 | `scripts\certificates\`                       | Certificate expiry across stores, IIS bindings, and TLS endpoints                                                                                            |
 | `scripts\logging\`                            | Security logging posture: what is being recorded and for how long                                                                                            |
 | `scripts\email\thunderbird\`                  | Thunderbird MBOX extraction and Parquet export pipeline                                                                                                      |
@@ -382,7 +382,12 @@ Verify applied hardening is still in place, and prove the TLS client policy with
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ComputerName srv01,srv02 -FailOnDrift
+pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker -FailOnDrift"
 ```
+
+The default checks `SchannelTls` and `Privacy`; the standalone-machine targets are named with
+`-Target`. An item that cannot be read, often because the shell is not elevated, is reported
+`Unread` and keeps `Passed` false; run elevated for a complete verification.
 
 Preview Windows Schannel/TLS hardening and write plan reports:
 
@@ -469,9 +474,64 @@ script reports, without changing, the talk defenses that are not a single machin
 Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local administrator
 rights (deferring the full membership and LAPS view to `Export-LocalAdminAndLapsPosture.ps1`).
 
+Harden a standalone (not domain-joined) Windows 11 machine past the privacy and TLS baseline. Each
+script below takes a required `-ReportDirectory`, writes a plan and a state file, applies only from
+an elevated shell, and records a rollback JSON that `-Rollback` replays. Run each with `-WhatIf`
+first, read the plan, then apply one at a time:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsExploitMitigation.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsAuditLogging.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsRemoteAccessPosture.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPolicy.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsFirewallBaseline.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacAuditPolicy.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <folder off the system drive> -WhatIf
+```
+
+The defaults lean safe, and the disruptive half of each control is a switch you add:
+
+- Defender: attack surface reduction rules, Controlled Folder Access and network protection start in
+  audit mode. `-AsrMode Block`, `-ControlledFolderAccess Enabled` and `-NetworkProtection Enabled`
+  turn them on once the audit events look clean.
+- Credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no
+  LM hash. Credential Guard, memory integrity, the UEFI lock and DMA protection are opt-in switches,
+  and they take effect after a restart.
+- Network protocols: SMBv1 and PowerShell 2.0 removed, SMB signing required, LLMNR and NetBIOS over
+  TCP/IP off. `-DisableMulticastDns` is opt-in.
+- Exploit mitigation: system-wide DEP, bottom-up and high-entropy ASLR, SEHOP and CFG, effective
+  after a restart. Mandatory ASLR (`-ForceRelocateImages`) and the Office internet-macro block
+  (`-OfficeMacroPolicy`) are opt-in.
+- Audit logging: script-block and module logging (Windows PowerShell 5.1 policy keys),
+  process-creation command lines, the advanced audit subcategories, and larger Security and
+  PowerShell logs.
+- Remote access: Remote Desktop keeps Network Level Authentication and TLS, Remote Assistance goes
+  off. `-DisableRemoteDesktop` and `-DisableWinRM` are opt-in. The first is refused from inside a
+  Remote Desktop session or when that cannot be told, the second from inside a PowerShell
+  remoting session.
+- Local accounts: lockout after 10 bad passwords, Guest off, UAC prompting on the secure desktop.
+  Disabling or renaming the built-in Administrator is opt-in.
+- Firewall: all three profiles on, inbound blocked and outbound allowed by default, listener
+  prompts off, dropped packets logged. Blocking all inbound on Public and disabling stale program
+  rules are opt-in.
+- WDAC: an audit-only base policy built from a Microsoft example policy. It logs what would have
+  been blocked and blocks nothing; there is no enforce switch. Read the events with
+  `Export-WdacAuditEvent.ps1` before considering enforcement.
+- BitLocker: TPM protector, XTS-AES 256, used space only. The recovery password is written to
+  `-RecoveryKeyDirectory`, which must be off the system drive, and read back before encryption
+  starts; it never appears in a report. Run it last, and move the key file off the machine.
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1 -Days 14
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -Rollback -WhatIf
+```
+
 > **Folder note:** `scripts\it-operations\windows-hardening\` mixes two run cadences. System-level
-> hardening (TLS cipher policy, Windows 11 privacy/telemetry, AppX bloatware removal) is typically
-> run once at build or provisioning time. Operator posture scripts (idle-lock, sleep, browser
+> hardening (TLS cipher policy, Windows 11 privacy/telemetry, AppX bloatware removal, and the
+> standalone-machine scripts above) is typically run once at build or provisioning time. Operator posture scripts (idle-lock, sleep, browser
 > credential hardening) are run and rolled back as workload needs change.
 
 Report OS support lifecycle and how long each machine has left:
@@ -579,6 +639,17 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 | `scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1`             | New script reclaiming pip cache, Docker build cache and dangling images, Recycle Bin, and WinSxS component store by default, with npm, torch, pre-commit, Codex runtime, NVIDIA shader, Playwright, Hugging Face, stopped-container, unused-volume, superseded image-tag, Windows Update cache, and Docker virtual-disk compaction targets available by name, plus `-WhatIf`, target selection, admin gating, and plan/state reports. |
 | `scripts\it-operations\performance\Set-WorkstationPerformance.ps1`                   | New script setting workstation performance posture (Ultimate/High Performance power plan plus opt-in Defender path/process exclusions) with `-WhatIf`, `-Rollback`, admin gating, and plan/state/rollback reports.                                                                                                                                                                                                                    |
 | `scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1`             | New script setting workstation idle-lock and sleep posture (never sleep/hibernate on AC, screensaver lock) with `-WhatIf`, `-Rollback`, optional elevated ConsoleLock and machine-wide inactivity lock.                                                                                                                                                                                                                               |
+| `scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1`           | New state-changing Defender hardening for a standalone machine: attack surface reduction rules, Controlled Folder Access and network protection in audit mode by default (block or enable by switch), PUA and cloud protection, with `-WhatIf`, `-Rollback` and plan/state/rollback reports.                                                                                                                                          |
+| `scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1`        | New state-changing credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no LM hash, with Credential Guard, memory integrity, the UEFI lock and DMA protection opt-in, plus `-WhatIf` and `-Rollback`.                                                                                                                                                                                      |
+| `scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1`    | New state-changing removal of SMBv1 and PowerShell 2.0, required SMB signing, and LLMNR and NetBIOS over TCP/IP off, with opt-in mDNS off, `-WhatIf` and `-Rollback` that re-enables only what it disabled.                                                                                                                                                                                                                           |
+| `scripts\it-operations\windows-hardening\Set-WindowsExploitMitigation.ps1`           | New state-changing system-wide exploit mitigations (DEP, bottom-up and high-entropy ASLR, SEHOP, CFG) with an exported prior configuration, opt-in mandatory ASLR and Office internet-macro blocking, `-WhatIf` and `-Rollback`.                                                                                                                                                                                                      |
+| `scripts\it-operations\windows-hardening\Set-WindowsAuditLogging.ps1`                | New state-changing audit logging: PowerShell script-block and module logging, process-creation command lines, advanced audit subcategories by GUID, and larger event logs, with an auditpol backup, `-WhatIf` and `-Rollback`.                                                                                                                                                                                                        |
+| `scripts\it-operations\windows-hardening\Set-WindowsRemoteAccessPosture.ps1`         | New state-changing Remote Desktop, Remote Assistance and WinRM posture: NLA and TLS kept on, Remote Assistance off, opt-in Remote Desktop and WinRM disable (refused from inside a remote session), `-WhatIf` and `-Rollback`.                                                                                                                                                                                                        |
+| `scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPolicy.ps1`          | New state-changing local account lockout, Guest disable, and UAC secure-desktop prompting, with opt-in disable or rename of the built-in Administrator (refused when it is the only enabled administrator), `-WhatIf` and `-Rollback`.                                                                                                                                                                                                |
+| `scripts\it-operations\windows-hardening\Set-WindowsFirewallBaseline.ps1`            | New state-changing firewall baseline pinning all three profiles (on, inbound blocked, prompts off, dropped packets logged) after a netsh export, with opt-in inbound rule cleanup, `-WhatIf` and `-Rollback`.                                                                                                                                                                                                                         |
+| `scripts\it-operations\windows-hardening\Set-WdacAuditPolicy.ps1`                    | New state-changing Windows Defender Application Control policy in audit mode only, built from a Microsoft example policy and deployed with CiTool. There is no enforce switch; `-Rollback` removes the policy it recorded.                                                                                                                                                                                                            |
+| `scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1`                  | New read-only report of WDAC audit events (Code Integrity 3076, 3077, 3089) grouped by file and publisher, for judging a policy before it is enforced.                                                                                                                                                                                                                                                                                |
+| `scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1`               | New state-changing BitLocker enable for the OS volume (TPM, XTS-AES 256, used space only) that writes the recovery password to an operator-named folder off the system drive and reads it back before encryption starts, never into a report, with `-WhatIf` and `-Rollback`.                                                                                                                                                         |
 | `scripts\entra\Export-EntraAppCredentialExpiry.ps1`                                  | New report-only Entra ID credential expiry export covering app registration and service principal secrets and certificates, with optional owner lookup and a sign-in match that says whether an expiring credential is still in use.                                                                                                                                                                                                  |
 | `scripts\entra\Export-CloudIncidentReadiness.ps1`                                    | New read-only collector grading whether this tenant's logging, roles, and identity controls could support an incident investigation today across nine checks (audit log ingestion, Entra and subscription log export, workspace retention, Graph activity logs, responder role eligibility, break-glass FIDO2 coverage, user consent, Conditional Access coverage of the device code flow). Feeds control IR-02 in the evidence pack. |
 | `scripts\entra\Invoke-EntraUserContainment.ps1`                                      | New state-changing Entra ID incident containment for a list of users: exports inbox rules and forwarding through Exchange Online first, then revokes sign-in sessions and disables the account, with an opt-in generated one-time password reset, `-WhatIf`, `-ExportOnly` and `-Rollback`. Synced users are reported as needing Active Directory. Unverified against a live tenant.                                                  |

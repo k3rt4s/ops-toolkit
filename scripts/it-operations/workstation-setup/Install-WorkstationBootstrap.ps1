@@ -56,6 +56,7 @@ Active script kept in the reorganized ops-toolkit repo. Windows PowerShell 5.1 c
 no PowerShell 7 yet.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'BitLockerRecoveryKeyDirectory', Justification = 'Read inside Get-HardeningCommand through script scope.')]
 param(
     # Accepts 'Core,Comms' as one string too: powershell.exe -File passes a comma list as a single token.
     [Parameter()]
@@ -740,7 +741,7 @@ function Invoke-Phase8HardeningPreview {
         }
         [void]$script:ManualSteps.Add($line)
     }
-    [void]$script:ManualSteps.Add('  Verify afterwards: pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1')
+    [void]$script:ManualSteps.Add('  Verify afterwards, elevated: pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls,Privacy,Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker')
     [void]$script:ManualSteps.Add('  The AppX removal script needs -RemoveProvisionedPackages -InstalledPackageScope AllUsers to remove for new users too; read its header first.')
     [void]$script:ManualSteps.Add('  Credential protection and the BitLocker hardware test take effect after a restart. Run BitLocker last, then move its recovery key file somewhere safe off this machine.')
     [void]$script:ManualSteps.Add('  The WDAC policy is audit only. Review its events with Export-WdacAuditEvent.ps1 before considering enforcement.')

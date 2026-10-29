@@ -43,7 +43,7 @@ work, and is not indexed.
 - **laps-typo** Rename `$posturePropbe` to `$postureProbe` at its declaration and two uses in `Export-LocalAdminAndLapsPosture.ps1`. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.05/0.1/0.25 p=0.3 freq=1 hours=0.1/0.2/0.5 rev=two-way conf=assessed id=laps-typo` `return: likelihood the script is read about once a year, p 0.3, estimated; impact a reader pauses a few minutes on a name that looks like a bug and is not; evidence scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1 lines 75, 169 and 171 on 2026-10-02, spelled the same at all three so it runs correctly`
   - `worker: haiku 0.1/0.2/0.5 h`
 
-Five items were filed on 2026-10-29 when the standalone Windows 11 hardening scripts landed;
+Six items were filed on 2026-10-29 when the standalone Windows 11 hardening scripts landed;
 a sixth, domain-joined variants (hard-domain, score 0.0), went to `BOARD_DEFERRED_2026.md`
 beside the board. Detail, and the list of facts the scripts assume but nobody has checked on a
 real machine, is under "Ingested 2026-10-29: standalone Windows 11 hardening follow-ups" below.
@@ -55,6 +55,9 @@ real machine, is under "Ingested 2026-10-29: standalone Windows 11 hardening fol
   - `worker: sonnet 4/8/16 h`
 
 - **bitlocker-tpm-pin** Offer a TPM plus PIN protector on `Enable-BitLockerOsVolume.ps1`, behind a switch, with the PIN taken as a SecureString and never logged. `score: kind=feature gain=1/2/6 p=0.3 hours=1.5/3/6 risk=0.1x2 rev=two-way conf=opinion flags=security id=bitlocker-tpm-pin` `return: likelihood wanted for a laptop that travels, p 0.3, opinion; impact pre-boot authentication closes the stolen-laptop cold-boot and DMA paths a TPM-only protector leaves open, a few hours of exposure analysis per incident avoided; evidence the script adds TPM only, and the fake BitLocker module already accepts -TpmAndPinProtector`
+  - `worker: sonnet 1.5/3/6 h`
+
+- **pack-unread** Have `Export-SecurityControlEvidencePack.ps1` read the hardening checker's `UnreadCount` and `Passed`, report CFG-01 as NotAssessed or Partial while items are unread, and then pass the standalone-machine targets to the checker. `score: kind=prevent gain=1/3/8 p=0.3 hours=1.5/3/6 risk=0.1x2 rev=two-way conf=opinion flags=security id=pack-unread` `return: likelihood the pack is run on a machine hardened by the new scripts, p 0.3, opinion; impact today CFG-01 reads Met from TotalDrift, ItemsChecked and CompliantCount alone, so if the new targets were added without this an unread control would vanish from the counts and the control would read as met in a questionnaire; evidence Export-SecurityControlEvidencePack.ps1 lines 1110-1123 and the checker's default kept at SchannelTls and Privacy on 2026-10-29 for that reason`
   - `worker: sonnet 1.5/3/6 h`
 
 - **hard-offhost** Off-host copies of what the scripts produce on the machine: forward the new audit and Code Integrity events, and record where the BitLocker recovery key was moved. `score: kind=prevent gain=1/3/10 p=0.2 hours=3/6/12 rev=two-way conf=opinion flags=security id=hard-offhost` `return: likelihood an incident on a hardened machine, p 0.2 a year, opinion; impact logs that live only on the compromised machine can be cleared, and a key file nobody can find makes recovery a rebuild, several hours either way; evidence Set-WindowsAuditLogging.ps1 sizes local logs only and Enable-BitLockerOsVolume.ps1 writes one key file to the operator's folder`

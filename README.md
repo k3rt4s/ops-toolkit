@@ -382,7 +382,12 @@ Verify applied hardening is still in place, and prove the TLS client policy with
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ComputerName srv01,srv02 -FailOnDrift
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker -FailOnDrift
 ```
+
+The default checks `SchannelTls` and `Privacy`; the standalone-machine targets are named with
+`-Target`. An item that cannot be read, often because the shell is not elevated, is reported
+`Unread` and keeps `Passed` false; run elevated for a complete verification.
 
 Preview Windows Schannel/TLS hardening and write plan reports:
 

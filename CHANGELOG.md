@@ -45,6 +45,16 @@ elevated halves of their tests are skipped on an unelevated runner.
 `-BitLockerRecoveryKeyDirectory`; without it BitLocker is `Skipped` and its apply command
 carries a placeholder. A phase 8 test checks every listed script exists and the skip.
 
+`Test-WindowsHardeningState.ps1` verifies the ten new targets by name (`-Target Defender,
+Firewall,BitLocker` and so on). It runs each new script with `-WhatIf` and maps its apply-state
+results; BitLocker is read with `Get-BitLockerVolume` and never touches a key protector. An
+item it cannot read is `Unread`, and an unread or remotely unchecked item now keeps `Passed`
+false, so `-FailOnDrift` exits 1 on it; this also applies to the services and scheduled tasks a
+remote `Privacy` run cannot read, which used to pass. The default is still `SchannelTls` and
+`Privacy`, because the evidence pack runs the checker with no `-Target` and does not yet read
+`UnreadCount`. A run of the new targets leaves the scripts' own restore points (exploit
+protection XML, auditpol CSV, firewall export) in its run folder.
+
 ### Fixed: test recorders passed under -WhatIf whether or not a script was gated
 
 - Stub recorders injected into a script's runspace inherited the caller's `-WhatIf`, so the

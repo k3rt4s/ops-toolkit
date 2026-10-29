@@ -197,7 +197,13 @@ Check compliance against the hardening baselines above (registry state plus a li
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
+pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Defender,Firewall,BitLocker -FailOnDrift
 ```
+
+The default checks `SchannelTls` and `Privacy` only. Name the standalone-machine targets
+(Defender, CredentialProtection, NetworkProtocol, ExploitMitigation, AuditLogging,
+RemoteAccess, LocalAccount, Firewall, WdacAudit, BitLocker) with `-Target`. An unread item
+keeps `Passed` false.
 
 Join an applications CSV to an endpoints CSV on agent/endpoint name:
 

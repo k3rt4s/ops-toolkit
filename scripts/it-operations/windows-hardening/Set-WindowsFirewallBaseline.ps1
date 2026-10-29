@@ -190,8 +190,6 @@ function Export-FirewallBackup {
     param([Parameter(Mandatory = $true)][string]$Path, [bool]$ChangeCanFollow)
     # A plan artifact: written on every run, -WhatIf included. A failed export stops the run only
     # when a change could follow it; otherwise it is a warning and no backup path is returned.
-    # The preview preference is cleared here so nothing called below is previewed instead of run.
-    $WhatIfPreference = $false
     $global:LASTEXITCODE = 0
     $output = & netsh.exe advfirewall export $Path 2>&1
     $exit = $global:LASTEXITCODE

@@ -65,7 +65,7 @@ Describe 'New-AzFileShareMappedDrive' {
 `$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$log'
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target)
-    Add-Content -LiteralPath '$log' -Encoding utf8 -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath '$log' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
 }
 function cmdkey.exe { Write-OpsTestMutation -Command 'cmdkey.exe' -Target (`$args -join ' ') }
 function New-PSDrive { param(`$Name, `$PSProvider, `$Root, [switch]`$Persist, `$Credential, `$Scope) Write-OpsTestMutation -Command 'New-PSDrive' -Target "`$Name=`$Root" }
@@ -137,7 +137,7 @@ Describe 'New-AzKeyVaultServicePrincipal' {
 `$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$log'
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target)
-    Add-Content -LiteralPath '$log' -Encoding utf8 -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath '$log' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
 }
 function Get-AzContext { [pscustomobject]@{ Subscription = [pscustomobject]@{ Id = 'sub-1' }; Tenant = [pscustomobject]@{ Id = 'tenant-1' } } }
 function Set-AzContext { param(`$SubscriptionId, `$TenantId) }
@@ -226,7 +226,7 @@ Describe 'Set-AzAppGatewayTlsPolicy' {
 `$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$log'
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target)
-    Add-Content -LiteralPath '$log' -Encoding utf8 -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath '$log' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
 }
 function Get-AzContext { [pscustomobject]@{ Subscription = [pscustomobject]@{ Id = 'sub-1' } } }
 function Connect-AzAccount { Write-OpsTestMutation -Command 'Connect-AzAccount' -Target 'interactive' }
@@ -304,7 +304,7 @@ Describe 'Import-AzureVpnClientXmlProfile' {
 `$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$log'
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target)
-    Add-Content -LiteralPath '$log' -Encoding utf8 -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath '$log' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
 }
 function azurevpn { Write-OpsTestMutation -Command 'azurevpn' -Target (`$args -join ' ') }
 "@
@@ -364,7 +364,7 @@ Describe 'Initialize-AzPowerShellSession' {
 `$env:OPSTOOLKIT_TEST_MUTATION_LOG = '$log'
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target)
-    Add-Content -LiteralPath '$log' -Encoding utf8 -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
+    Add-Content -LiteralPath '$log' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{ Command = `$Command; Target = `$Target } | ConvertTo-Json -Compress)
 }
 function Get-AzContext { $context }
 function Set-AzContext { param(`$SubscriptionId, `$TenantId) Write-OpsTestMutation -Command 'Set-AzContext' -Target ([string]`$SubscriptionId) }

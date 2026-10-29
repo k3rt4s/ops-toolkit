@@ -321,7 +321,7 @@ function Get-WindowsMutationStubText {
 
 function Write-OpsTestMutation {
     param([string]`$Command, [string]`$Target, [string]`$Detail)
-    Add-Content -LiteralPath '$MutationLogPath' -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath '$MutationLogPath' -Encoding utf8 -WhatIf:`$false -Value ([pscustomobject]@{
         Command = `$Command; Target = `$Target; Detail = `$Detail } | ConvertTo-Json -Compress)
 }
 
@@ -390,7 +390,12 @@ function powercfg { Write-OpsTestMutation -Command 'powercfg' -Target (`$args -j
 # caches, which is a change to the machine even though no test asserts on it. wsl and
 # diskpart.exe matter more still, because between them they stop every WSL distro and
 # attach a virtual disk.
-function pip { Write-OpsTestMutation -Command 'pip' -Target (`$args -join ' ') -Detail '' }
+# "pip cache dir" is the planner's read of where the cache lives, so it answers nothing
+# (no size estimate) rather than recording, the same split the docker stub makes below.
+function pip {
+    if ((`$args -join ' ') -eq 'cache dir') { return }
+    Write-OpsTestMutation -Command 'pip' -Target (`$args -join ' ') -Detail ''
+}
 function npm { Write-OpsTestMutation -Command 'npm' -Target (`$args -join ' ') -Detail '' }
 function wsl { Write-OpsTestMutation -Command 'wsl' -Target (`$args -join ' ') -Detail '' }
 function wsl.exe { Write-OpsTestMutation -Command 'wsl.exe' -Target (`$args -join ' ') -Detail '' }

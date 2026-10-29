@@ -193,7 +193,7 @@ Describe 'Send-AdPasswordExpiryReminderEmails' {
 # "System.String[]", which hides the very thing this records: who was mailed.
 function Send-MailMessage {
     param($SmtpServer, $From, $To, $Subject, $Body, [switch]$BodyAsHtml)
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value (
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value (
         [pscustomobject]@{
             Command    = 'Send-MailMessage'
             Recipients = ($To -join ';')

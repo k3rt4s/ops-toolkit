@@ -225,8 +225,8 @@ function Get-CimInstance {
     }
     [pscustomobject]@{ AutomaticManagedPagefile = $true; TotalPhysicalMemory = 34359738368 }
 }
-function Set-CimInstance { param($InputObject, $Property) Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value 'Set-CimInstance' }
-function Invoke-CimMethod { param($InputObject, $MethodName, $Arguments) Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value "Invoke-CimMethod:$MethodName" }
+function Set-CimInstance { param($InputObject, $Property) Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value 'Set-CimInstance' }
+function Invoke-CimMethod { param($InputObject, $MethodName, $Arguments) Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value "Invoke-CimMethod:$MethodName" }
 '@
 
         $script:pageLog = Join-Path $script:workRoot 'page.log'

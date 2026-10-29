@@ -137,6 +137,112 @@ function Get-MachineStateSnapshot {
         $snapshot['PSDrives'] = "unreadable: $($_.Exception.Message)"
     }
 
+    # The hardening scripts change Defender attack surface settings, the firewall,
+    # BitLocker, code integrity policy, SMB, LSA and credential registry values, the
+    # audit policy and the local lockout policy. Each probe is read on its own so one
+    # that cannot run (usually: not elevated) does not blind the others.
+    try {
+        $preference = Get-MpPreference -ErrorAction Stop
+        $asrIds = @($preference.AttackSurfaceReductionRules_Ids | Where-Object { $_ })
+        $asrActions = @($preference.AttackSurfaceReductionRules_Actions)
+        $asrPairs = for ($i = 0; $i -lt $asrIds.Count; $i++) {
+            $action = if ($i -lt $asrActions.Count) { [string]$asrActions[$i] } else { 'unset' }
+            "$($asrIds[$i])=$action"
+        }
+        $asrText = (@($asrPairs) | Sort-Object) -join '|'
+        $snapshot['DefenderAsrRules'] = if ($asrText) { $asrText } else { 'none' }
+        $snapshot['DefenderControlledFolderAccess'] = [string]$preference.EnableControlledFolderAccess
+        $snapshot['DefenderNetworkProtection'] = [string]$preference.EnableNetworkProtection
+        $snapshot['DefenderPuaProtection'] = [string]$preference.PUAProtection
+    } catch {
+        foreach ($key in @('DefenderAsrRules', 'DefenderControlledFolderAccess', 'DefenderNetworkProtection', 'DefenderPuaProtection')) {
+            $snapshot[$key] = "unreadable: $($_.Exception.Message)"
+        }
+    }
+
+    try {
+        $profiles = @(Get-NetFirewallProfile -Profile Domain, Private, Public -ErrorAction Stop |
+                Sort-Object -Property Name |
+                ForEach-Object { "$($_.Name):$($_.Enabled)/$($_.DefaultInboundAction)/$($_.DefaultOutboundAction)/$($_.AllowLocalFirewallRules)" })
+        $snapshot['FirewallProfiles'] = $profiles -join '|'
+        if (-not $snapshot['FirewallProfiles']) { $snapshot['FirewallProfiles'] = 'none' }
+    } catch {
+        $snapshot['FirewallProfiles'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $snapshot['FirewallDisabledRuleCount'] = [string]@(Get-NetFirewallRule -Enabled False -ErrorAction Stop).Count
+    } catch {
+        $snapshot['FirewallDisabledRuleCount'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $volume = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+        $snapshot['BitLockerOsVolume'] = "ProtectionStatus=$($volume.ProtectionStatus);VolumeStatus=$($volume.VolumeStatus)"
+    } catch {
+        $snapshot['BitLockerOsVolume'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        if (Get-Command -Name 'CiTool.exe' -CommandType Application -ErrorAction SilentlyContinue) {
+            $ciText = (& CiTool.exe --list-policies --json 2>&1 | Out-String)
+            $ciJson = $ciText | ConvertFrom-Json -ErrorAction Stop
+            $policyIds = @($ciJson.Policies | ForEach-Object { [string]$_.PolicyID })
+            $ciValue = ($policyIds | Sort-Object) -join '|'
+            $snapshot['CodeIntegrityPolicies'] = if ($ciValue) { $ciValue } else { 'none' }
+        } else {
+            $snapshot['CodeIntegrityPolicies'] = 'CiTool absent'
+        }
+    } catch {
+        $snapshot['CodeIntegrityPolicies'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $snapshot['Smb1Protocol'] = [string](Get-SmbServerConfiguration -ErrorAction Stop).EnableSMB1Protocol
+    } catch {
+        $snapshot['Smb1Protocol'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $registryValues = foreach ($entry in @(
+                @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'; Name = 'RunAsPPL' }
+                @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'; Name = 'LmCompatibilityLevel' }
+                @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'; Name = 'EnableVirtualizationBasedSecurity' }
+                @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'; Name = 'fDenyTSConnections' }
+            )) {
+            # A missing value is a state, not a failure: Get-ItemProperty -Name on a
+            # missing value is silent, and reading it through a null object would throw.
+            $item = Get-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue
+            $value = if ($null -ne $item -and $null -ne $item.PSObject.Properties[$entry.Name]) { [string]$item.PSObject.Properties[$entry.Name].Value } else { 'absent' }
+            "$($entry.Name)=$value"
+        }
+        $snapshot['LsaAndCredentialRegistry'] = @($registryValues) -join '|'
+    } catch {
+        $snapshot['LsaAndCredentialRegistry'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $auditText = (& auditpol.exe /get /category:* 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) { throw "auditpol.exe exited $LASTEXITCODE. $($auditText.Trim())" }
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $snapshot['AuditPolicy'] = 'sha256=' + ([BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($auditText))) -replace '-', '')
+        } finally {
+            $sha.Dispose()
+        }
+    } catch {
+        $snapshot['AuditPolicy'] = "unreadable: $($_.Exception.Message)"
+    }
+
+    try {
+        $accountText = (& net.exe accounts 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) { throw "net.exe accounts exited $LASTEXITCODE. $($accountText.Trim())" }
+        $lockoutLines = @($accountText -split "\r?\n" | Where-Object { $_ -match 'lockout' } | ForEach-Object { $_.Trim() })
+        $snapshot['LocalAccountLockout'] = if ($lockoutLines.Count) { $lockoutLines -join '|' } else { 'none' }
+    } catch {
+        $snapshot['LocalAccountLockout'] = "unreadable: $($_.Exception.Message)"
+    }
+
     $snapshot
 }
 

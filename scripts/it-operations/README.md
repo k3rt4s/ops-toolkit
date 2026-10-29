@@ -4,16 +4,16 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 ## Contents
 
-| Path                        | Purpose                                                                                                                                                          |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `networking\`               | Network adapter MAC address helpers.                                                                                                                             |
-| `performance\`              | Workstation performance posture helpers.                                                                                                                         |
-| `printers\`                 | Windows printer connection helpers.                                                                                                                              |
-| `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                 |
-| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                    |
-| `windows-hardening\`        | Workstation idle-lock and sleep posture, browser credential-theft surface hardening, plus system-level TLS/privacy/bloatware hardening and its compliance check. |
-| `workstation-setup\`        | Fresh Windows 11 workstation bootstrap: apps, VS Code, Python, modules, workspace clones, and a WhatIf preview of the hardening scripts. |
-| `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                   |
+| Path                        | Purpose                                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `networking\`               | Network adapter MAC address helpers.                                                                                                                                                  |
+| `performance\`              | Workstation performance posture helpers.                                                                                                                                              |
+| `printers\`                 | Windows printer connection helpers.                                                                                                                                                   |
+| `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                                      |
+| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                                         |
+| `windows-hardening\`        | Standalone Windows 11 hardening (TLS, privacy, bloatware, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and its compliance check. |
+| `workstation-setup\`        | Fresh Windows 11 workstation bootstrap: apps, VS Code, Python, modules, workspace clones, and a WhatIf preview of the hardening scripts.                                              |
+| `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                                        |
 
 ## Examples
 
@@ -173,6 +173,22 @@ Preview removing provisioned AppX bloatware, then apply and roll back from a sav
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
+```
+
+Preview the standalone-machine hardening scripts. Each needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; the repository README lists what each one changes by default and what is opt-in:
+
+```powershell
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsExploitMitigation.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsAuditLogging.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsRemoteAccessPosture.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPolicy.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsFirewallBaseline.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacAuditPolicy.ps1 -ReportDirectory <dir> -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1 -Days 14
+pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <folder off the system drive> -WhatIf
 ```
 
 Check compliance against the hardening baselines above (registry state plus a live TLS handshake probe):

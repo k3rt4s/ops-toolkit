@@ -10,6 +10,8 @@ Instructions:
   behaviour of the real cmdlets, so a script can build its policy artifacts under test. None of
   them changes the machine; applying a policy is CiTool.exe's job and is stubbed by the test.
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record each call.
+- Set OPSTOOLKIT_TEST_CI_IGNORE_OPTION to a rule option number to make Set-RuleOption accept that option
+  and write nothing.
 
 Purpose:
 Policy authoring is file work, but a fake still keeps the test from depending on whether the
@@ -58,7 +60,12 @@ function Set-RuleOption {
         [int]$Option,
         [switch]$Delete
     )
-    $names = @{ 3 = 'Enabled:Audit Mode'; 0 = 'Enabled:UMCI' }
+    $names = @{ 3 = 'Enabled:Audit Mode'; 6 = 'Enabled:Unsigned System Integrity Policy'; 0 = 'Enabled:UMCI' }
+    # Simulates a cmdlet that reports success without writing the option, so a script's own check can be tested.
+    if ($env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION -and "$Option" -eq $env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION) {
+        Write-FakeCiMutation -Command 'Set-RuleOption' -Target $FilePath -Detail "option=$Option;delete=$([bool]$Delete);ignored=True"
+        return
+    }
     $xml = New-Object System.Xml.XmlDocument
     $xml.Load($FilePath)
     $ns = $xml.DocumentElement.NamespaceURI

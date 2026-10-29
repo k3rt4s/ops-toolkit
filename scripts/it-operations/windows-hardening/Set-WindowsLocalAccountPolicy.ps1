@@ -28,7 +28,7 @@ Instructions:
 - Report-only item (no change is ever made): the members of the local Administrators group and
   whether the current user is one. A daily-use account that is an administrator is a least-privilege
   finding; use a separate standard account for daily work.
-- UAC changes take effect for new sessions; EnableLUA changing from 0 to 1 requires a reboot and is
+- UAC changes take effect for new sessions; a change to EnableLUA requires a reboot and is
   flagged RequiresReboot. Anything that cannot be read is reported as 'unknown', never as compliant.
 - The 24H2 Administrator Protection setting is deliberately not covered: its registry value name and
   data were not verified against Microsoft documentation, so it is left out rather than guessed.

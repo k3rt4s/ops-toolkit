@@ -143,9 +143,11 @@ function Get-MachineStateSnapshot {
     # that cannot run (usually: not elevated) does not blind the others.
     try {
         $preference = Get-MpPreference -ErrorAction Stop
-        $asrIds = @($preference.AttackSurfaceReductionRules_Ids | Where-Object { $_ })
+        # Ids stay unfiltered so index i of the ids still lines up with index i of the actions.
+        $asrIds = @($preference.AttackSurfaceReductionRules_Ids)
         $asrActions = @($preference.AttackSurfaceReductionRules_Actions)
         $asrPairs = for ($i = 0; $i -lt $asrIds.Count; $i++) {
+            if (-not $asrIds[$i]) { continue }
             $action = if ($i -lt $asrActions.Count) { [string]$asrActions[$i] } else { 'unset' }
             "$($asrIds[$i])=$action"
         }

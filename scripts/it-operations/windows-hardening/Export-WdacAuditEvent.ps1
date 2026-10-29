@@ -10,7 +10,9 @@ Instructions:
 - Run elevated if the log is not readable by your account. A log that cannot be read is
   reported as Unreadable with the reason, never as zero events.
 - Event 3076 means a file would have been blocked by a policy in audit mode. Event 3089 carries
-  the signature (publisher and issuer) details for a file named by a nearby 3076 or 3077 event.
+  the signature (publisher and issuer) details for a file. Publishers are matched to a file by its
+  file path across the whole -Days window, not by event proximity, and a file seen with more than
+  one signer lists all of them.
   Event 3077 means a file WAS blocked by an enforced policy; it is included so an enforced
   policy cannot hide in an audit review. Events 8028 and 8029 (script and installer enforcement)
   are not read by this script.

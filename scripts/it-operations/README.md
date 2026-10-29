@@ -175,7 +175,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBl
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 ```
 
-Preview the standalone-machine hardening scripts. Each needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; the repository README lists what each one changes by default and what is opt-in:
+Preview the standalone-machine hardening scripts. Each state-changing one needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; `Export-WdacAuditEvent.ps1` only reads. The repository README lists what each one changes by default and what is opt-in:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -WhatIf
@@ -197,7 +197,7 @@ Check compliance against the hardening baselines above (registry state plus a li
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
-pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Defender,Firewall,BitLocker -FailOnDrift
+pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,Firewall,BitLocker -FailOnDrift"
 ```
 
 The default checks `SchannelTls` and `Privacy` only. Name the standalone-machine targets

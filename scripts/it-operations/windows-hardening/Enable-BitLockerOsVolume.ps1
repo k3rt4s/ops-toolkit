@@ -10,11 +10,16 @@ Instructions:
   OTHER than the operating-system volume, for example a removable drive or a network share
   you can reach when this machine will not boot. The script refuses, and changes nothing, if
   the directory is missing, is on the operating-system volume ($env:SystemDrive), or cannot be
-  written to (a probe file is written and deleted on a live run only).
+  written to (a probe file is written and deleted on a live run only). A substituted drive
+  (subst) or a mapped drive is followed to its real target, and a UNC path whose host is this
+  computer (localhost, 127.0.0.1, ::1, the computer name, or a \\. or \\? device path) is
+  refused, as is any drive the script cannot look up.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   workstation must never be applied to someone else's machine. Generated reports belong under a
   data root outside the repo.
-- Run elevated. A non-elevated live run marks the change step 'Skipped: requires elevation'.
+- Run elevated. A non-elevated live run stops on the elevation precondition ('Failed: session is not
+  elevated'), changes nothing and exits non-zero; under -WhatIf it is 'Skipped: requires elevation'
+  and exits 0.
 - Preconditions, each a plan item, and any failure stops the run before anything changes: the
   session is elevated, the TPM is present and ready (Get-Tpm), Secure Boot is on
   (Confirm-SecureBootUEFI; unreadable is a stop with the reason, never a pass), and the volume
@@ -104,6 +109,86 @@ function Get-PlanItem {
     }
 }
 
+# The two drive lookups below call plain commands (subst, Get-CimInstance) so a test can shadow them.
+# Each throws when it cannot answer; the caller treats that as a refusal, never a pass.
+function Get-SubstitutedDriveTarget {
+    # Returns the target of a SUBST drive ('D:'), or $null when that drive is not substituted.
+    param([Parameter(Mandatory = $true)][string]$DriveLetter)
+
+    $global:LASTEXITCODE = 0
+    $lines = @(& subst 2>&1 | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($global:LASTEXITCODE -ne 0) { throw "subst exited $($global:LASTEXITCODE)" }
+    foreach ($line in $lines) {
+        if ($line -notmatch '^([A-Za-z]:)\\: => (.+)$') { throw "unrecognised subst output '$line'" }
+        if ($Matches[1] -ieq $DriveLetter) {
+            $target = $Matches[2].Trim()
+            if ($target -match '^UNC\\') { $target = '\\' + $target.Substring(4) }
+            return $target
+        }
+    }
+    $null
+}
+
+function Get-MappedDriveRemotePath {
+    # Returns the UNC path of a mapped network drive ('D:'), or $null when the drive is not a network drive.
+    param([Parameter(Mandatory = $true)][string]$DriveLetter)
+
+    $disk = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$DriveLetter'" -ErrorAction Stop | Select-Object -First 1)
+    if ($disk.Count -eq 0 -or $null -eq $disk[0]) { throw "Win32_LogicalDisk returned nothing for $DriveLetter" }
+    if ([int]$disk[0].DriveType -ne 4) { return $null }
+    $provider = [string]$disk[0].ProviderName
+    if ([string]::IsNullOrWhiteSpace($provider)) { throw "network drive $DriveLetter reported no remote path" }
+    $provider
+}
+
+function Test-IsThisComputerHost {
+    param([Parameter(Mandatory = $true)][string]$HostName)
+
+    $name = $HostName.Trim('[', ']').ToLowerInvariant()
+    $computer = ([string]$env:COMPUTERNAME).ToLowerInvariant()
+    if ($name -in @('localhost', '127.0.0.1', '::1', '.', '?', '0-0-0-0-0-0-0-1.ipv6-literal.net')) { return $true }
+    if ($name -match '^127\.\d+\.\d+\.\d+$') { return $true }
+    if ($computer -and ($name -eq $computer -or $name.StartsWith("$computer."))) { return $true }
+    $false
+}
+
+# Returns why the path is on, or cannot be shown to be off, the operating-system volume; $null when it is off it.
+# Follows SUBST drives and mapped network drives to their real target.
+function Get-KeyDirectoryRefusal {
+    param([Parameter(Mandatory = $true)][string]$Path, [int]$Depth = 0)
+
+    $unverified = 'cannot be verified as off the operating-system volume'
+    if ($Depth -gt 8) { return "$unverified (drive mappings nest too deeply to follow)" }
+    if ($Path.StartsWith('\\')) {
+        $hostName = ($Path.Substring(2) -split '\\')[0]
+        if ([string]::IsNullOrWhiteSpace($hostName)) { return "$unverified (its UNC host could not be determined)" }
+        if (Test-IsThisComputerHost -HostName $hostName) { return "is on this computer (UNC host '$hostName'), so it is on a local volume" }
+        return $null
+    }
+    $root = [System.IO.Path]::GetPathRoot($Path)
+    if ($root -notmatch '^[A-Za-z]:\\?$') { return "$unverified (its drive could not be determined)" }
+    $drive = $root.Substring(0, 2)
+    $system = [string]$env:SystemDrive
+    if ($system -and ($drive -ieq $system.TrimEnd('\'))) { return "is on the operating-system volume $system" }
+
+    try { $target = Get-SubstitutedDriveTarget -DriveLetter $drive } catch {
+        return "$unverified (the SUBST table could not be read: $($_.Exception.Message))"
+    }
+    if ($null -ne $target) {
+        $inner = Get-KeyDirectoryRefusal -Path $target -Depth ($Depth + 1)
+        if ($inner) { return "is on drive $drive, which is substituted for '$target'; that target $inner" }
+        return $null
+    }
+    try { $remote = Get-MappedDriveRemotePath -DriveLetter $drive } catch {
+        return "$unverified (drive $drive could not be looked up: $($_.Exception.Message))"
+    }
+    if ($null -ne $remote) {
+        $inner = Get-KeyDirectoryRefusal -Path $remote -Depth ($Depth + 1)
+        if ($inner) { return "is on drive $drive, which is mapped to '$remote'; that path $inner" }
+    }
+    $null
+}
+
 # Refuses before anything is written. Throws; the caller has created no report directory yet.
 function Resolve-RecoveryKeyDirectory {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -112,10 +197,14 @@ function Resolve-RecoveryKeyDirectory {
         throw "Refusing: RecoveryKeyDirectory '$Path' does not exist or is not a directory. Nothing was changed."
     }
     $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath
-    $root = [System.IO.Path]::GetPathRoot($resolved)
-    $system = [string]$env:SystemDrive
-    if ($system -and ($root.TrimEnd('\') -ieq $system.TrimEnd('\'))) {
-        throw "Refusing: RecoveryKeyDirectory '$resolved' is on the operating-system volume $system. A recovery key stored on the volume it protects cannot recover that volume. Nothing was changed."
+    # The path as typed is checked too when it is a UNC or device path, in case resolving rewrote it.
+    $candidates = @($resolved)
+    if ($Path.StartsWith('\\') -and $Path -ne $resolved) { $candidates += $Path }
+    foreach ($candidate in $candidates) {
+        $reason = Get-KeyDirectoryRefusal -Path $candidate
+        if ($reason) {
+            throw "Refusing: RecoveryKeyDirectory '$candidate' $reason. A recovery key stored on the volume it protects cannot recover that volume. Nothing was changed."
+        }
     }
     $resolved
 }
@@ -233,6 +322,11 @@ function Test-PreconditionItem {
         }
         'Elevated' {
             if (Test-IsAdministrator) { return 'Met' }
+            # A live run that cannot change anything must fail, not exit 0; a -WhatIf preview only reports it.
+            if (-not $WhatIfPreference -and -not $script:AlreadyProtected) {
+                $script:StopReason = 'session is not elevated'
+                return "Failed: $($script:StopReason)"
+            }
             return 'Skipped: requires elevation'
         }
         'Tpm' {

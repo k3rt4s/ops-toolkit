@@ -354,11 +354,8 @@ function Get-ForwardPlan {
     }
 
     # --- Controlled Folder Access ---
-    $cfaDesired = if ($ControlledFolderAccess -eq 'Enabled') { 1 } else { 2 }
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'ControlledFolderAccess' -Setting 'EnableControlledFolderAccess' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'EnableControlledFolderAccess') `
-                -Desired $cfaDesired -DesiredLabel $ControlledFolderAccess -RankMap $script:CfaRank))
-
+    # Allowed applications go first: the plan applies in order, so a failed or interrupted run never leaves
+    # Block mode on with the developer tools not yet allowed.
     if ($ControlledFolderAllowedApplication) {
         $hasAppProp = $null -ne $Preference.PSObject.Properties['ControlledFolderAccessAllowedApplications']
         $curApps = @(@(Get-OptionalProperty -InputObject $Preference -Name 'ControlledFolderAccessAllowedApplications') |
@@ -376,6 +373,11 @@ function Get-ForwardPlan {
             }
         }
     }
+
+    $cfaDesired = if ($ControlledFolderAccess -eq 'Enabled') { 1 } else { 2 }
+    $items.Add((ConvertTo-PreferencePlanItem -Category 'ControlledFolderAccess' -Setting 'EnableControlledFolderAccess' `
+                -Current (Get-OptionalProperty -InputObject $Preference -Name 'EnableControlledFolderAccess') `
+                -Desired $cfaDesired -DesiredLabel $ControlledFolderAccess -RankMap $script:CfaRank))
 
     # --- Network protection ---
     $npDesired = if ($NetworkProtection -eq 'Enabled') { 1 } else { 2 }

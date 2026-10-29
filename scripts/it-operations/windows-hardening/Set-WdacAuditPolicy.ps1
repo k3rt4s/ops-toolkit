@@ -18,8 +18,9 @@ Instructions:
   %windir%\schemas\CodeIntegrity\ExamplePolicies (override the folder with
   -ExamplePolicyDirectory). -BasePolicy DefaultWindows (the default) starts from
   DefaultWindows_Audit.xml; AllowMicrosoft starts from AllowMicrosoft.xml. Either way the copy
-  gets a new policy ID, the name 'ops-toolkit WDAC audit', and the Audit Mode rule option
-  forced on (Set-RuleOption -Option 3) before it is converted to a binary policy.
+  gets a new policy ID, the name 'ops-toolkit WDAC audit', and two rule options forced on
+  before it is converted to a binary policy: Audit Mode (Set-RuleOption -Option 3) and Unsigned
+  System Integrity Policy (Set-RuleOption -Option 6, because the policy is deployed unsigned).
 - The single change is: CiTool.exe --update-policy <policy.cip> --json. Before it, the script
   lists active policies (CiTool.exe --list-policies --json) and refuses if a policy with the
   same name from a previous run is already active; roll that one back first. A policy list that
@@ -159,6 +160,7 @@ function Initialize-AuditPolicyArtifact {
 
     Set-CIPolicyIdInfo -FilePath $xmlPath -PolicyName $script:PolicyName -ResetPolicyID
     Set-RuleOption -FilePath $xmlPath -Option 3
+    Set-RuleOption -FilePath $xmlPath -Option 6
 
     $doc = New-Object System.Xml.XmlDocument
     $doc.Load($xmlPath)

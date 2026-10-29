@@ -25,7 +25,8 @@ Builds the forensic visibility a standalone workstation lacks by default:
   A subcategory that already audits what is wanted is left alone, and a forward run only turns audit
   flags on: it never turns an existing flag off. Note that reading a subcategory's current setting
   matches the English words Success, Failure, and No Auditing; on another display language the
-  setting reads as unknown and the (idempotent) enable is applied.
+  setting reads as unknown and the subcategory is reported Skipped and not changed, because the
+  prior value could not be recorded for rollback.
 - Event log maximum sizes for Security, Microsoft-Windows-PowerShell/Operational, and Windows
   PowerShell (parameters, in bytes). A log that is already as large or larger is never shrunk.
 
@@ -384,7 +385,7 @@ function Invoke-PlanItem {
                     # '*' is a wildcard to Remove-ItemProperty -Name; escape it so only that one value goes.
                     Remove-ItemProperty -Path $Item.Path -Name ([System.Management.Automation.WildcardPattern]::Escape($Item.Setting)) -ErrorAction SilentlyContinue
                 } else {
-                    if (-not (Test-Path -Path $Item.Path)) { New-Item -Path $Item.Path | Out-Null }
+                    if (-not (Test-Path -Path $Item.Path)) { New-Item -Path $Item.Path -Force | Out-Null }
                     $value = if ($Item.ValueType -eq 'DWord') { [int]$Item.DesiredValue } else { "$($Item.DesiredValue)" }
                     Set-ItemProperty -Path $Item.Path -Name $Item.Setting -Value $value -Type $Item.ValueType
                 }

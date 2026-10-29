@@ -27,7 +27,7 @@ weaken them, turns on dropped-packet logging for a forensic trail, and reduces t
 listening surface that installers accumulate. Targets a standalone (workgroup) machine and
 changes the local persistent store only, never Group Policy.
 
-Backup: before anything else, on every run including -WhatIf and -Rollback, the script runs
+Backup: before any change is made, on every run including -WhatIf and -Rollback, the script runs
 `netsh advfirewall export` into <ReportDirectory>\firewall-backup-<timestamp>.wfw. If the export
 fails on an elevated executing run the script stops before any change. On a -WhatIf or
 non-elevated run, where nothing can change, a failed export is a warning and BackupPath is empty
@@ -225,7 +225,10 @@ function Get-AddressText {
     if ($filters.Count -eq 0) { return $null }
     $remote = Get-OptionalProperty $filters[0] 'RemoteAddress'
     if ($null -eq $remote) { return $null }
-    (@($remote) | ForEach-Object { "$_" }) -join ','
+    $text = (@($remote) | ForEach-Object { "$_" }) -join ','
+    # An empty address list is unreadable, not a value: a prior '' could not be restored by -Rollback.
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    $text
 }
 
 # ---------------------------------------------------------------------------

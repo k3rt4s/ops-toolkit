@@ -741,7 +741,7 @@ function Invoke-Phase8HardeningPreview {
         }
         [void]$script:ManualSteps.Add($line)
     }
-    [void]$script:ManualSteps.Add('  Verify afterwards, elevated: pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls,Privacy,Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker')
+    [void]$script:ManualSteps.Add('  Verify afterwards, elevated: pwsh -NoProfile -Command "& ''.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'' -Target SchannelTls,Privacy,Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker"')
     [void]$script:ManualSteps.Add('  The AppX removal script needs -RemoveProvisionedPackages -InstalledPackageScope AllUsers to remove for new users too; read its header first.')
     [void]$script:ManualSteps.Add('  Credential protection and the BitLocker hardware test take effect after a restart. Run BitLocker last, then move its recovery key file somewhere safe off this machine.')
     [void]$script:ManualSteps.Add('  The WDAC policy is audit only. Review its events with Export-WdacAuditEvent.ps1 before considering enforcement.')

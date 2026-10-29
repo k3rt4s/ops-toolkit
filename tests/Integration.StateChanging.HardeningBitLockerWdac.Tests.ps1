@@ -45,6 +45,28 @@ BeforeAll {
 `$env:OPSTOOLKIT_TEST_BL_PROTECTORID = '{AAAAAAAA-0000-4000-8000-000000000001}'
 "@
 
+    $script:uncShadow = @'
+function Test-Path {
+    param($Path, $LiteralPath, $PathType)
+    $p = if ($LiteralPath) { "$LiteralPath" } else { "$Path" }
+    if ($p.StartsWith('\\')) { return $true }
+    Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+}
+function Resolve-Path {
+    param($Path, $LiteralPath)
+    $p = if ($LiteralPath) { "$LiteralPath" } else { "$Path" }
+    if ($p.StartsWith('\\')) { return [pscustomobject]@{ Path = $p; ProviderPath = $p } }
+    Microsoft.PowerShell.Management\Resolve-Path @PSBoundParameters
+}
+'@
+
+    # A thrown message is wrapped and decorated by the host, so flatten it before matching a phrase.
+    function Get-FlatText {
+        param([string]$Text)
+        $plain = $Text -replace ([char]27 + '\[[0-9;]*m'), ''
+        $plain -replace '\s*\|\s*', ' ' -replace '\s+', ' '
+    }
+
     function New-WorkDirectory {
         param([string]$Name)
         $path = Join-Path $script:workRoot $Name
@@ -94,7 +116,32 @@ Describe 'Enable-BitLockerOsVolume' {
 
     It 'runs to completion in both modes' {
         $script:bl.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:bl.WhatIf.Output)"
+        if (-not $script:isElevated) {
+            Set-ItResult -Skipped -Because 'an unelevated live run fails by design; see the next two tests'
+            return
+        }
         $script:bl.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:bl.Execute.Output)"
+    }
+
+    It 'fails a live run, with the reason, instead of exiting 0 when not elevated' {
+        if ($script:isElevated) {
+            Set-ItResult -Skipped -Because 'only meaningful in an unelevated session'
+            return
+        }
+        $script:bl.Execute.ExitCode | Should -Not -Be 0
+        $script:bl.Execute.Output | Should -Match 'session is not elevated'
+        (Get-StateItem -ReportDirectory $script:blReports -Mode 'apply' -Setting 'Elevated').Result | Should -Be 'Failed: session is not elevated'
+        @(Get-OpsMutationRecord -Path $script:bl.ExecuteLog | Where-Object { $_.Command -ne 'Remove-Item' }).Count | Should -Be 0
+    }
+
+    It 'only skips the elevation precondition, and exits 0, under -WhatIf when not elevated' {
+        if ($script:isElevated) {
+            Set-ItResult -Skipped -Because 'only meaningful in an unelevated session'
+            return
+        }
+        $script:bl.WhatIf.ExitCode | Should -Be 0
+        # The summary's own items, not the state file: both runs can share one timestamped file name.
+        (@($script:bl.WhatIf.Summary.Items) | Where-Object Setting -eq 'Elevated').Result | Should -Be 'Skipped: requires elevation'
     }
 
     It 'changes nothing under -WhatIf' {
@@ -133,7 +180,6 @@ Describe 'Enable-BitLockerOsVolume' {
         foreach ($name in 'Tpm', 'SecureBoot') {
             (Get-StateItem -ReportDirectory $script:blReports -Mode 'apply' -Setting $name).Result | Should -Be 'Skipped: requires elevation (not read)'
         }
-        $script:bl.Execute.ExitCode | Should -Be 0
     }
 
     It 'adds the recovery protector before enabling BitLocker, with the key file written first' {
@@ -199,6 +245,87 @@ Describe 'Enable-BitLockerOsVolume refusals' {
         $pair.Execute.ExitCode | Should -Not -Be 0
         $pair.Execute.Output | Should -Match 'does not exist'
         @(Get-OpsMutationRecord -Path $pair.ExecuteLog).Count | Should -Be 0
+    }
+
+    # UNC paths cannot be made real in a test, so Test-Path and Resolve-Path answer for them and pass
+    # everything else to the real cmdlets. Resolve-Path on a reachable share returns the UNC path as ProviderPath.
+    It 'refuses a UNC path that points back at this computer (<Unc>) and records nothing' -ForEach @(
+        @{ Unc = '\\localhost\c$\keys' }
+        @{ Unc = '\\127.0.0.1\c$\keys' }
+        @{ Unc = "\\$($env:COMPUTERNAME.ToLowerInvariant())\c$\keys" }
+        @{ Unc = '\\.\C:\keys' }
+        @{ Unc = '\\?\C:\keys' }
+    ) {
+        $reports = Join-Path $script:workRoot "bl-unc-$([guid]::NewGuid().ToString('N'))"
+        $extra = $script:uncShadow
+        $pair = Invoke-Pair -Tag 'bl-unc-local' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $Unc } -FixtureEnvironment $script:blGoodEnv -ExtraSetup $extra
+        $pair.WhatIf.ExitCode | Should -Not -Be 0
+        $pair.Execute.ExitCode | Should -Not -Be 0
+        (Get-FlatText $pair.Execute.Output) | Should -Match 'Refusing: RecoveryKeyDirectory .* is on this computer'
+        @(Get-OpsMutationRecord -Path $pair.ExecuteLog).Count | Should -Be 0
+        Test-Path -LiteralPath $reports | Should -BeFalse
+    }
+
+    It 'accepts a UNC path on another host' {
+        $reports = New-WorkDirectory 'bl-unc-other-reports'
+        $pair = Invoke-Pair -Tag 'bl-unc-other' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = '\\fileserver01\recovery\keys' } `
+            -FixtureEnvironment $script:blGoodEnv -ExtraSetup $script:uncShadow
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $pair.WhatIf.Summary.RecoveryKeyDirectory | Should -Be '\\fileserver01\recovery\keys'
+    }
+
+    It 'refuses a substituted drive whose target is on the operating-system volume' {
+        $keys = New-WorkDirectory 'bl-subst-keys'
+        $reports = Join-Path $script:workRoot 'bl-subst-reports'
+        $drive = [System.IO.Path]::GetPathRoot($keys).TrimEnd('\')
+        # subst with no arguments lists 'D:\: => C:\keys'. The real temp drive is made a SUBST of the pretend system drive Q:.
+        $extra = "function subst { '$drive\: => Q:\keys' }"
+        $pair = Invoke-Pair -Tag 'bl-subst' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $script:blGoodEnv -ExtraSetup $extra
+        $pair.WhatIf.ExitCode | Should -Not -Be 0
+        $pair.Execute.ExitCode | Should -Not -Be 0
+        (Get-FlatText $pair.Execute.Output) | Should -Match 'substituted for .Q:\\keys.*operating-system volume'
+        @(Get-OpsMutationRecord -Path $pair.ExecuteLog).Count | Should -Be 0
+        Test-Path -LiteralPath $reports | Should -BeFalse
+    }
+
+    It 'refuses a mapped drive that points at this computer' {
+        $keys = New-WorkDirectory 'bl-mapped-keys'
+        $reports = Join-Path $script:workRoot 'bl-mapped-reports'
+        $extra = "function Get-CimInstance { param(`$ClassName, `$Filter, `$ErrorAction) [pscustomobject]@{ DeviceID = 'X:'; DriveType = 4; ProviderName = '\\localhost\c`$' } }"
+        $pair = Invoke-Pair -Tag 'bl-mapped' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $script:blGoodEnv -ExtraSetup $extra
+        $pair.Execute.ExitCode | Should -Not -Be 0
+        (Get-FlatText $pair.Execute.Output) | Should -Match 'mapped to .\\\\localhost\\c\$.*is on this computer'
+        Test-Path -LiteralPath $reports | Should -BeFalse
+    }
+
+    It 'refuses a drive it cannot look up instead of passing it' -ForEach @(
+        @{ Name = 'garbled subst output'; Extra = "function subst { 'not a subst line' }" }
+        @{ Name = 'a failing drive query'; Extra = "function Get-CimInstance { param(`$ClassName, `$Filter, `$ErrorAction) throw 'cim down' }" }
+    ) {
+        $keys = New-WorkDirectory 'bl-unknown-keys'
+        $reports = Join-Path $script:workRoot "bl-unknown-$([guid]::NewGuid().ToString('N'))"
+        $pair = Invoke-Pair -Tag 'bl-unknown' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $script:blGoodEnv -ExtraSetup $Extra
+        $pair.Execute.ExitCode | Should -Not -Be 0
+        (Get-FlatText $pair.Execute.Output) | Should -Match 'cannot be verified as off the operating-system volume'
+        Test-Path -LiteralPath $reports | Should -BeFalse
+    }
+
+    It 'accepts a plain local drive that is neither substituted nor a network drive' {
+        $keys = New-WorkDirectory 'bl-plain-keys'
+        $reports = New-WorkDirectory 'bl-plain-reports'
+        $drive = [System.IO.Path]::GetPathRoot($keys).TrimEnd('\')
+        # Another letter is substituted and this one is a fixed disk (DriveType 3); neither touches the key directory.
+        $extra = "function subst { 'Y:\: => Z:\other' }`n" +
+            "function Get-CimInstance { param(`$ClassName, `$Filter, `$ErrorAction) [pscustomobject]@{ DeviceID = '$drive'; DriveType = 3; ProviderName = `$null } }"
+        $pair = Invoke-Pair -Tag 'bl-plain' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $script:blGoodEnv -ExtraSetup $extra
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $pair.WhatIf.Summary.RecoveryKeyDirectory | Should -Be $keys
     }
 
     It 'stops before any change when the TPM is not ready' {
@@ -484,14 +611,31 @@ function CiTool.exe {
         $opt[0].Detail | Should -Match 'option=3'
     }
 
-    It 'refuses a base policy that lacks the unsigned-policy option, since the policy is deployed unsigned' {
+    It 'forces the unsigned-policy option on when the base example lacks it, since the policy is deployed unsigned' {
+        $dir = New-WorkDirectory 'wdac-unsigned-added-examples'
+        (Get-Content -LiteralPath (Join-Path $script:exampleDir 'DefaultWindows_Audit.xml') -Raw).Replace('<Rule><Option>Enabled:Unsigned System Integrity Policy</Option></Rule>', '') |
+            Set-Content -LiteralPath (Join-Path $dir 'DefaultWindows_Audit.xml') -Encoding utf8
+        $reports = Join-Path $script:workRoot 'wdac-unsigned-added-reports'
+        $pair = Invoke-Pair -Tag 'wdac-unsigned-added' -RelativePath $script:wdacScript `
+            -Argument @{ ReportDirectory = $reports; ExamplePolicyDirectory = $dir } `
+            -FixtureEnvironment $script:wdacEnv -ExtraSetup $script:ciStub
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $xml = [xml](Get-Content -LiteralPath $pair.WhatIf.Summary.PolicyXmlPath -Raw)
+        (@($xml.SiPolicy.Rules.Rule | ForEach-Object { $_.Option })) | Should -Contain 'Enabled:Unsigned System Integrity Policy'
+        $opt = @(Get-OpsMutationRecord -Path $pair.WhatIfLog | Where-Object { $_.Command -eq 'Set-RuleOption' })
+        @($opt | Where-Object { $_.Detail -match 'option=6' }).Count | Should -Be 1
+    }
+
+    It 'still refuses when the unsigned-policy option is not present after Set-RuleOption, since the policy is deployed unsigned' {
         $dir = New-WorkDirectory 'wdac-signed-examples'
         (Get-Content -LiteralPath (Join-Path $script:exampleDir 'DefaultWindows_Audit.xml') -Raw).Replace('<Rule><Option>Enabled:Unsigned System Integrity Policy</Option></Rule>', '') |
             Set-Content -LiteralPath (Join-Path $dir 'DefaultWindows_Audit.xml') -Encoding utf8
         $reports = Join-Path $script:workRoot 'wdac-signed-reports'
+        # A Set-RuleOption that silently does not add option 6 (the real cmdlet could fail to) must still be caught by the check.
+        $ignoreOption6 = "`n`$env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION = '6'"
         $pair = Invoke-Pair -Tag 'wdac-signed' -RelativePath $script:wdacScript `
             -Argument @{ ReportDirectory = $reports; ExamplePolicyDirectory = $dir } `
-            -FixtureEnvironment $script:wdacEnv -ExtraSetup $script:ciStub
+            -FixtureEnvironment ($script:wdacEnv + $ignoreOption6) -ExtraSetup $script:ciStub
         # A -WhatIf run only previews and exits 0; the refusal is in its state report.
         $pair.Execute.ExitCode | Should -Not -Be 0
         (Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting 'BasePolicyFile').Result |

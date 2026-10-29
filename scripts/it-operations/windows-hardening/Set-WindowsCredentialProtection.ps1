@@ -33,13 +33,15 @@ Opt-in, because each can break something:
   and check the memory integrity page for incompatible drivers; HVCI with an incompatible driver
   can stop that driver (and the hardware or software depending on it) from loading. This script
   does not scan drivers.
-- -UefiLock: changes the LSA protection value to 1 and the Credential Guard value to 1 (both WITH
-  a UEFI lock). A UEFI lock is stored in firmware variables: clearing the registry value, and so
+- -UefiLock: changes the LSA protection value to 1 and, only when -EnableCredentialGuard is also
+  passed, the Credential Guard value (LsaCfgFlags) to 1 (both WITH a UEFI lock). A UEFI lock is stored in firmware variables: clearing the registry value, and so
   -Rollback, does NOT remove it. Undoing a UEFI lock needs Microsoft's opt-out procedure and tool
   (the Device Guard and Credential Guard readiness or opt-out tooling, which asks for physical
   presence at the next boot). Use it only after the default has run cleanly for a while.
 - -RequireDmaProtection: sets the VBS platform requirement to Secure Boot plus DMA protection (3)
-  instead of Secure Boot only (1). Machines without an IOMMU will then not start VBS.
+  instead of Secure Boot only (1). Machines without an IOMMU will then not start VBS. The VBS rows
+  are planned only under -EnableCredentialGuard or -EnableMemoryIntegrity, so -RequireDmaProtection
+  on its own is a no-op.
 
 Value meanings used (Microsoft Learn): RunAsPPL 1 = enabled with UEFI lock, 2 = enabled without UEFI
 lock (Windows 11 22H2 and later). LsaCfgFlags 1 = Credential Guard enabled with UEFI lock, 2 =
@@ -53,7 +55,7 @@ Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir>      # elevated
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -EnableCredentialGuard -EnableMemoryIntegrity
-pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -UefiLock
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -EnableCredentialGuard -UefiLock
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 .OUTPUTS
@@ -306,7 +308,7 @@ function Invoke-PlanItem {
             Remove-ItemProperty -Path $Item.RegistryPath -Name $Item.Setting -ErrorAction SilentlyContinue
         } else {
             if (-not (Test-Path -LiteralPath $Item.RegistryPath)) {
-                New-Item -Path $Item.RegistryPath | Out-Null
+                New-Item -Path $Item.RegistryPath -Force | Out-Null
             }
             Set-ItemProperty -Path $Item.RegistryPath -Name $Item.Setting -Value ([int]$Item.DesiredValue) -Type DWord -Force
         }

@@ -314,7 +314,6 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
             @($run.Records).Count | Should -Be 0
             @($run.Summary.UncheckedTargets) | Should -Contain 'CredentialProtection:PlanFailed'
             $run.Summary.Passed | Should -BeFalse
-            $run.Summary.Passed | Should -BeFalse
         }
 
         It 'exits 1 with -FailOnDrift when a target could not be checked' {
@@ -393,6 +392,8 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
             @($run.Records)[0].State | Should -Be 'NotCheckedRemotely'
             @($run.Records)[0].CurrentValue | Should -BeNullOrEmpty
             $run.Summary.CompliantCount | Should -Be 0
+            $run.Summary.NotCheckedRemotelyCount | Should -Be 1
+            $run.Summary.ItemsChecked | Should -Be 0 -Because 'an item that was not checked is not an item checked'
             $run.Summary.Passed | Should -BeFalse
         }
 

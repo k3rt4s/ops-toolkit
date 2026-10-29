@@ -80,7 +80,7 @@ Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target SchannelTls -ProbeEndpoint 'www.microsoft.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Privacy -FailOnDrift
-pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Defender,Firewall,BitLocker -FailOnDrift
+pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,Firewall,BitLocker -FailOnDrift"
 
 .OUTPUTS
 Writes per-item compliance, a per-category rollup, handshake results, and a run
@@ -165,9 +165,10 @@ $targetScript = @{
     BitLocker = @{ Schema = 'BitLocker' }
 }
 
-# States that carry no verdict about the machine. They are listed in the report but are
-# not items checked, so they can never lift CompliantCount or hide drift.
-$nonVerdictState = @('Unread', 'ReportOnly', 'Precondition')
+# States that carry no verdict about the machine (NotCheckedRemotely is undetermined, like Unread).
+# They are listed in the report but are not items checked, so they can never lift CompliantCount
+# or hide drift.
+$nonVerdictState = @('Unread', 'ReportOnly', 'Precondition', 'NotCheckedRemotely')
 
 function Get-HardeningStateVerdict {
     [CmdletBinding()]
@@ -701,7 +702,7 @@ $summary = [pscustomobject]@{
     OutputDirectory = $runDirectory
     TargetsChecked = @($Target)
     MachinesChecked = @($machines)
-    # Items with a verdict. Unread, ReportOnly and Precondition rows are in the report but are
+    # Items with a verdict. Unread, ReportOnly, Precondition and NotCheckedRemotely rows are in the report but are
     # not items checked, so a run of mostly unread items cannot read as a well-covered pass.
     ItemsChecked = @($complianceRecords | Where-Object { $_.State -notin $nonVerdictState }).Count
     CompliantCount = @($complianceRecords | Where-Object { $_.State -eq 'Compliant' }).Count

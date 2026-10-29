@@ -174,6 +174,21 @@ Describe 'Set-WindowsFirewallBaseline with every control enabled' {
     }
 }
 
+Describe 'Set-WindowsFirewallBaseline with an unreadable rule address' {
+    It 'treats a rule whose RemoteAddress is empty as unreadable and plans no change for it' {
+        $rules = @(@{ Name = 'fw-emptyaddr'; DisplayName = 'Empty Address App'; Program = $script:livePath; Profile = 'Public, Private'; RemoteAddress = '' })
+        $fixture = New-FirewallFixture -Name 'emptyaddr' -Rules $rules -Profiles $script:targetProfiles
+        $pair = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:scriptPath -Tag 'fw-emptyaddr' -FixtureEnvironment $fixture -ExtraSetup $script:netshStub `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'emptyaddr'); ScopeRuleDisplayName = @('Empty Address App') }
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $item = @(Read-PlanJson -Summary $pair.WhatIf.Summary | Where-Object Setting -eq 'fw-emptyaddr')
+        $item.Count | Should -Be 1
+        $item[0].CurrentRemoteAddress | Should -Be 'unknown'
+        $item[0].Action | Should -BeLike 'Cannot read Profile/RemoteAddress*not changed'
+    }
+}
+
 Describe 'Set-WindowsFirewallBaseline defaults' {
     BeforeAll {
         $fixture = New-FirewallFixture -Name 'defaults' -Rules $script:rules -Profiles $script:openProfiles

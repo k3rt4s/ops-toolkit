@@ -382,7 +382,7 @@ Verify applied hardening is still in place, and prove the TLS client policy with
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ProbeEndpoint 'www.example.com:443'
 pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -ComputerName srv01,srv02 -FailOnDrift
-pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1 -Target Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker -FailOnDrift
+pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker -FailOnDrift"
 ```
 
 The default checks `SchannelTls` and `Privacy`; the standalone-machine targets are named with
@@ -509,8 +509,9 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
   process-creation command lines, the advanced audit subcategories, and larger Security and
   PowerShell logs.
 - Remote access: Remote Desktop keeps Network Level Authentication and TLS, Remote Assistance goes
-  off. `-DisableRemoteDesktop` and `-DisableWinRM` are opt-in, and the first is refused from inside a
-  Remote Desktop session.
+  off. `-DisableRemoteDesktop` and `-DisableWinRM` are opt-in. The first is refused from inside a
+  Remote Desktop session or when that cannot be told, the second from inside a PowerShell
+  remoting session.
 - Local accounts: lockout after 10 bad passwords, Guest off, UAC prompting on the secure desktop.
   Disabling or renaming the built-in Administrator is opt-in.
 - Firewall: all three profiles on, inbound blocked and outbound allowed by default, listener

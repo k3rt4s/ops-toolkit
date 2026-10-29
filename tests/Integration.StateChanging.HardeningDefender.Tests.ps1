@@ -170,6 +170,14 @@ Describe 'Set-WindowsDefenderHardening opt-in switches' {
         $app[0].Action | Should -BeLike 'Allow*'
     }
 
+    It 'plans the allowed applications before the Controlled Folder Access mode item' {
+        $names = @($script:blockItems | ForEach-Object { $_.Setting })
+        $modeIndex = [array]::IndexOf($names, 'EnableControlledFolderAccess')
+        $appIndex = [array]::IndexOf($names, 'C:\tools\example\python.exe')
+        $appIndex | Should -BeGreaterOrEqual 0
+        $modeIndex | Should -BeGreaterThan $appIndex -Because 'Block mode must not be set before the allow-list is in place'
+    }
+
     It 'records the Block action and the allowed application when executing elevated' {
         if (-not $script:isElevated) {
             Set-ItResult -Skipped -Because 'requires an elevated session'

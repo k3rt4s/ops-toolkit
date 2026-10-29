@@ -9,8 +9,9 @@ that produced the current layout is described in the README under "What Changed"
 
 ### Added: standalone Windows 11 hardening scripts
 
-Ten new scripts under `scripts\it-operations\windows-hardening\` harden a Windows 11 machine
-that is not joined to a domain. Every state-changing one takes a required `-ReportDirectory`,
+Eleven new scripts under `scripts\it-operations\windows-hardening\` harden a Windows 11 machine
+that is not joined to a domain: ten change state and one, `Export-WdacAuditEvent.ps1`, only
+reads. Every state-changing one takes a required `-ReportDirectory`,
 writes a plan and a state file, applies only from an elevated shell, records each prior value
 in a rollback JSON that `-Rollback` replays, and reports a setting it cannot read as skipped,
 never as compliant. None of them has been run elevated against a real machine yet; the
@@ -19,7 +20,8 @@ elevated halves of their tests are skipped on an unelevated runner.
 - `Set-WindowsDefenderHardening.ps1`: fourteen attack surface reduction rules, Controlled
   Folder Access and network protection, all in audit mode by default; PUA, cloud protection
   and sample submission. A forward run never lowers a stronger setting, and exclusions are
-  never touched.
+  never touched. Allowed applications are added before the Controlled Folder Access mode
+  changes, so an interrupted run never leaves block mode on without them.
 - `Set-WindowsCredentialProtection.ps1`: LSA protection without a UEFI lock, WDigest caching
   off, NTLMv2 only and no LM hash. Credential Guard, memory integrity, the UEFI lock and DMA
   protection are opt-in.
@@ -36,12 +38,18 @@ elevated halves of their tests are skipped on an unelevated runner.
   dropped packets logged, after a netsh export, with opt-in inbound rule cleanup.
 - `Set-WdacAuditPolicy.ps1` and `Export-WdacAuditEvent.ps1`: an audit-only WDAC base policy
   from a Microsoft example, with no enforce switch, and a report of what it would have blocked.
+  The audit and unsigned-policy rule options (3 and 6) are forced on, since the policy is
+  deployed unsigned.
 - `Enable-BitLockerOsVolume.ps1`: TPM, XTS-AES 256, used space only. The recovery password
   goes to an operator-named folder off the system drive and is read back before encryption
-  starts; it never appears in a report or log.
+  starts; it never appears in a report or log. A substituted or mapped drive is followed to
+  its target, a UNC path back to this computer is refused, and a drive it cannot look up is
+  refused rather than passed; a UNC path to this machine's own LAN address or a DNS alias is
+  not yet detected. A live run from an unelevated shell fails and exits non-zero instead of
+  skipping.
 
-`Install-WorkstationBootstrap.ps1` phase 8 previews all fifteen hardening scripts with
-`-WhatIf` and prints their apply commands. The BitLocker preview needs the new
+`Install-WorkstationBootstrap.ps1` phase 8 previews all fifteen state-changing hardening scripts, the five that
+were already there and the ten new ones, with `-WhatIf` and prints their apply commands. The BitLocker preview needs the new
 `-BitLockerRecoveryKeyDirectory`; without it BitLocker is `Skipped` and its apply command
 carries a placeholder. A phase 8 test checks every listed script exists and the skip.
 
@@ -50,7 +58,7 @@ Firewall,BitLocker` and so on). It runs each new script with `-WhatIf` and maps 
 results; BitLocker is read with `Get-BitLockerVolume` and never touches a key protector. An
 item it cannot read is `Unread`, and an unread or remotely unchecked item now keeps `Passed`
 false, so `-FailOnDrift` exits 1 on it; this also applies to the services and scheduled tasks a
-remote `Privacy` run cannot read, which used to pass. The default is still `SchannelTls` and
+remote `Privacy` run cannot read, which used to pass. Neither counts toward `ItemsChecked`. The default is still `SchannelTls` and
 `Privacy`, because the evidence pack runs the checker with no `-Target` and does not yet read
 `UnreadCount`. A run of the new targets leaves the scripts' own restore points (exploit
 protection XML, auditpol CSV, firewall export) in its run folder.

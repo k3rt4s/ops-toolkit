@@ -92,6 +92,44 @@ Describe 'Compare-MachineStateSnapshot' {
         $drift.Count | Should -Be 1
         $drift[0] | Should -Match 'probe missing'
     }
+
+    It 'catches a changed Defender attack surface reduction action' {
+        # Same rule id, action 1 (block) to 0 (disabled): the rule is still listed, so
+        # only comparing the id=action pair notices.
+        $before = @{ DefenderAsrRules = 'd4f940ab-401b-4efc-aadc-ad5f3c50688a=1|3b576869-a4ec-4529-8536-b80a7769e899=1' }
+        $after = @{ DefenderAsrRules = 'd4f940ab-401b-4efc-aadc-ad5f3c50688a=0|3b576869-a4ec-4529-8536-b80a7769e899=1' }
+
+        $drift = @(Compare-MachineStateSnapshot -Before $before -After $after)
+        $drift.Count | Should -Be 1
+        $drift[0] | Should -Match 'DefenderAsrRules'
+        $drift[0] | Should -Match 'd4f940ab-401b-4efc-aadc-ad5f3c50688a=0'
+    }
+
+    It 'catches a changed firewall default' {
+        $before = @{ FirewallProfiles = 'Domain:True/Block/Allow/True|Private:True/Block/Allow/True|Public:True/Block/Allow/False' }
+        $after = @{ FirewallProfiles = 'Domain:True/Block/Allow/True|Private:True/Allow/Allow/True|Public:True/Block/Allow/False' }
+
+        $drift = @(Compare-MachineStateSnapshot -Before $before -After $after)
+        $drift.Count | Should -Be 1
+        $drift[0] | Should -Match 'FirewallProfiles'
+        $drift[0] | Should -Match 'Private:True/Allow'
+    }
+
+    It 'does not call an unreadable probe drift while it stays unreadable' {
+        # Not elevated before and after: the same honest "unreadable" on both sides is
+        # not a change, and it must not be reported as one or folded into a pass of
+        # some other value.
+        $unreadable = 'unreadable: Access is denied.'
+        $before = @{ BitLockerOsVolume = $unreadable; AuditPolicy = $unreadable; DefenderAsrRules = 'none' }
+        @(Compare-MachineStateSnapshot -Before $before -After $before.Clone()).Count | Should -Be 0
+    }
+
+    It 'calls a probe that went from readable to unreadable drift' {
+        $drift = @(Compare-MachineStateSnapshot -Before @{ BitLockerOsVolume = 'ProtectionStatus=On;VolumeStatus=FullyEncrypted' } `
+                -After @{ BitLockerOsVolume = 'unreadable: Access is denied.' })
+        $drift.Count | Should -Be 1
+        $drift[0] | Should -Match 'BitLockerOsVolume'
+    }
 }
 
 Describe 'Get-MachineStateSnapshot' {
@@ -103,7 +141,10 @@ Describe 'Get-MachineStateSnapshot' {
         # If a script starts changing something not on this list, the guard goes blind
         # to it. That is how the incident happened, so the list is asserted rather than
         # assumed.
-        foreach ($probe in @('DefenderExclusionPath', 'DefenderExclusionProcess', 'ScheduledTasks', 'Printers', 'PSDrives')) {
+        foreach ($probe in @('DefenderExclusionPath', 'DefenderExclusionProcess', 'ScheduledTasks', 'Printers', 'PSDrives',
+            'DefenderAsrRules', 'DefenderControlledFolderAccess', 'DefenderNetworkProtection', 'DefenderPuaProtection',
+            'FirewallProfiles', 'FirewallDisabledRuleCount', 'BitLockerOsVolume', 'CodeIntegrityPolicies',
+            'Smb1Protocol', 'LsaAndCredentialRegistry', 'AuditPolicy', 'LocalAccountLockout')) {
             $script:snapshot.ContainsKey($probe) | Should -BeTrue -Because "$probe must be watched"
         }
     }

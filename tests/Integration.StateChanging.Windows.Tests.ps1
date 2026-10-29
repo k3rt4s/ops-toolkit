@@ -37,78 +37,27 @@ BeforeAll {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
+    # Thin wrappers over the shared helpers in TestHelpers.psm1, binding this file's
+    # work root and staged module path so the call sites below read as before.
     function Get-MutationRecord {
-        <#
-        .SYNOPSIS
-        Read the machine changes a run attempted, as objects.
-        #>
         param([string]$Path)
-        if (-not (Test-Path -LiteralPath $Path)) { return @() }
-        @(Get-Content -LiteralPath $Path | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+        Get-OpsMutationRecord -Path $Path
     }
 
     function Invoke-WindowsScriptPair {
-        <#
-        .SYNOPSIS
-        Run one script with -WhatIf and again executing, returning both results and logs.
-
-        .DESCRIPTION
-        The pair is the unit of meaning. A -WhatIf run that attempts nothing says
-        nothing on its own, because a script that has stopped working also attempts
-        nothing; the executing run is what proves the suppressed path was reachable.
-        #>
         param(
             [string]$RelativePath,
             [hashtable]$Argument = @{},
             [string]$Tag,
-            # Extra setup text appended after the stubs, for a script that needs a stub
-            # or a redirected environment the shared set deliberately does not carry.
             [string]$ExtraSetup = ''
         )
-
-        $whatIfLog = Join-Path $script:workRoot "$Tag-whatif.log"
-        $executeLog = Join-Path $script:workRoot "$Tag-execute.log"
-
-        $whatIfArgument = $Argument.Clone()
-        $whatIfArgument.WhatIf = $true
-        $executeArgument = $Argument.Clone()
-        $executeArgument.Confirm = $false
-
-        # The fixture environment is appended to the stub text so the staged modules
-        # know what already exists on the pretend machine.
-        $fixtureEnvironment = @"
-
-`$env:OPSTOOLKIT_TEST_TASKS = '\Microsoft\Windows\Customer Experience Improvement Program\|Consolidator|Ready;\Microsoft\Windows\Feedback\Siuf\|DmClient|Ready'
-`$env:OPSTOOLKIT_TEST_MP_EXCLUSIONPATH = ''
-`$env:OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS = ''
-`$env:OPSTOOLKIT_TEST_PRINTERS = ''
-"@
-
-        [pscustomobject]@{
-            WhatIf     = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $script:systemModulePath `
-                -Setup ((Get-WindowsMutationStubText -MutationLogPath $whatIfLog) + $fixtureEnvironment + $ExtraSetup) -Argument $whatIfArgument
-            WhatIfLog  = $whatIfLog
-            Execute    = Invoke-ScriptUnderTest -RelativePath $RelativePath -ModulePath $script:systemModulePath `
-                -Setup ((Get-WindowsMutationStubText -MutationLogPath $executeLog) + $fixtureEnvironment + $ExtraSetup) -Argument $executeArgument
-            ExecuteLog = $executeLog
-        }
+        Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $RelativePath -Argument $Argument -Tag $Tag -ExtraSetup $ExtraSetup
     }
 
     function Assert-NoChangeUnderWhatIf {
-        <#
-        .SYNOPSIS
-        Assert a -WhatIf run completed and attempted nothing.
-
-        .DESCRIPTION
-        The exit-code check is not decoration. A run that died before reaching any
-        change also leaves an empty log, so without it this assertion passes for a
-        script that is completely broken.
-        #>
         param($Pair, [string[]]$IgnoreCommand = @())
-
-        $Pair.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($Pair.WhatIf.Output)"
-        $mutations = @(Get-MutationRecord -Path $Pair.WhatIfLog | Where-Object { $_.Command -notin $IgnoreCommand })
-        $mutations.Count | Should -Be 0 -Because "-WhatIf attempted: $($mutations | ConvertTo-Json -Compress)"
+        Assert-OpsNoChangeUnderWhatIf -Pair $Pair -IgnoreCommand $IgnoreCommand
     }
 }
 

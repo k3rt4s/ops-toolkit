@@ -146,13 +146,16 @@ protection XML, auditpol CSV, firewall export) in its run folder.
 - `scripts/entra/Export-CloudIncidentReadiness.ps1` grades UAL ingestion `NotAssessed`
   when `Get-AdminAuditLogConfig` is served by a Security & Compliance or on-prem
   Exchange session instead of Exchange Online, so an IPPS-only operator no longer gets
-  a false `NotMet`. The responder-role check now counts only permanent assignments as
-  standing access (an activated PIM window is reported separately) and only
-  `directoryScopeId` `/` eligibility toward tenant coverage; the active count is kept
-  when the eligibility read fails. User consent is graded from
+  a false `NotMet`. The endpoint is read from the implicit-remoting session (legacy
+  remote PowerShell, on-prem Exchange) or, for ExchangeOnlineManagement 3.x REST
+  connections, from `Get-ConnectionInformation` (`ModuleName`, `IsEopSession`); the REST
+  path was added at the 2026-10-30 landing review. The responder-role check now counts
+  only permanent tenant-scope assignments as standing access (a PIM activation window
+  and an administrative-unit scoped assignment do not count) and only
+  `directoryScopeId` `/` eligibility toward tenant coverage. User consent is graded from
   `ManagePermissionGrantsForSelf.*` entries only, so Teams resource-specific consent
-  entries stop turning Met into Partial. Eleven Pester tests cover the three paths.
-  Still unverified against a live tenant.
+  entries stop turning Met into Partial. Fourteen Pester tests cover the three paths.
+  Still unverified against a live tenant or a live Exchange connection.
 
 ### Fixed: laps-typo
 

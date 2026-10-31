@@ -374,12 +374,6 @@ index on 2026-10-02; the third was declined and stays here as the record.
   operator sees a variable-validation complaint rather than a statement that
   `-ComputerName` held no computer names. A per-script throw would fix the wording at
   the cost of a duplicated block in each of ten scripts, which is why it was declined.
-- `$posturePropbe` in
-  `scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1` is a
-  misspelling of `$postureProbe`. It is spelled the same way at its declaration and
-  at both of its uses, so it runs correctly and is cosmetic only. It predates this
-  change and is not in its diff, which is why it was not renamed here. Raised by
-  `pre_push_review.py` at the 2026-09-29 landing.
 
 ## Evidence-pack follow-ups
 
@@ -575,25 +569,9 @@ YouTube swEKKlN5BMA. Digest and portfolio evaluation:
   line: it reads configuration once, it never ingests or queries the logs themselves.
 
 Follow-ups from the `cloud-ir-ready` landing review, 2026-09-25. Low severity, each errs
-conservative (a pass is never overstated); scored in the Scored index on 2026-10-02. The first three shipped 2026-10-07 and landed on master 2026-10-30 (CHANGELOG.md).
-The responder-role item goes first.
+conservative (a pass is never overstated); scored in the Scored index on 2026-10-02. All three (responder roles, user consent, UAL session source) shipped 2026-10-07 and
+landed on master 2026-10-30; see CHANGELOG.md, 2026-10-07.
 
-- **Responder roles: activated PIM and administrative-unit scope.** The responder check
-  treats any member of the activated directory role as standing access, so a user
-  inside a PIM activation window reads as standing, and it counts
-  `roleEligibilityScheduleInstances` at every `directoryScopeId`, including
-  administrative-unit scope, as tenant-wide eligibility. Separate activated from
-  permanent assignments and count only `directoryScopeId` `/` toward tenant coverage.
-- **User consent: resource-specific consent entries.** `permissionGrantPoliciesAssigned`
-  commonly carries `ManagePermissionGrantsForOwnedResource.*` entries (Teams
-  resource-specific consent) even with user consent disabled, so the check grades
-  Partial where it should grade Met. Evaluate only `ManagePermissionGrantsForSelf.*`
-  entries.
-- **UAL ingestion read from the wrong session.** `Get-AdminAuditLogConfig` is also
-  exported by Security & Compliance PowerShell (`Connect-IPPSSession`) and on-prem
-  Exchange, where `UnifiedAuditLogIngestionEnabled` is always False. An operator
-  connected only to IPPS gets NotMet on a tenant where ingestion is on. Check which
-  module supplied the cmdlet and grade NotAssessed when it is not Exchange Online.
 - **entra-contain** A `SupportsShouldProcess` containment script for one or more UPNs:
   revoke sign-in sessions, disable the account, and export (not delete) the user's inbox
   rules and mailbox forwarding so the responder decides what to remove. Plan/state CSV

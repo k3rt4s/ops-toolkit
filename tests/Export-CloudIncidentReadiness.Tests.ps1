@@ -162,6 +162,35 @@ Describe 'Get-UnifiedAuditLogIngestionRecord session source' {
             Remove-Module -Name $module.Name -Force -ErrorAction SilentlyContinue
         }
     }
+
+    It 'is NotAssessed when a REST Security & Compliance connection supplied the cmdlet' {
+        $module = New-FakeAuditConfigModule -SessionHost '' -Enabled $false
+        $moduleName = $module.Name
+        try {
+            Set-Item -Path 'function:global:Get-ConnectionInformation' -Value ({ [pscustomobject]@{ ModuleName = $moduleName; ConnectionUri = 'https://ps.compliance.protection.outlook.com'; IsEopSession = $true } }.GetNewClosure())
+            $record = Get-UnifiedAuditLogIngestionRecord
+            $record.Status | Should -Be 'NotAssessed'
+            $record.Finding | Should -Match 'compliance'
+        } finally {
+            Remove-Item -LiteralPath 'function:Get-ConnectionInformation' -ErrorAction SilentlyContinue
+            Remove-Module -Name $moduleName -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'still grades NotMet when a REST Exchange Online connection supplied the cmdlet' {
+        $module = New-FakeAuditConfigModule -SessionHost '' -Enabled $false
+        $moduleName = $module.Name
+        try {
+            Set-Item -Path 'function:global:Get-ConnectionInformation' -Value ({
+                    [pscustomobject]@{ ModuleName = 'tmpEXO_other'; ConnectionUri = 'https://ps.compliance.protection.outlook.com'; IsEopSession = $true }
+                    [pscustomobject]@{ ModuleName = $moduleName; ConnectionUri = 'https://outlook.office365.com'; IsEopSession = $false }
+                }.GetNewClosure())
+            (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotMet'
+        } finally {
+            Remove-Item -LiteralPath 'function:Get-ConnectionInformation' -ErrorAction SilentlyContinue
+            Remove-Module -Name $moduleName -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Describe 'Get-OpsDiagnosticExportRecord' {
@@ -289,6 +318,11 @@ Describe 'Get-ResponderAssignmentCount' {
     It 'counts a member who is both permanently assigned and activated as standing' {
         $counts = Get-ResponderAssignmentCount -Member @(@{ id = 'u1' }) -ScheduleInstance @(@{ principalId = 'u1'; assignmentType = 'Activated' }, @{ principalId = 'u1'; assignmentType = 'Assigned' }) -EligibleInstance @()
         $counts.ActiveCount | Should -Be 1
+    }
+
+    It 'ignores an administrative-unit scoped assignment when judging standing access' {
+        $schedule = @(@{ principalId = 'u1'; assignmentType = 'Activated'; directoryScopeId = '/' }, @{ principalId = 'u1'; assignmentType = 'Assigned'; directoryScopeId = '/administrativeUnits/au-1' })
+        (Get-ResponderAssignmentCount -Member @(@{ id = 'u1' }) -ScheduleInstance $schedule -EligibleInstance @()).ActiveCount | Should -Be 0
     }
 
     It 'counts only directoryScopeId / eligibility toward tenant coverage' {

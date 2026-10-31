@@ -194,6 +194,22 @@ function Get-UnifiedAuditLogIngestionRecord {
     if ($implicitSession) {
         $sessionHost = "$(Get-OpsPropertyValue -InputObject $implicitSession -Name 'ComputerName') $(Get-OpsPropertyValue -InputObject (Get-OpsPropertyValue -InputObject $implicitSession -Name 'ConnectionInfo') -Name 'ConnectionUri')".Trim()
     }
+    # ExchangeOnlineManagement 3.x connects over REST with no PSSession behind the module, so
+    # the endpoint comes from Get-ConnectionInformation instead: the connection whose
+    # ModuleName is the module that supplied the cmdlet or, when none matches, every
+    # connection. When each of those is a Security & Compliance (IsEopSession) connection, do
+    # not grade. Not yet checked against a live connection.
+    if (-not $sessionHost -and (Get-Command -Name 'Get-ConnectionInformation' -ErrorAction SilentlyContinue)) {
+        $connections = @()
+        try { $connections = @(Get-ConnectionInformation -ErrorAction Stop | Where-Object { $null -ne $_ }) } catch { $connections = @() }
+        $moduleName = if ($command.Module) { [string]$command.Module.Name } else { '' }
+        $owning = @($connections | Where-Object { $moduleName -and ([string](Get-OpsPropertyValue -InputObject $_ -Name 'ModuleName')) -eq $moduleName })
+        if ($owning.Count -eq 0) { $owning = $connections }
+        if ($owning.Count -gt 0 -and @($owning | Where-Object { (Get-OpsPropertyValue -InputObject $_ -Name 'IsEopSession') -ne $true }).Count -eq 0) {
+            $sessionHost = (@($owning | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'ConnectionUri') }) -join ' ').Trim()
+            if (-not $sessionHost) { $sessionHost = 'Security & Compliance connection' }
+        }
+    }
     if ($sessionHost -and ($sessionHost -match 'protection\.outlook|protection\.office|compliance' -or $sessionHost -notmatch 'outlook\.office365\.(com|us|de)|outlook\.office\.com|partner\.outlook\.cn|ps\.outlook\.com')) {
         return [pscustomobject]@{
             CheckId = 'UAL-INGEST'
@@ -628,8 +644,11 @@ function Get-ResponderAssignmentCount {
         [object[]]$EligibleInstance
     )
 
-    $activatedIds = @(@($ScheduleInstance) | Where-Object { $null -ne $_ -and ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Activated' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
-    $permanentIds = @(@($ScheduleInstance) | Where-Object { $null -ne $_ -and ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Assigned' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
+    # directoryRoles/{id}/members lists tenant-scope members only, so an instance scoped to
+    # an administrative unit says nothing about them. An instance with no scope is kept.
+    $tenantInstance = @(@($ScheduleInstance) | Where-Object { $null -ne $_ -and @('', '/') -contains ([string](Get-OpsPropertyValue -InputObject $_ -Name 'directoryScopeId')) })
+    $activatedIds = @($tenantInstance | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Activated' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
+    $permanentIds = @($tenantInstance | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Assigned' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
 
     # A member whose only presence is an activation window is not a standing assignment.
     $permanent = @(@($Member) | Where-Object {

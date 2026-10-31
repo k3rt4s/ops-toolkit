@@ -183,6 +183,42 @@ function Get-UnifiedAuditLogIngestionRecord {
         }
     }
 
+    # Get-AdminAuditLogConfig is also exported by Security & Compliance PowerShell
+    # (Connect-IPPSSession) and on-premises Exchange, where UnifiedAuditLogIngestionEnabled
+    # reads False whatever the tenant setting is. An answer from those sessions is not
+    # evidence either way. The implicit-remoting module records the endpoint it talks to;
+    # when it is present and is not an Exchange Online endpoint, do not grade.
+    $sessionHost = ''
+    $moduleData = if ($command.Module) { $command.Module.PrivateData } else { $null }
+    $implicitSession = if ($moduleData -is [System.Collections.IDictionary] -and $moduleData.Contains('ImplicitSession')) { $moduleData['ImplicitSession'] } else { $null }
+    if ($implicitSession) {
+        $sessionHost = "$(Get-OpsPropertyValue -InputObject $implicitSession -Name 'ComputerName') $(Get-OpsPropertyValue -InputObject (Get-OpsPropertyValue -InputObject $implicitSession -Name 'ConnectionInfo') -Name 'ConnectionUri')".Trim()
+    }
+    # ExchangeOnlineManagement 3.x connects over REST with no PSSession behind the module, so
+    # the endpoint comes from Get-ConnectionInformation instead: the connection whose
+    # ModuleName is the module that supplied the cmdlet or, when none matches, every
+    # connection. When each of those is a Security & Compliance (IsEopSession) connection, do
+    # not grade. Not yet checked against a live connection.
+    if (-not $sessionHost -and (Get-Command -Name 'Get-ConnectionInformation' -ErrorAction SilentlyContinue)) {
+        $connections = @()
+        try { $connections = @(Get-ConnectionInformation -ErrorAction Stop | Where-Object { $null -ne $_ }) } catch { $connections = @() }
+        $moduleName = if ($command.Module) { [string]$command.Module.Name } else { '' }
+        $owning = @($connections | Where-Object { $moduleName -and ([string](Get-OpsPropertyValue -InputObject $_ -Name 'ModuleName')) -eq $moduleName })
+        if ($owning.Count -eq 0) { $owning = $connections }
+        if ($owning.Count -gt 0 -and @($owning | Where-Object { (Get-OpsPropertyValue -InputObject $_ -Name 'IsEopSession') -ne $true }).Count -eq 0) {
+            $sessionHost = (@($owning | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'ConnectionUri') }) -join ' ').Trim()
+            if (-not $sessionHost) { $sessionHost = 'Security & Compliance connection' }
+        }
+    }
+    if ($sessionHost -and ($sessionHost -match 'protection\.outlook|protection\.office|compliance' -or $sessionHost -notmatch 'outlook\.office365\.(com|us|de)|outlook\.office\.com|partner\.outlook\.cn|ps\.outlook\.com')) {
+        return [pscustomobject]@{
+            CheckId = 'UAL-INGEST'
+            Name = $name
+            Status = 'NotAssessed'
+            Finding = "Get-AdminAuditLogConfig is supplied by a session that is not Exchange Online ($sessionHost), such as Security & Compliance (Connect-IPPSSession) or on-premises Exchange, where UnifiedAuditLogIngestionEnabled does not reflect the tenant. Connect Exchange Online (Connect-ExchangeOnline) and re-run to cover this check."
+        }
+    }
+
     try {
         $config = & $command
     } catch {
@@ -575,6 +611,64 @@ function Get-ResponderRoleRecord {
     }
 }
 
+function Get-ResponderAssignmentCount {
+    <#
+    .SYNOPSIS
+    Count permanent role members and tenant-wide PIM-eligible assignments for one responder role.
+
+    .PARAMETER Member
+    Members of the activated directory role, as returned by directoryRoles/{id}/members. PIM activations appear here for their window.
+
+    .PARAMETER ScheduleInstance
+    roleAssignmentScheduleInstances for the role; assignmentType Activated marks a time-bound PIM activation and Assigned a permanent assignment.
+
+    .PARAMETER EligibleInstance
+    roleEligibilityScheduleInstances for the role.
+
+    .OUTPUTS
+    PSCustomObject with ActiveCount (permanent only), ActivatedCount, EligibleCount (directoryScopeId / only).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [object[]]$Member,
+
+        [Parameter()]
+        [AllowNull()]
+        [object[]]$ScheduleInstance,
+
+        [Parameter()]
+        [AllowNull()]
+        [object[]]$EligibleInstance
+    )
+
+    # directoryRoles/{id}/members lists tenant-scope members only, so an instance scoped to
+    # an administrative unit says nothing about them. An instance with no scope is kept.
+    $tenantInstance = @(@($ScheduleInstance) | Where-Object { $null -ne $_ -and @('', '/') -contains ([string](Get-OpsPropertyValue -InputObject $_ -Name 'directoryScopeId')) })
+    $activatedIds = @($tenantInstance | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Activated' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
+    $permanentIds = @($tenantInstance | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'assignmentType')) -eq 'Assigned' } | ForEach-Object { [string](Get-OpsPropertyValue -InputObject $_ -Name 'principalId') })
+
+    # A member whose only presence is an activation window is not a standing assignment.
+    $permanent = @(@($Member) | Where-Object {
+            if ($null -eq $_) { return $false }
+            $memberId = [string](Get-OpsPropertyValue -InputObject $_ -Name 'id')
+            ($activatedIds -notcontains $memberId) -or ($permanentIds -contains $memberId)
+        })
+    $activated = @(@($Member) | Where-Object { $null -ne $_ -and ($activatedIds -contains ([string](Get-OpsPropertyValue -InputObject $_ -Name 'id'))) -and ($permanentIds -notcontains ([string](Get-OpsPropertyValue -InputObject $_ -Name 'id'))) })
+
+    # Only eligibility at directory scope / covers the tenant; administrative-unit
+    # (or other object) scoped eligibility does not.
+    $tenantWide = @(@($EligibleInstance) | Where-Object { $null -ne $_ -and ([string](Get-OpsPropertyValue -InputObject $_ -Name 'directoryScopeId')) -eq '/' })
+
+    [pscustomobject]@{
+        ActiveCount = $permanent.Count
+        ActivatedCount = $activated.Count
+        EligibleCount = $tenantWide.Count
+    }
+}
+
 function Get-BreakGlassAccountRecord {
     <#
     .SYNOPSIS
@@ -699,7 +793,10 @@ function Get-UserConsentRecord {
         }
     }
 
-    $policies = $rawPolicies
+    # Only ManagePermissionGrantsForSelf.* entries govern user consent. Entries such as
+    # ManagePermissionGrantsForOwnedResource.* (Teams resource-specific consent) are not
+    # user consent for apps and must not move the grade.
+    $policies = @($rawPolicies | Where-Object { ([string]$_) -like 'ManagePermissionGrantsForSelf.*' })
     $policyText = Join-OpsValue $policies
 
     $status = if ($policies -match 'microsoft-user-default-legacy') { 'NotMet' }
@@ -1158,6 +1255,8 @@ foreach ($roleName in $ResponderRoleName) {
     $eligibleCount = $null
     $reason = ''
     $templateId = $null
+    $members = @()
+    $scheduleInstances = @()
 
     try {
         # The server $filter is never trusted for correctness: re-filter client-side
@@ -1185,10 +1284,12 @@ foreach ($roleName in $ResponderRoleName) {
             } elseif ($activatedRole.Count -eq 1) {
                 $roleId = Join-OpsValue (Get-OpsPropertyValue -InputObject $activatedRole[0] -Name 'id')
                 $members = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/directoryRoles/$roleId/members")
-                $activeCount = @($members).Count
             } else {
-                $activeCount = 0
+                $members = @()
             }
+            $rawSchedule = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleInstances?`$filter=roleDefinitionId eq '$templateId'")
+            $scheduleInstances = @($rawSchedule | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'roleDefinitionId')) -eq $templateId })
+            $activeCount = (Get-ResponderAssignmentCount -Member $members -ScheduleInstance $scheduleInstances).ActiveCount
         } catch {
             $reason = "Active assignment read failed: $($_.Exception.Message)"
         }
@@ -1198,7 +1299,7 @@ foreach ($roleName in $ResponderRoleName) {
         try {
             $rawEligible = @(Get-OpsGraphPagedValue -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=roleDefinitionId eq '$templateId'")
             $eligible = @($rawEligible | Where-Object { ([string](Get-OpsPropertyValue -InputObject $_ -Name 'roleDefinitionId')) -eq $templateId })
-            $eligibleCount = @($eligible).Count
+            $eligibleCount = (Get-ResponderAssignmentCount -EligibleInstance $eligible).EligibleCount
         } catch {
             $reason = "Eligible assignment read failed: $($_.Exception.Message)"
         }

@@ -72,7 +72,7 @@ if ($PSBoundParameters.ContainsKey('ComputerName')) {
     $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
 }
 
-$posturePropbe = {
+$postureProbe = {
     function Get-RegValue {
         param($Path, $Name)
         try {
@@ -166,9 +166,9 @@ foreach ($target in $targets) {
     $probe = $null
     try {
         if ($target -eq $env:COMPUTERNAME) {
-            $probe = & $posturePropbe
+            $probe = & $postureProbe
         } else {
-            $probe = Invoke-Command -ComputerName $target -ScriptBlock $posturePropbe -ErrorAction Stop
+            $probe = Invoke-Command -ComputerName $target -ScriptBlock $postureProbe -ErrorAction Stop
         }
     } catch {
         Write-Warning "Could not probe $target : $($_.Exception.Message)"

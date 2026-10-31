@@ -28,20 +28,8 @@ talk") and two from the `pack-fanout-bind` landing review (see "Shipped 2026-09-
 evidence-pack estate fan-out"). The declined empty-split wording item is a record, not
 work, and is not indexed.
 
-- **ir-consent-rsc** Grade user consent from `ManagePermissionGrantsForSelf.*` entries only, so Teams resource-specific consent entries stop turning Met into Partial. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/3 p=0.6 freq=2 hours=0.5/1/2 risk=0.05x1 rev=two-way conf=assessed id=ir-consent-rsc` `return: likelihood about 2 live runs a year, estimated, the collector has never run against a tenant; p 0.6 that the tenant carries a ManagePermissionGrantsForOwnedResource entry, estimated from the review's "commonly carries", nothing counted; impact each false Partial costs the operator about an hour checking consent settings that are already right, and puts a wrong finding in front of a client; evidence code path Get-UserConsentRecord, scripts\entra\Export-CloudIncidentReadiness.ps1 lines 691-708 on 2026-10-02, any assigned policy other than the two default ones grades Partial`
-  - `worker: sonnet 0.5/1/2 h`
-
-- **ir-responder-pim** Separate activated PIM assignments from permanent ones in the responder-role check, and count only `directoryScopeId` `/` eligibility toward tenant coverage. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/2 p=0.3 freq=2 hours=0.5/1.5/3 risk=0.05x2 rev=two-way conf=assessed id=ir-responder-pim` `return: likelihood about 2 live runs a year, estimated; p 0.3 that a responder holds an activated window or an administrative-unit eligibility at run time, opinion; impact a Met role reads Partial with a "standing assignment" finding, about an hour of the operator's time to disprove; evidence code path scripts\entra\Export-CloudIncidentReadiness.ps1 lines 1180-1206 on 2026-10-02, directoryRoles members counted as active and roleEligibilityScheduleInstances filtered on roleDefinitionId only`
-  - `worker: sonnet 1/2/4 h`
-
-- **ir-ual-session** Grade UAL ingestion NotAssessed when `Get-AdminAuditLogConfig` comes from Security & Compliance or on-prem Exchange rather than Exchange Online. See "Ingested 2026-09-24". `score: kind=bug gain=0.5/1/4 p=0.1 freq=2 hours=0.5/1/2 risk=0.05x1 rev=two-way conf=assessed id=ir-ual-session` `return: likelihood about 2 live runs a year, estimated; p 0.1 that the operator's session has Connect-IPPSSession or on-prem Exchange loaded and not Exchange Online, opinion; impact a false NotMet on audit-log ingestion, an hour or more to disprove and a wrong remediation advised if nobody does; evidence code path scripts\entra\Export-CloudIncidentReadiness.ps1 lines 175-210 on 2026-10-02, Get-Command takes whichever module exports the cmdlet`
-  - `worker: sonnet 1/2/3 h`
-
 - **split-list-outputs** Fold the script-local `ConvertTo-OpsSplitList` in `Export-CloudIncidentReadiness.ps1` onto the `OpsToolkit.Reporting` copy and make its `.OUTPUTS` match what it returns. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.25/0.5/2 p=0.5 freq=1 hours=0.5/1/2 risk=0.1x1 rev=two-way conf=assessed id=split-list-outputs` `return: likelihood the function is touched about once a year, p 0.5, estimated, nothing counted; impact each touch costs about half an hour keeping two copies and an AST-lifting test in step, and a caller that skips the @() idiom hits a StrictMode error on an empty list; evidence the module copy and scripts\entra\Export-CloudIncidentReadiness.ps1 line 946, tests\Export-SecurityControlEvidencePack.Tests.ps1 lines 248-251 lift it from the script AST`
   - `worker: sonnet 1.5/3/5 h`
-
-- **laps-typo** Rename `$posturePropbe` to `$postureProbe` at its declaration and two uses in `Export-LocalAdminAndLapsPosture.ps1`. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.05/0.1/0.25 p=0.3 freq=1 hours=0.1/0.2/0.5 rev=two-way conf=assessed id=laps-typo` `return: likelihood the script is read about once a year, p 0.3, estimated; impact a reader pauses a few minutes on a name that looks like a bug and is not; evidence scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1 lines 75, 169 and 171 on 2026-10-02, spelled the same at all three so it runs correctly`
-  - `worker: haiku 0.1/0.2/0.5 h`
 
 Six items were filed on 2026-10-29 when the standalone Windows 11 hardening scripts landed.
 Five are below; the sixth, domain-joined variants (hard-domain, score 0.0), went to
@@ -386,12 +374,6 @@ index on 2026-10-02; the third was declined and stays here as the record.
   operator sees a variable-validation complaint rather than a statement that
   `-ComputerName` held no computer names. A per-script throw would fix the wording at
   the cost of a duplicated block in each of ten scripts, which is why it was declined.
-- `$posturePropbe` in
-  `scripts\it-operations\windows-hardening\Export-LocalAdminAndLapsPosture.ps1` is a
-  misspelling of `$postureProbe`. It is spelled the same way at its declaration and
-  at both of its uses, so it runs correctly and is cosmetic only. It predates this
-  change and is not in its diff, which is why it was not renamed here. Raised by
-  `pre_push_review.py` at the 2026-09-29 landing.
 
 ## Evidence-pack follow-ups
 
@@ -587,25 +569,9 @@ YouTube swEKKlN5BMA. Digest and portfolio evaluation:
   line: it reads configuration once, it never ingests or queries the logs themselves.
 
 Follow-ups from the `cloud-ir-ready` landing review, 2026-09-25. Low severity, each errs
-conservative (a pass is never overstated); scored in the Scored index on 2026-10-02.
-The responder-role item goes first.
+conservative (a pass is never overstated); scored in the Scored index on 2026-10-02. All three (responder roles, user consent, UAL session source) shipped 2026-10-07 and
+landed on master 2026-10-30; see CHANGELOG.md, 2026-10-07.
 
-- **Responder roles: activated PIM and administrative-unit scope.** The responder check
-  treats any member of the activated directory role as standing access, so a user
-  inside a PIM activation window reads as standing, and it counts
-  `roleEligibilityScheduleInstances` at every `directoryScopeId`, including
-  administrative-unit scope, as tenant-wide eligibility. Separate activated from
-  permanent assignments and count only `directoryScopeId` `/` toward tenant coverage.
-- **User consent: resource-specific consent entries.** `permissionGrantPoliciesAssigned`
-  commonly carries `ManagePermissionGrantsForOwnedResource.*` entries (Teams
-  resource-specific consent) even with user consent disabled, so the check grades
-  Partial where it should grade Met. Evaluate only `ManagePermissionGrantsForSelf.*`
-  entries.
-- **UAL ingestion read from the wrong session.** `Get-AdminAuditLogConfig` is also
-  exported by Security & Compliance PowerShell (`Connect-IPPSSession`) and on-prem
-  Exchange, where `UnifiedAuditLogIngestionEnabled` is always False. An operator
-  connected only to IPPS gets NotMet on a tenant where ingestion is on. Check which
-  module supplied the cmdlet and grade NotAssessed when it is not Exchange Online.
 - **entra-contain** A `SupportsShouldProcess` containment script for one or more UPNs:
   revoke sign-in sessions, disable the account, and export (not delete) the user's inbox
   rules and mailbox forwarding so the responder decides what to remove. Plan/state CSV

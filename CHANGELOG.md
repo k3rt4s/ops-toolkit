@@ -23,7 +23,9 @@ piloted:
   Summaries gain `RollbackSourcePath`, `RollbackConsumedPath` and `RollbackNote`.
 - Exploit mitigation: a `NOTSET` prior is left as it is and no longer blocks consuming the file.
 - Audit logging: the file is validated before the auditpol backup is taken, and the backup it
-  names must sit beside it, match the expected name, and be at most 1 MB of subcategory rows.
+  names must sit beside it, match the expected name, and be at most 1 MB of subcategory rows and
+  the four audit option rows auditpol writes. A transcript directory restored from the file must
+  be `absent` or a local drive path, never a UNC share.
 - WDAC: when the active policy list cannot be read, the removal is refused and the file is kept.
 - BitLocker: the rollback file no longer records the recovery key path, and rollback turns off
   only the OS volume this script turned on.

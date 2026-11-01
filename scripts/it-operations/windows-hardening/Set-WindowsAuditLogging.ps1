@@ -409,6 +409,9 @@ function Get-RollbackEntryProblem {
             if ($control.Kind -eq 'Directory' -and -not [System.IO.Path]::IsPathRooted($applied)) { return "AppliedValue '$applied' is not a rooted path" }
             # The prior of a string value is whatever text the registry held; a number is a value of another type.
             if ($prior -isnot [string] -and -not (Test-RollbackWhole $prior ([int]::MinValue) ([int]::MaxValue))) { return "PriorValue '$prior' is not 'absent' or the text or number the value held" }
+            # A transcript directory restored from the file must be a local drive path: a UNC prior would send
+            # every transcript, and the NTLM authentication that reaches it, to another host.
+            if ($control.Kind -eq 'Directory' -and -not ($prior -is [string] -and ($prior -ceq 'absent' -or $prior -match '^[A-Za-z]:\\'))) { return "PriorValue '$prior' is not 'absent' or a local drive path" }
             if ("$prior" -eq "$applied") { return "PriorValue '$prior' equals the applied value, so the forward plan would not have changed it" }
         }
         'Audit' {
@@ -453,7 +456,9 @@ function Get-RollbackBackupPathProblem {
 
 # Returns $null when the backup file exists and reads like an auditpol /backup CSV, otherwise a short
 # text. auditpol itself parses the file on restore, so the check is on shape only: a small file whose
-# every row after the header has six columns and a subcategory GUID in the fourth.
+# every row after the header is either a subcategory row (a GUID in the fourth of its seven columns) or
+# one of the four audit option rows auditpol writes with an empty GUID. Any other row, a global SACL row
+# included, refuses the file: a refused rollback changes nothing and the file stays for the operator.
 function Get-RollbackBackupContentProblem {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "the auditpol backup file '$Path' does not exist" }
@@ -465,11 +470,13 @@ function Get-RollbackBackupContentProblem {
     }
     if ($lines.Count -lt 1) { return "the auditpol backup file '$Path' is empty" }
     $guid = '^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$'
+    $option = '^Option:(CrashOnAuditFail|FullPrivilegeAuditing|AuditBaseObjects|AuditBaseDirectories)$'
     for ($n = 1; $n -lt $lines.Count; $n++) {
         if ([string]::IsNullOrWhiteSpace($lines[$n])) { continue }
         $row = $null
-        try { $row = @($lines[$n] | ConvertFrom-Csv -Header 'Machine', 'Target', 'Subcategory', 'Guid', 'Inclusion', 'Exclusion' -ErrorAction Stop)[0] } catch { $row = $null }
-        if ($null -eq $row -or "$($row.Guid)" -cnotmatch $guid) { return "the auditpol backup file '$Path' has an unexpected row at line $($n + 1)" }
+        try { $row = @($lines[$n] | ConvertFrom-Csv -Header 'Machine', 'Target', 'Subcategory', 'Guid', 'Inclusion', 'Exclusion', 'Value' -ErrorAction Stop)[0] } catch { $row = $null }
+        $ok = $null -ne $row -and ("$($row.Guid)" -cmatch $guid -or ([string]::IsNullOrEmpty("$($row.Guid)") -and "$($row.Subcategory)" -cmatch $option))
+        if (-not $ok) { return "the auditpol backup file '$Path' has an unexpected row at line $($n + 1)" }
     }
     $null
 }

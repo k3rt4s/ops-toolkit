@@ -9,8 +9,10 @@ Instructions:
   and never changed.
 - Run elevated to apply. Every setting is a machine registry value, so a non-elevated live run
   marks each one "Skipped: requires elevation". Nearly all of them need a reboot to take effect.
-- Use -Rollback to restore the exact prior values from the latest rollback file in the report
-  directory. A value that was absent before is removed again.
+- Use -Rollback to restore the exact prior values from the latest unconsumed rollback file in the
+  report directory. A value that was absent before is removed again. Each executing -Rollback that
+  reverts everything marks its file consumed (see Rollback below), so running -Rollback again
+  undoes the previous run, newest first.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   developer's workstation must never be applied to someone else's machine. Supply it on every run.
 
@@ -50,6 +52,18 @@ and DMA protection. Some LSA protection add-on security products load a driver i
 under RunAsPPL; keep recovery media available before changing the Lsa key.
 
 Outbound NTLM blocking is a domain item and is deliberately not covered here.
+
+Rollback: -Rollback reads the newest credential-protection-rollback-<timestamp>.json in the report
+directory. Before any plan is written or any change made, it checks every recorded entry against the
+registry controls this script's own forward plan can set (category, registry path and value name; the
+full set, whatever switches the original run used) and checks the value types (a prior value is a
+whole number, 'absent' or 'unknown'; an applied value is a whole number or 'absent'). A file that does
+not parse, lacks a ChangedSettings array, or holds any entry outside that set is refused whole with an
+error naming the file and the first bad entry, also under -WhatIf; move that file aside to roll back
+an older run. After an executing -Rollback in which every item was reverted or needed no change, the
+file is renamed credential-protection-rollback-<timestamp>.consumed-<timestamp>.json and is no longer
+picked. Under -WhatIf, or when any item failed or was skipped (for example not elevated), the file is
+left in place and the summary says so.
 
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -WhatIf
@@ -96,6 +110,20 @@ $script:LsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
 $script:WDigestPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
 $script:DeviceGuardPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
 $script:HvciPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+
+# Every registry value the forward plan can write. Get-ForwardPlan reads its category, path and name
+# from here, and the rollback validator accepts exactly these rows, so the two cannot drift.
+$script:RegistryControls = @(
+    [pscustomobject]@{ Id = 'RunAsPPL'; Category = 'LsaProtection'; Path = $script:LsaPath; Name = 'RunAsPPL' }
+    [pscustomobject]@{ Id = 'UseLogonCredential'; Category = 'WDigest'; Path = $script:WDigestPath; Name = 'UseLogonCredential' }
+    [pscustomobject]@{ Id = 'LmCompatibilityLevel'; Category = 'Ntlm'; Path = $script:LsaPath; Name = 'LmCompatibilityLevel' }
+    [pscustomobject]@{ Id = 'NoLMHash'; Category = 'Ntlm'; Path = $script:LsaPath; Name = 'NoLMHash' }
+    [pscustomobject]@{ Id = 'EnableVirtualizationBasedSecurity'; Category = 'Vbs'; Path = $script:DeviceGuardPath; Name = 'EnableVirtualizationBasedSecurity' }
+    [pscustomobject]@{ Id = 'RequirePlatformSecurityFeatures'; Category = 'Vbs'; Path = $script:DeviceGuardPath; Name = 'RequirePlatformSecurityFeatures' }
+    [pscustomobject]@{ Id = 'MemoryIntegrity'; Category = 'MemoryIntegrity'; Path = $script:HvciPath; Name = 'Enabled' }
+    [pscustomobject]@{ Id = 'LsaCfgFlags'; Category = 'CredentialGuard'; Path = $script:LsaPath; Name = 'LsaCfgFlags' }
+)
+$script:RollbackSourceFile = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:WantCredentialGuard = [bool]$EnableCredentialGuard
 $script:WantMemoryIntegrity = [bool]$EnableMemoryIntegrity
@@ -138,16 +166,24 @@ function Test-MeetsTarget {
     $false
 }
 
+function Get-RegistryControl {
+    param([Parameter(Mandatory = $true)][string]$Id)
+    $hit = @($script:RegistryControls | Where-Object { $_.Id -eq $Id })
+    if ($hit.Count -ne 1) { throw "No registry control '$Id' is defined." }
+    $hit[0]
+}
+
 function Add-RegistryItem {
     param(
         [Parameter(Mandatory = $true)]$Items,
-        [Parameter(Mandatory = $true)][string]$Category,
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)]$Control,
         [Parameter(Mandatory = $true)][int]$Desired,
         [Parameter(Mandatory = $true)][string]$Label,
         [switch]$LockedSatisfiesUnlocked
     )
+    $Category = $Control.Category
+    $Path = $Control.Path
+    $Name = $Control.Name
     $current = Get-RegistryState -Path $Path -Name $Name
     $meets = Test-MeetsTarget -Current $current -Desired $Desired -LockedSatisfiesUnlocked:$LockedSatisfiesUnlocked
     $Items.Add([pscustomobject]@{
@@ -227,32 +263,32 @@ function Get-ForwardPlan {
     $lockValue = if ($UefiLock) { 1 } else { 2 }
     $lockNote = if ($UefiLock) { 'WITH UEFI lock: registry rollback cannot remove it.' } else { 'Without UEFI lock.' }
 
-    Add-RegistryItem -Items $items -Category 'LsaProtection' -Path $script:LsaPath -Name 'RunAsPPL' -Desired $lockValue `
+    Add-RegistryItem -Items $items -Control (Get-RegistryControl 'RunAsPPL') -Desired $lockValue `
         -Label "Run LSASS as a protected process. $lockNote" -LockedSatisfiesUnlocked:(-not $UefiLock)
 
-    Add-RegistryItem -Items $items -Category 'WDigest' -Path $script:WDigestPath -Name 'UseLogonCredential' -Desired 0 `
+    Add-RegistryItem -Items $items -Control (Get-RegistryControl 'UseLogonCredential') -Desired 0 `
         -Label 'Stop WDigest keeping reusable logon credentials in memory.'
 
-    Add-RegistryItem -Items $items -Category 'Ntlm' -Path $script:LsaPath -Name 'LmCompatibilityLevel' -Desired 5 `
+    Add-RegistryItem -Items $items -Control (Get-RegistryControl 'LmCompatibilityLevel') -Desired 5 `
         -Label 'Send NTLMv2 only and refuse LM and NTLMv1.'
-    Add-RegistryItem -Items $items -Category 'Ntlm' -Path $script:LsaPath -Name 'NoLMHash' -Desired 1 `
+    Add-RegistryItem -Items $items -Control (Get-RegistryControl 'NoLMHash') -Desired 1 `
         -Label 'Do not store LM password hashes.'
 
     if ($script:WantCredentialGuard -or $script:WantMemoryIntegrity) {
         $platform = if ($script:WantDmaProtection) { 3 } else { 1 }
-        Add-RegistryItem -Items $items -Category 'Vbs' -Path $script:DeviceGuardPath -Name 'EnableVirtualizationBasedSecurity' -Desired 1 `
+        Add-RegistryItem -Items $items -Control (Get-RegistryControl 'EnableVirtualizationBasedSecurity') -Desired 1 `
             -Label 'Turn on virtualization-based security.'
-        Add-RegistryItem -Items $items -Category 'Vbs' -Path $script:DeviceGuardPath -Name 'RequirePlatformSecurityFeatures' -Desired $platform `
+        Add-RegistryItem -Items $items -Control (Get-RegistryControl 'RequirePlatformSecurityFeatures') -Desired $platform `
             -Label 'Platform requirement (1 Secure Boot, 3 Secure Boot and DMA protection).'
     }
     if ($script:WantMemoryIntegrity) {
-        Add-RegistryItem -Items $items -Category 'MemoryIntegrity' -Path $script:HvciPath -Name 'Enabled' -Desired 1 `
+        Add-RegistryItem -Items $items -Control (Get-RegistryControl 'MemoryIntegrity') -Desired 1 `
             -Label 'Turn on memory integrity (HVCI). Check Windows Security > Core isolation for incompatible drivers first.'
     }
     if ($script:WantCredentialGuard) {
         $cgValue = if ($UefiLock) { 1 } else { 2 }
         $cgNote = if ($UefiLock) { 'WITH UEFI lock: registry rollback cannot remove it.' } else { 'Without UEFI lock. Blocks NTLMv1 and MS-CHAPv2.' }
-        Add-RegistryItem -Items $items -Category 'CredentialGuard' -Path $script:LsaPath -Name 'LsaCfgFlags' -Desired $cgValue `
+        Add-RegistryItem -Items $items -Control (Get-RegistryControl 'LsaCfgFlags') -Desired $cgValue `
             -Label "Turn on Credential Guard. $cgNote" -LockedSatisfiesUnlocked:(-not $UefiLock)
     }
 
@@ -263,20 +299,86 @@ function Get-ForwardPlan {
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
     # A rollback run writes credential-protection-rollback-plan-<ts>.json, which a bare
-    # rollback-* wildcard would also match; only the timestamped record is a rollback file.
+    # rollback-* wildcard would also match; only the timestamped record is a rollback file. A
+    # consumed file (...rollback-<ts>.consumed-<ts>.json) fails the exact pattern on purpose, so
+    # repeated rollbacks walk back one run at a time. The timestamp in the name orders them.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter 'credential-protection-rollback-*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^credential-protection-rollback-\d{8}_\d{6}\.json$' } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Sort-Object Name -Descending | Select-Object -First 1
+}
+
+# Returns $null when the entry is acceptable, otherwise a short text saying what is wrong with it.
+# An entry is acceptable only when its category, registry path and value name are a row of $Controls
+# and its values have the types a restore can act on. Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param($Entry, [Parameter(Mandatory = $true)]$Controls)
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($field in 'Category', 'Setting', 'RegistryPath', 'PriorValue', 'AppliedValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    foreach ($field in 'Category', 'Setting', 'RegistryPath') {
+        $text = $Entry.PSObject.Properties[$field].Value
+        if ($text -isnot [string] -or [string]::IsNullOrWhiteSpace($text)) { return "$field is not a non-empty string" }
+    }
+    $known = @($Controls | Where-Object {
+            $_.Category -eq $Entry.Category -and $_.Path -eq $Entry.RegistryPath -and $_.Name -eq $Entry.Setting
+        })
+    if ($known.Count -eq 0) {
+        return "Category '$($Entry.Category)', registry path '$($Entry.RegistryPath)', value '$($Entry.Setting)' is not a control this script sets"
+    }
+    $prior = $Entry.PriorValue
+    $priorIsText = $prior -is [string] -and $prior -in @('absent', 'unknown')
+    $priorIsNumber = ($prior -is [int] -or $prior -is [long]) -and $prior -ge [int]::MinValue -and $prior -le [int]::MaxValue
+    $priorOk = $priorIsText -or $priorIsNumber
+    if (-not $priorOk) { return "PriorValue '$prior' is not a whole number, 'absent' or 'unknown'" }
+    $applied = $Entry.AppliedValue
+    $appliedIsText = $applied -is [string] -and $applied -eq 'absent'
+    $appliedIsNumber = ($applied -is [int] -or $applied -is [long]) -and $applied -ge [int]::MinValue -and $applied -le [int]::MaxValue
+    $appliedOk = $appliedIsText -or $appliedIsNumber
+    if (-not $appliedOk) { return "AppliedValue '$applied' is not a whole number or 'absent'" }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No credential-protection-rollback-*.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
+    }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    $changed = $data.ChangedSettings
+    if ($changed -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($changed)
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -Controls $script:RegistryControls
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
-    foreach ($entry in @($data.ChangedSettings)) {
-        if (-not $entry) { continue }
+    foreach ($entry in $entries) {
         $prior = $entry.PriorValue
         $unreadable = ("$prior" -eq 'unknown')
         $items.Add([pscustomobject]@{
@@ -354,6 +456,29 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: at least one item failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
     $rollbackPath = Join-Path $resolvedReportDirectory "credential-protection-rollback-$timestamp.json"
@@ -375,6 +500,9 @@ $changedRequiringReboot = @($script:ChangedSettings | Where-Object { $_.Requires
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     RebootRequired = ($changedRequiringReboot.Count -gt 0)
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count

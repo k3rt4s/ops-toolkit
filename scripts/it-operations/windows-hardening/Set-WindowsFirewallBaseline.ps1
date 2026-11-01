@@ -16,7 +16,9 @@ Instructions:
 - Add the opt-in switches one at a time, smoke-testing connectivity after each:
   -BlockAllInboundOnPublic, -DisableStaleProgramRules, -DisablePublicFeatureGroup,
   -ScopeRuleDisplayName.
-- Use -Rollback to reverse the individual changes the last forward run recorded.
+- Use -Rollback to reverse the individual changes the last unconsumed forward run recorded. Each
+  executing -Rollback that reverts everything marks its file consumed, so running -Rollback again
+  undoes the run before it, newest first.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   workstation must never be applied to someone else's machine. Supply the report directory
   explicitly on every run. Generated reports belong under a data root outside the repo.
@@ -67,7 +69,18 @@ Controls:
 Rollback: -Rollback reads the newest firewall-baseline-rollback-<timestamp>.json in the report
 directory and reverses each recorded change in reverse order: Enable-NetFirewallRule for disabled
 rules, Set-NetFirewallProfile with the prior values, Set-NetFirewallRule with the prior Profile
-and RemoteAddress. Last resort, never run by this script: the full restore from the backup file
+and RemoteAddress. Before any plan is written or any change made, every recorded entry is checked
+and the whole file is refused, also under -WhatIf, with an error naming the file and the first bad
+entry when the JSON does not parse, ChangedSettings is not an array, or an entry has a category
+outside ProfileSetting, StaleProgramRule, PublicFeatureRule and ScopeRule, a missing field or a value
+of the wrong type. Profile settings are bounded by profile name and property (the same table the
+forward plan uses). Rule targets are bounded by category and action, not by name: the forward plan
+chooses rules at run time, so a rollback file can only enable or disable a rule, or restore its
+Profile and RemoteAddress, never do anything else. Move a refused file aside to roll back an older
+run. After an executing -Rollback in which every item was reverted or needed no change, the file is
+renamed firewall-baseline-rollback-<timestamp>.consumed-<timestamp>.json and is no longer picked;
+under -WhatIf, or when any item failed or was skipped, it is left in place and the summary says so.
+Last resort, never run by this script: the full restore from the backup file
 replaces ALL rules and profile settings with the backup, discarding anything changed since.
 Run it yourself from an elevated prompt:
   netsh advfirewall import "<ReportDirectory>\firewall-backup-<timestamp>.wfw"
@@ -143,6 +156,23 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+# Every profile and profile property the forward plan can set. Get-ForwardPlan builds its profile items
+# from these two tables and the rollback validator accepts exactly these, so they cannot drift.
+# Kind says what a value of the property looks like: Bool and Action take the Set-NetFirewallProfile
+# GpoBoolean and GpoAction words, Int is the log size.
+$script:ProfileNames = @('Domain', 'Private', 'Public')
+$script:ProfileProperties = @(
+    [pscustomobject]@{ Property = 'Enabled'; Kind = 'Bool'; Desired = 'True'; Switch = $false }
+    [pscustomobject]@{ Property = 'DefaultInboundAction'; Kind = 'Action'; Desired = 'Block'; Switch = $false }
+    [pscustomobject]@{ Property = 'DefaultOutboundAction'; Kind = 'Action'; Desired = 'Allow'; Switch = $false }
+    [pscustomobject]@{ Property = 'NotifyOnListen'; Kind = 'Bool'; Desired = 'False'; Switch = $false }
+    [pscustomobject]@{ Property = 'LogBlocked'; Kind = 'Bool'; Desired = 'True'; Switch = $false }
+    [pscustomobject]@{ Property = 'LogMaxSizeKilobytes'; Kind = 'Int'; Desired = ''; Switch = $false }
+    [pscustomobject]@{ Property = 'AllowInboundRules'; Kind = 'Bool'; Desired = 'False'; Switch = $true }
+)
+# The rule categories the forward plan emits when it changes a rule, with the restore each one needs.
+$script:RollbackCategories = @('ProfileSetting', 'StaleProgramRule', 'PublicFeatureRule', 'ScopeRule')
+$script:RollbackSourceFile = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:RuleCache = @{}
 $script:RuleCacheFull = $false
@@ -254,18 +284,16 @@ function Get-ForwardPlan {
         $profileError = $_.Exception.Message
     }
 
-    $desired = [ordered]@{
-        Enabled = 'True'; DefaultInboundAction = 'Block'; DefaultOutboundAction = 'Allow'
-        NotifyOnListen = 'False'; LogBlocked = 'True'; LogMaxSizeKilobytes = "$LogMaxSizeKilobytes"
-    }
     $profileSettings = [System.Collections.Generic.List[object]]::new()
-    foreach ($name in 'Domain', 'Private', 'Public') {
-        foreach ($prop in $desired.Keys) {
-            $profileSettings.Add([pscustomobject]@{ Profile = $name; Property = $prop; Desired = $desired[$prop]; Switch = $false })
+    foreach ($name in $script:ProfileNames) {
+        foreach ($spec in @($script:ProfileProperties | Where-Object { -not $_.Switch })) {
+            $want = if ($spec.Property -eq 'LogMaxSizeKilobytes') { "$LogMaxSizeKilobytes" } else { $spec.Desired }
+            $profileSettings.Add([pscustomobject]@{ Profile = $name; Property = $spec.Property; Desired = $want; Switch = $false })
         }
     }
     if ($BlockAllInboundOnPublic) {
-        $profileSettings.Add([pscustomobject]@{ Profile = 'Public'; Property = 'AllowInboundRules'; Desired = 'False'; Switch = $true })
+        $spec = @($script:ProfileProperties | Where-Object { $_.Property -eq 'AllowInboundRules' })[0]
+        $profileSettings.Add([pscustomobject]@{ Profile = 'Public'; Property = $spec.Property; Desired = $spec.Desired; Switch = $true })
     }
 
     foreach ($s in $profileSettings) {
@@ -382,18 +410,105 @@ function Get-ForwardPlan {
 
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
-    # Exact name: the pattern must not also match firewall-baseline-rollback-plan-<ts>.json.
+    # Exact name: the pattern must not also match firewall-baseline-rollback-plan-<ts>.json, nor a
+    # consumed file (...rollback-<ts>.consumed-<ts>.json), so repeated rollbacks walk back one run.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter 'firewall-baseline-rollback-*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^firewall-baseline-rollback-\d{8}_\d{6}\.json$' } |
         Sort-Object Name -Descending | Select-Object -First 1
 }
 
+# Returns $null when the entry is acceptable, otherwise a short text saying what is wrong with it.
+# Profile settings are checked against the profile and property tables the forward plan uses. Rule
+# targets cannot be enumerated (the forward plan picks them at run time), so they are bounded by
+# category and action only. Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param($Entry, [Parameter(Mandatory = $true)]$ProfileNames, [Parameter(Mandatory = $true)]$ProfileProperties, [Parameter(Mandatory = $true)]$Categories)
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($field in 'Category', 'Setting', 'Target', 'PriorValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    $category = $Entry.Category
+    if ($category -isnot [string] -or $category -notin @($Categories)) { return "Category '$category' is not one this script records" }
+    if ($Entry.Setting -isnot [string] -or [string]::IsNullOrWhiteSpace($Entry.Setting)) { return 'Setting is not a non-empty string' }
+    if ($Entry.Target -isnot [string] -or [string]::IsNullOrWhiteSpace($Entry.Target)) { return 'Target is not a non-empty string' }
+    $prior = $Entry.PriorValue
+    $priorIsScalar = ($prior -is [string] -or $prior -is [bool] -or $prior -is [int] -or $prior -is [long])
+
+    if ($category -eq 'ProfileSetting') {
+        if ($Entry.Target -notin @($ProfileNames)) { return "Target '$($Entry.Target)' is not a firewall profile this script sets" }
+        $propertyName = if ($Entry.PSObject.Properties['Property']) { $Entry.Property } else { $null }
+        $spec = @($ProfileProperties | Where-Object { $propertyName -is [string] -and $_.Property -eq $propertyName })
+        if ($spec.Count -eq 0) { return "Property '$propertyName' is not a profile property this script sets" }
+        if (-not $priorIsScalar) { return "PriorValue '$prior' is not a single value" }
+        $text = "$prior"
+        switch ($spec[0].Kind) {
+            'Bool' { if ($text -notin @('True', 'False', 'NotConfigured')) { return "PriorValue '$text' of $propertyName is not True, False or NotConfigured" } }
+            'Action' { if ($text -notin @('Allow', 'Block', 'NotConfigured')) { return "PriorValue '$text' of $propertyName is not Allow, Block or NotConfigured" } }
+            'Int' {
+                $size = 0
+                if ($text -notmatch '^\d{1,5}$' -or -not [int]::TryParse($text, [ref]$size) -or $size -lt 1 -or $size -gt 32767) {
+                    return "PriorValue '$text' of $propertyName is not a whole number from 1 to 32767"
+                }
+            }
+            default { return "Property '$propertyName' has no value check" }
+        }
+        return $null
+    }
+
+    # Rule categories: the restore enables or disables the named rule, or resets its scope.
+    if ($category -in @('StaleProgramRule', 'PublicFeatureRule')) {
+        if (-not $priorIsScalar -or "$prior" -notin @('True', 'False')) { return "PriorValue '$prior' is not True or False" }
+        return $null
+    }
+    foreach ($field in 'PriorProfile', 'PriorRemoteAddress') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the ScopeRule entry has no $field" }
+        $value = $Entry.PSObject.Properties[$field].Value
+        if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value) -or $value -eq 'unknown') {
+            return "$field is missing, empty or unknown"
+        }
+    }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
+}
+
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No firewall-baseline-rollback-<timestamp>.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
+    }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    $changed = $data.ChangedSettings
+    if ($changed -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($changed)
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -ProfileNames $script:ProfileNames `
+            -ProfileProperties $script:ProfileProperties -Categories $script:RollbackCategories
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
 
-    $entries = @(@($data.ChangedSettings) | Where-Object { $_ })
     [array]::Reverse($entries)
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
     foreach ($e in $entries) {
@@ -505,6 +620,29 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: at least one item failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
     $rollbackPath = Join-Path $resolvedReportDirectory "firewall-baseline-rollback-$timestamp.json"
@@ -524,6 +662,9 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     RebootRequired = $false
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count

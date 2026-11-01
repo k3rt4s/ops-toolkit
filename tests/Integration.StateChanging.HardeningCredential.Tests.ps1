@@ -252,3 +252,295 @@ Describe 'Set-WindowsCredentialProtection rollback' {
         $empty.WhatIf.Output | Should -Match 'No credential-protection-rollback-\*\.json found'
     }
 }
+
+Describe 'Set-WindowsCredentialProtection rollback safety' {
+    BeforeAll {
+        $script:rbDirCounter = 0
+        $script:credScriptFullPath = Join-Path (Get-RepositoryRoot) $script:scriptRelative
+
+        function Get-LiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:credScriptFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        function New-RollbackDir {
+            $script:rbDirCounter++
+            $dir = Join-Path $script:workRoot "credSafety$($script:rbDirCounter)"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $dir
+        }
+
+        function New-CredEntry {
+            param($Category = 'LsaProtection', $Setting = 'RunAsPPL', $Path = $script:lsa, $Prior = 0, $Applied = 2)
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; RegistryPath = $Path; RequiresReboot = $true; PriorValue = $Prior; AppliedValue = $Applied }
+        }
+
+        function Write-CredRollbackFile {
+            param([string]$Dir, [string]$Name, [object[]]$Entry)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]@{ Timestamp = '20260101_000000'; ChangedSettings = @($Entry) } |
+                ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-CredRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute, [hashtable]$Registry = @{})
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $setup = (Get-WindowsMutationStubText -MutationLogPath $log) + (Get-Fixture -Registry $Registry) + $script:registryShadow
+            $run = Invoke-ScriptUnderTest -RelativePath $script:scriptRelative -ModulePath $script:systemModulePath -Setup $setup -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-CredRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because)
+            $r = Invoke-CredRollback -Dir $Dir -Tag "refused$($script:rbDirCounter)"
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $r.Run.Output | Should -Match 'refused' -Because $Because
+            $r.Run.Output | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $r.Run.Output | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'credential-protection-rollback-plan-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'credential-protection-rollback-state-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because $Because
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted entry outside the controls the forward plan sets, under -Rollback -WhatIf' {
+        $cases = @(
+            @{ Name = 'foreign registry path'; Entry = (New-CredEntry -Path 'HKLM:\SOFTWARE\Evil') },
+            @{ Name = 'known path, unknown value name'; Entry = (New-CredEntry -Setting 'DisableAntiSpyware') },
+            @{ Name = 'known setting, wrong path'; Entry = (New-CredEntry -Path $script:wdigest) },
+            @{ Name = 'known setting, wrong category'; Entry = (New-CredEntry -Category 'Ntlm') }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RollbackDir
+            $name = 'credential-protection-rollback-20260101_000000.json'
+            $null = Write-CredRollbackFile -Dir $dir -Name $name -Entry @((New-CredEntry), $case.Entry)
+            Assert-CredRefused -Dir $dir -FileName $name -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-RollbackDir
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $null = Write-CredRollbackFile -Dir $dir -Name $name -Entry @((New-CredEntry), (New-CredEntry -Path 'HKLM:\SOFTWARE\Evil'))
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        $r.Run.Output | Should -Match 'entry 1 '
+        $r.Run.Output | Should -Match ([regex]::Escape('HKLM:\SOFTWARE\Evil'))
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "Timestamp": "20260101_000000" }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "LsaProtection" } }'
+            'ChangedSettings a string'  = '{ "ChangedSettings": "RunAsPPL" }'
+            'ChangedSettings one valid entry, not in an array' = ('{ "ChangedSettings": { "Category": "LsaProtection", "Setting": "RunAsPPL", "RegistryPath": "' + ($script:lsa -replace '\\', '\\') + '", "PriorValue": 0, "AppliedValue": 2 } }')
+            'top level is an array'     = '[ { "Category": "LsaProtection" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "RunAsPPL" ] }'
+            'entry lacks AppliedValue'  = ('{ "ChangedSettings": [ { "Category": "LsaProtection", "Setting": "RunAsPPL", "RegistryPath": "' + ($script:lsa -replace '\\', '\\') + '", "PriorValue": 0 } ] }')
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-RollbackDir
+            Set-Content -LiteralPath (Join-Path $dir $name) -Value $bodies[$label] -Encoding utf8
+            Assert-CredRefused -Dir $dir -FileName $name -Because $label
+        }
+    }
+
+    It 'refuses a value of the wrong type' {
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $cases = @(
+            @{ Name = 'PriorValue abc'; Entry = (New-CredEntry -Prior 'abc') },
+            @{ Name = 'PriorValue numeric string'; Entry = (New-CredEntry -Prior '2') },
+            @{ Name = 'PriorValue boolean'; Entry = (New-CredEntry -Prior $true) },
+            @{ Name = 'PriorValue array'; Entry = (New-CredEntry -Prior @(1, 2)) },
+            @{ Name = 'PriorValue null'; Entry = (New-CredEntry -Prior $null) },
+            @{ Name = 'PriorValue out of DWORD range'; Entry = (New-CredEntry -Prior 99999999999) },
+            @{ Name = 'AppliedValue abc'; Entry = (New-CredEntry -Applied 'abc') },
+            @{ Name = 'AppliedValue unknown'; Entry = (New-CredEntry -Applied 'unknown') }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RollbackDir
+            $null = Write-CredRollbackFile -Dir $dir -Name $name -Entry @($case.Entry)
+            Assert-CredRefused -Dir $dir -FileName $name -Because $case.Name
+        }
+    }
+
+    It 'does not pick a consumed file: the older unconsumed file is planned instead' {
+        $dir = New-RollbackDir
+        # The consumed file is newer and deliberately unreadable, so picking it would fail loudly.
+        Set-Content -LiteralPath (Join-Path $dir 'credential-protection-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-CredRollbackFile -Dir $dir -Name 'credential-protection-rollback-20260101_000000.json' `
+            -Entry @((New-CredEntry -Category 'Ntlm' -Setting 'NoLMHash' -Prior 'absent' -Applied 1))
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+        $plan = @(Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        @($plan | ForEach-Object { $_.Setting }) | Should -Be @('NoLMHash')
+        $plan[0].DesiredValue | Should -Be 'absent'
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips every item for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-RollbackDir
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $file = Write-CredRollbackFile -Dir $dir -Name $name -Entry @((New-CredEntry))
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credUnelevatedExec' -Execute -Registry @{ $script:lsa = @{ RunAsPPL = 2 } }
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -Be 1
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $name
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf' {
+        $dir = New-RollbackDir
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $file = Write-CredRollbackFile -Dir $dir -Name $name -Entry @((New-CredEntry))
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credWhatIfKeeps' -Registry @{ $script:lsa = @{ RunAsPPL = 2 } }
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $name
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+
+        # Where nothing is left to revert every item reads NoChange even under -WhatIf, so only the
+        # -WhatIf rule itself keeps the file.
+        $dir2 = New-RollbackDir
+        $name2 = 'credential-protection-rollback-20260101_000000.json'
+        $file2 = Write-CredRollbackFile -Dir $dir2 -Name $name2 -Entry @((New-CredEntry -Prior 'unknown'))
+        $r2 = Invoke-CredRollback -Dir $dir2 -Tag 'credWhatIfKeeps2'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        @($r2.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('NoChange')
+        Test-Path -LiteralPath $file2 | Should -BeTrue
+        $r2.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+    }
+
+    It 'consumes the file after an executing rollback in which every item needed no change' {
+        $dir = New-RollbackDir
+        $name = 'credential-protection-rollback-20260101_000000.json'
+        $file = Write-CredRollbackFile -Dir $dir -Name $name -Entry @((New-CredEntry -Prior 'unknown'))
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credConsumeNoChange' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('NoChange')
+        Test-Path -LiteralPath $file | Should -BeFalse -Because 'the used file is renamed'
+        $r.Run.Summary.RollbackConsumedPath | Should -Match 'credential-protection-rollback-20260101_000000\.consumed-\d{8}_\d{6}\.json$'
+        Test-Path -LiteralPath $r.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $name
+        # The consumed file is not found by the next rollback.
+        $again = Invoke-CredRollback -Dir $dir -Tag 'credConsumeNoChange2' -Execute
+        $again.Run.ExitCode | Should -Not -Be 0
+        $again.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-LiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-State { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-State 'Reverted', 'NoChange', 'Reverted') $false | Should -BeTrue
+        & $decide (New-State 'NoChange') $false | Should -BeTrue
+        & $decide (New-State 'Reverted', 'Failed: access denied') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-State 'Previewed', 'Previewed') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Previewed') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+        & $decide (New-State 'NoChange') $true | Should -BeFalse
+    }
+
+    It 'validates one entry in a pure function lifted from the script, against whatever control table it is given' {
+        $text = Get-LiftedFunctionText -Name 'Get-RollbackEntryProblem'
+        $check = [scriptblock]::Create("param(`$Entry, `$Controls)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -Controls `$Controls")
+        $controls = @([pscustomobject]@{ Id = 'X'; Category = 'Cat'; Path = 'HKLM:\A'; Name = 'N' })
+        function New-Probe { param($Prior = 1, $Applied = 2, $Path = 'HKLM:\A') [pscustomobject]@{ Category = 'Cat'; Setting = 'N'; RegistryPath = $Path; PriorValue = $Prior; AppliedValue = $Applied } }
+
+        & $check (New-Probe) $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Prior 'absent' -Applied 'absent') $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Prior 'unknown') $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Path 'HKLM:\B') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Prior 'abc') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Applied 'unknown') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe) @([pscustomobject]@{ Id = 'Y'; Category = 'Other'; Path = 'HKLM:\A'; Name = 'N' }) | Should -Not -BeNullOrEmpty -Because 'a table without the entry allows nothing'
+    }
+
+    It 'accepts every control the forward plan can produce with all switches on, so the validator cannot drift from it' {
+        $dir = New-RollbackDir
+        $log = Join-Path $script:workRoot 'credDriftApply.log'
+        $apply = Invoke-ScriptUnderTest -RelativePath $script:scriptRelative -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + (Get-Fixture -Registry @{}) + $script:registryShadow) `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'credDriftPlan'); EnableCredentialGuard = $true; EnableMemoryIntegrity = $true; WhatIf = $true }
+        $apply.ExitCode | Should -Be 0 -Because $apply.Output
+        $forward = @(Get-Content -LiteralPath $apply.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object { $_.Category -ne 'Report' })
+        $forward.Count | Should -Be 8
+        $entries = @($forward | ForEach-Object {
+                New-CredEntry -Category $_.Category -Setting $_.Setting -Path $_.RegistryPath -Prior 'absent' -Applied ([int]$_.DesiredValue)
+            })
+        $null = Write-CredRollbackFile -Dir $dir -Name 'credential-protection-rollback-20260101_000000.json' -Entry $entries
+        $r = Invoke-CredRollback -Dir $dir -Tag 'credDriftRollback'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items).Count | Should -Be 8
+    }
+
+    It 'rolls back newest first and consumes each file as it goes' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session'; return }
+        $dir = New-RollbackDir
+        $apply1 = $null
+        $apply2 = $null
+        # Apply 1 sets the default controls; apply 2 (a second later) adds memory integrity on top of
+        # a machine that already has the defaults. Registry reads are a fixture, so the fixture for
+        # apply 2 shows the defaults in place.
+        $log1 = Join-Path $script:workRoot 'credLifoApply1.log'
+        $log2 = Join-Path $script:workRoot 'credLifoApply2.log'
+        $done = @{ $script:lsa = @{ RunAsPPL = 2; LmCompatibilityLevel = 5; NoLMHash = 1 }; $script:wdigest = @{ UseLogonCredential = 0 } }
+        $apply1 = Invoke-ScriptUnderTest -RelativePath $script:scriptRelative -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log1) + (Get-Fixture -Registry @{}) + $script:registryShadow) `
+            -Argument @{ ReportDirectory = $dir; Confirm = $false }
+        $apply1.ExitCode | Should -Be 0 -Because $apply1.Output
+        Start-Sleep -Milliseconds 1200
+        $apply2 = Invoke-ScriptUnderTest -RelativePath $script:scriptRelative -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log2) + (Get-Fixture -Registry $done) + $script:registryShadow) `
+            -Argument @{ ReportDirectory = $dir; EnableMemoryIntegrity = $true; Confirm = $false }
+        $apply2.ExitCode | Should -Be 0 -Because $apply2.Output
+        $apply1.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+        $apply2.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+
+        $rb1 = Invoke-CredRollback -Dir $dir -Tag 'credLifoRollback1' -Execute -Registry $done
+        $rb1.Run.ExitCode | Should -Be 0 -Because $rb1.Run.Output
+        (Split-Path -Leaf $rb1.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply2.Summary.RollbackJsonPath)
+        $rb1.Run.Summary.RollbackConsumedPath | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $rb1.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        Test-Path -LiteralPath $apply2.Summary.RollbackJsonPath | Should -BeFalse -Because 'the used file is renamed'
+        $rb1.Run.Summary.RollbackConsumedPath | Should -Match 'rollback-\d{8}_\d{6}\.consumed-\d{8}_\d{6}\.json$'
+        $targets1 = @(Get-OpsMutationRecord -Path $rb1.Log | ForEach-Object { $_.Target })
+        $targets1 | Should -Contain "$($script:hvci)\Enabled"
+        $targets1 | Should -Not -Contain "$($script:lsa)\RunAsPPL"
+
+        $rb2 = Invoke-CredRollback -Dir $dir -Tag 'credLifoRollback2' -Execute -Registry @{}
+        $rb2.Run.ExitCode | Should -Be 0 -Because $rb2.Run.Output
+        (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
+        Test-Path -LiteralPath $apply1.Summary.RollbackJsonPath | Should -BeFalse
+        $targets2 = @(Get-OpsMutationRecord -Path $rb2.Log | ForEach-Object { $_.Target })
+        $targets2 | Should -Contain "$($script:lsa)\RunAsPPL"
+        $targets2 | Should -Not -Contain "$($script:hvci)\Enabled"
+
+        $rb3 = Invoke-CredRollback -Dir $dir -Tag 'credLifoRollback3' -Execute
+        $rb3.Run.ExitCode | Should -Not -Be 0
+        $rb3.Run.Output | Should -Match 'Nothing to roll back'
+    }
+}

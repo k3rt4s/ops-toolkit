@@ -5,6 +5,21 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-10-31
+
+### Fixed: two runs in the same second shared one run directory
+
+`Resolve-OpsRunDirectory` in `modules\OpsToolkit.Reporting` named a run folder to the second
+and created it with `New-Item -Force`, which returns an existing folder instead of failing.
+Two runs of the same script and prefix that started in the same second wrote into one folder,
+the later run's plan, state and summary overwriting the earlier one's. It now never reuses a
+folder: a later same-second run gets `<prefix>-yyyyMMdd_HHmmss_2`, then `_3`, and so on.
+`Get-OpsRunDirectory`, which `Compare-OpsToolkitRun.ps1` uses to find the current and previous
+runs, parses the suffix into a new `Sequence` property and sorts on the timestamp and then the
+sequence. Found when `tests\Integration.StateChanging.Entra.Tests.ps1` failed on master
+(three containment runs with one report name, started within a second); two new tests in
+`tests\OpsToolkit.Reporting.Tests.ps1` fail without the fix.
+
 ## 2026-10-29
 
 ### Added: standalone Windows 11 hardening scripts

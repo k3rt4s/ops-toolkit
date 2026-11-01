@@ -191,4 +191,33 @@ Describe 'Resolve-OpsRunDirectory' {
         $path = Resolve-OpsRunDirectory -OutputDirectory $nested -Prefix 'x' -Timestamp ([datetime]::new(2026, 1, 1))
         Test-Path -LiteralPath $path | Should -BeTrue
     }
+
+    It 'never reuses an existing run folder from the same second' {
+        $stamp = [datetime]::new(2026, 10, 31, 12, 0, 0)
+        $first = Resolve-OpsRunDirectory -OutputDirectory $script:runParent -Prefix 'same' -Timestamp $stamp
+        Set-Content -LiteralPath (Join-Path $first 'summary.json') -Value 'first run'
+        $second = Resolve-OpsRunDirectory -OutputDirectory $script:runParent -Prefix 'same' -Timestamp $stamp
+        $third = Resolve-OpsRunDirectory -OutputDirectory $script:runParent -Prefix 'same' -Timestamp $stamp
+        (Split-Path $first -Leaf) | Should -Be 'same-20261031_120000'
+        (Split-Path $second -Leaf) | Should -Be 'same-20261031_120000_2'
+        (Split-Path $third -Leaf) | Should -Be 'same-20261031_120000_3'
+        @(Get-ChildItem -LiteralPath $second -Force).Count | Should -Be 0
+        Get-Content -LiteralPath (Join-Path $first 'summary.json') | Should -Be 'first run'
+    }
+
+    It 'lists same-second runs newest first, by suffix' {
+        $root = Join-Path $script:runParent 'listing'
+        $stamp = [datetime]::new(2026, 10, 31, 12, 0, 0)
+        $made = @(1..3 | ForEach-Object { Resolve-OpsRunDirectory -OutputDirectory $root -Prefix 'pick' -Timestamp $stamp })
+        $older = Resolve-OpsRunDirectory -OutputDirectory $root -Prefix 'pick' -Timestamp $stamp.AddSeconds(-1)
+        $runs = @(Get-OpsRunDirectory -Path $root -Prefix 'pick')
+        $runs.Count | Should -Be 4
+        $runs[0].Path | Should -Be $made[2]
+        $runs[0].Sequence | Should -Be 3
+        $runs[1].Path | Should -Be $made[1]
+        $runs[2].Path | Should -Be $made[0]
+        $runs[2].Sequence | Should -Be 1
+        $runs[3].Path | Should -Be $older
+        @($runs | ForEach-Object Prefix | Sort-Object -Unique) | Should -Be @('pick')
+    }
 }

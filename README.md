@@ -713,8 +713,9 @@ Any script whose synopsis comes back as its own filename followed by a parameter
 - Put generated reports under `reports\`; do not commit generated output.
 - Write reports through `modules\OpsToolkit.Reporting` rather than with a local copy
   of the same helpers. Every script writes to a timestamped run directory named
-  `<prefix>-yyyyMMdd_HHmmss`, containing one CSV and one JSON per report plus a
-  `summary.json`. That layout is what `Compare-OpsToolkitRun.ps1` needs in order to
+  `<prefix>-yyyyMMdd_HHmmss` (with `_2`, `_3` and so on appended when a run of the same
+  prefix already started in that second, so a folder is never reused), containing one
+  CSV and one JSON per report plus a `summary.json`. That layout is what `Compare-OpsToolkitRun.ps1` needs in order to
   diff one run against the previous one; a script writing loose timestamped files
   cannot be compared at all.
 

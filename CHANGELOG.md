@@ -5,6 +5,37 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-01
+
+### Changed: hardening rollback validates its file and walks back one run at a time
+
+The eight remaining state-changing scripts in `scripts\it-operations\windows-hardening\`
+(Defender, network protocols, exploit mitigation, audit logging, remote access, local accounts,
+WDAC and BitLocker) now follow the rollback contract the credential and firewall scripts
+piloted:
+
+- `-Rollback` refuses the whole rollback file, before any plan or change and also under
+  `-WhatIf`, when an entry names a control the script does not change or a value outside that
+  control's range. The bounds come from the same tables the forward plan uses.
+- The newest file is chosen by name, not by `LastWriteTime`.
+- After an executing rollback where every item was reverted or needed no change, the file is
+  renamed `.consumed-<timestamp>.json`, so the next `-Rollback` undoes the run before it.
+  Summaries gain `RollbackSourcePath`, `RollbackConsumedPath` and `RollbackNote`.
+- Exploit mitigation: a `NOTSET` prior is left as it is and no longer blocks consuming the file.
+- Audit logging: the file is validated before the auditpol backup is taken, and the backup it
+  names must sit beside it, match the expected name, and be at most 1 MB of subcategory rows.
+- WDAC: when the active policy list cannot be read, the removal is refused and the file is kept.
+- BitLocker: the rollback file no longer records the recovery key path, and rollback turns off
+  only the OS volume this script turned on.
+
+The elevated halves of these tests still have not run on a real machine.
+
+### Fixed: workstation-setup README phase table
+
+The phase table in `scripts\it-operations\workstation-setup\README.md` now matches
+`Install-WorkstationBootstrap.ps1`: there is no developer-mode step, environment variables are
+set in phase 5, and phase 7 is the WSL update for the AiContainers group.
+
 ## 2026-10-31
 
 ### Fixed: two runs in the same second shared one run directory

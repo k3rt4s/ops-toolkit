@@ -524,6 +524,23 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
   `-RecoveryKeyDirectory`, which must be off the system drive, and read back before encryption
   starts; it never appears in a report. Run it last, and move the key file off the machine.
 
+Rollback in these ten scripts follows one contract:
+
+- `-Rollback` reads the newest unconsumed `<prefix>-rollback-<timestamp>.json` in the report
+  directory, newest by name.
+- Before any plan is written or anything changes, also under `-WhatIf`, every entry is checked
+  against the controls that script changes (registry path and value name, rule id, feature,
+  subcategory, account by well-known SID) and against that control's range. One entry outside
+  them refuses the whole file with an error naming the file and the entry. Move a refused file
+  out of the report directory to roll back an older run.
+- After an executing rollback in which every item was reverted or needed no change, the file is
+  renamed `<prefix>-rollback-<timestamp>.consumed-<timestamp>.json`, so the next `-Rollback`
+  undoes the run before it. Under `-WhatIf`, or when any item failed or was skipped, the file
+  stays in place and the summary's `RollbackNote` says why.
+- WDAC rollback removes only the policy this script deployed, and refuses the removal when the
+  active policy list cannot be read. BitLocker rollback turns off the OS volume only when this
+  script turned it on, and its rollback file carries no key path.
+
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1 -Days 14
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -Rollback -WhatIf

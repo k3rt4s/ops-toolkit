@@ -73,7 +73,7 @@ Describe 'Get-OpsOverallReadinessStatus' {
 Describe 'Get-UnifiedAuditLogIngestionRecord' {
     It 'is NotAssessed when Get-AdminAuditLogConfig is not available' {
         if (Get-Command -Name Get-AdminAuditLogConfig -ErrorAction SilentlyContinue) {
-            Remove-Item -LiteralPath 'function:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
         }
         $record = Get-UnifiedAuditLogIngestionRecord
         $record.Status | Should -Be 'NotAssessed'
@@ -85,7 +85,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord' {
             function global:Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $true } }
             (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'Met'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
         }
     }
 
@@ -94,7 +94,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord' {
             function global:Get-AdminAuditLogConfig { [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = $false } }
             (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotMet'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
         }
     }
 
@@ -105,7 +105,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord' {
             $record.Status | Should -Be 'NotAssessed'
             $record.Finding | Should -Match 'access denied'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
         }
     }
 
@@ -114,7 +114,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord' {
             function global:Get-AdminAuditLogConfig { [pscustomobject]@{ SomeOtherField = 'x' } }
             (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotAssessed'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-AdminAuditLogConfig' -ErrorAction SilentlyContinue
         }
     }
 }
@@ -172,7 +172,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord session source' {
             $record.Status | Should -Be 'NotAssessed'
             $record.Finding | Should -Match 'compliance'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-ConnectionInformation' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-ConnectionInformation' -ErrorAction SilentlyContinue
             Remove-Module -Name $moduleName -Force -ErrorAction SilentlyContinue
         }
     }
@@ -187,7 +187,7 @@ Describe 'Get-UnifiedAuditLogIngestionRecord session source' {
                 }.GetNewClosure())
             (Get-UnifiedAuditLogIngestionRecord).Status | Should -Be 'NotMet'
         } finally {
-            Remove-Item -LiteralPath 'function:Get-ConnectionInformation' -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath 'function:global:Get-ConnectionInformation' -ErrorAction SilentlyContinue
             Remove-Module -Name $moduleName -Force -ErrorAction SilentlyContinue
         }
     }

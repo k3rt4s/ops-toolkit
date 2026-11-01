@@ -626,7 +626,9 @@ function Get-ResponderAssignmentCount {
     roleEligibilityScheduleInstances for the role.
 
     .OUTPUTS
-    PSCustomObject with ActiveCount (permanent only), ActivatedCount, EligibleCount (directoryScopeId / only).
+    PSCustomObject with ActiveCount (permanent only), ActivatedCount (members present only through a PIM
+    activation window; computed for tests and callers, not graded or reported), and EligibleCount
+    (directoryScopeId / only).
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

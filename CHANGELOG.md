@@ -168,7 +168,7 @@ protection XML, auditpol CSV, firewall export) in its run folder.
 
 ### Added: Export-ICloudDiagnostic.ps1
 
-- `scripts/it-operations/workstation-setup/Export-ICloudDiagnostic.ps1` gathers, read-only, the
+- `Export-ICloudDiagnostic.ps1` (removed 2026-11-01) gathers, read-only, the
   iCloud package and its runtimes, Apple services, the Cloud Files filter driver, Store-app
   policies, Schannel and .NET TLS settings, clock, Apple endpoint reachability, event log errors
   and the newest iCloud log lines into one text report, saved to Proton Drive when found.
@@ -185,7 +185,7 @@ protection XML, auditpol CSV, firewall export) in its run folder.
 
 ### Added: Install-WorkstationBootstrap.ps1
 
-- `scripts/it-operations/workstation-setup/Install-WorkstationBootstrap.ps1` builds a fresh
+- `Install-WorkstationBootstrap.ps1` (removed 2026-11-01) builds a fresh
   Windows 11 workstation from Windows PowerShell and winget alone: packages in three groups
   (Core, Comms, AiContainers), Git identity, VS Code extensions and a non-overwriting settings
   merge, PowerShell modules, profile block, user environment variables, and gh-based workspace

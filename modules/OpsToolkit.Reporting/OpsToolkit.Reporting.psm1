@@ -45,14 +45,20 @@ function Resolve-OpsOutputDirectory {
         [string]$Path
     )
 
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    New-Item -ItemType Directory -Path $Path -Force -WhatIf:$false | Out-Null
     (Resolve-Path -LiteralPath $Path).Path
 }
 
 function Resolve-OpsRunDirectory {
     <#
     .SYNOPSIS
-    Create a timestamped run directory under the output directory and return its path.
+    Create a new timestamped run directory under the output directory and return its path.
+
+    .DESCRIPTION
+    The name is prefix-yyyyMMdd_HHmmss. When a folder of that name already exists, because
+    another run with the same prefix started in the same second, the next free name
+    prefix-yyyyMMdd_HHmmss_2, _3 and so on is used instead. An existing folder is never
+    reused, so two runs never share or overwrite each other's reports.
 
     .PARAMETER OutputDirectory
     Parent directory. Created if missing.
@@ -83,9 +89,27 @@ function Resolve-OpsRunDirectory {
     )
 
     $parent = Resolve-OpsOutputDirectory -Path $OutputDirectory
-    $runDirectory = Join-Path $parent "$Prefix-$($Timestamp.ToString('yyyyMMdd_HHmmss'))"
-    New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
-    (Resolve-Path -LiteralPath $runDirectory).Path
+    $baseName = "$Prefix-$($Timestamp.ToString('yyyyMMdd_HHmmss'))"
+    # New-Item without -Force fails on an existing folder, so a run that loses a same-second
+    # race moves on to the next suffix instead of writing into the other run's folder. Any other
+    # IO failure, such as a name Windows rejects or a full disk, is rethrown as it is.
+    for ($sequence = 1; $sequence -le 999; $sequence++) {
+        $name = if ($sequence -eq 1) { $baseName } else { "${baseName}_$sequence" }
+        $runDirectory = Join-Path $parent $name
+        if (Test-Path -LiteralPath $runDirectory) {
+            continue
+        }
+        try {
+            New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop -WhatIf:$false | Out-Null
+        } catch [System.IO.IOException] {
+            if ($_.FullyQualifiedErrorId -like 'DirectoryExist*' -or (Test-Path -LiteralPath $runDirectory)) {
+                continue
+            }
+            throw
+        }
+        return (Resolve-Path -LiteralPath $runDirectory).Path
+    }
+    throw "No free run directory name for '$baseName' under '$parent' after 999 attempts."
 }
 
 function Export-OpsReport {
@@ -474,9 +498,10 @@ function Get-OpsRunDirectory {
     Return a collector's run directories, newest first.
 
     .DESCRIPTION
-    Run directories are named prefix-yyyyMMdd_HHmmss. Sorting is done on the parsed
-    timestamp rather than on the name or the file system time, because a copied or
-    restored folder carries the wrong file system time and would reorder the history.
+    Run directories are named prefix-yyyyMMdd_HHmmss, or prefix-yyyyMMdd_HHmmss_N (N 2 or
+    more) for a later run that started in the same second. Sorting is done on the parsed
+    timestamp and then N rather than on the name or the file system time, because a copied
+    or restored folder carries the wrong file system time and would reorder the history.
 
     .PARAMETER Path
     The report root to look under.
@@ -485,7 +510,8 @@ function Get-OpsRunDirectory {
     Optional run prefix. All prefixes are returned when omitted.
 
     .OUTPUTS
-    PSCustomObject with Path, Prefix, and Timestamp, newest first.
+    PSCustomObject with Path, Prefix, Timestamp and Sequence (1 for an unsuffixed name),
+    newest first.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -508,7 +534,7 @@ function Get-OpsRunDirectory {
     # and propagate into the caller's own loops, which aborts a Pester run outright.
     $results = [System.Collections.Generic.List[object]]::new()
     foreach ($directory in (Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue)) {
-        $match = [regex]::Match($directory.Name, '^(?<prefix>.+)-(?<stamp>\d{8}_\d{6})$')
+        $match = [regex]::Match($directory.Name, '^(?<prefix>.+)-(?<stamp>\d{8}_\d{6})(?:_(?<seq>[2-9]|[1-9][0-9]{1,2}))?$')
         if (-not $match.Success) {
             continue
         }
@@ -522,14 +548,16 @@ function Get-OpsRunDirectory {
             continue
         }
 
+        $sequence = if ($match.Groups['seq'].Success) { [int]$match.Groups['seq'].Value } else { 1 }
         $results.Add([pscustomobject]@{
                 Path = $directory.FullName
                 Prefix = $match.Groups['prefix'].Value
                 Timestamp = $parsed
+                Sequence = $sequence
             })
     }
 
-    @($results) | Sort-Object Timestamp -Descending
+    @($results) | Sort-Object -Property @{ Expression = 'Timestamp'; Descending = $true }, @{ Expression = 'Sequence'; Descending = $true }
 }
 
 function Compare-OpsRecordSet {

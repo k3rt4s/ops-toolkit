@@ -316,7 +316,7 @@ Describe 'Invoke-EntraUserContainment' {
                 Test-Path (Join-Path $script:whatIfRun.Summary.RunDirectory "$name.json") | Should -BeTrue -Because "$name.json must exist"
             }
             Test-Path (Join-Path $script:whatIfRun.Summary.RunDirectory 'summary.json') | Should -BeTrue
-            $script:whatIfRun.Summary.RunDirectory | Should -Match 'entra-containment-\d{8}_\d{6}$'
+            $script:whatIfRun.Summary.RunDirectory | Should -Match 'entra-containment-\d{8}_\d{6}(_\d+)?$'
             @(Import-Csv (Join-Path $script:whatIfRun.Summary.RunDirectory 'inbox-rules.csv')).Count | Should -Be 3
         }
 

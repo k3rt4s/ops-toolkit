@@ -261,13 +261,13 @@ Describe 'Set-WindowsDefenderHardening -Rollback' {
     BeforeAll {
         $script:rbDirectory = Join-Path $script:workRoot 'rollback'
         New-Item -ItemType Directory -Path $script:rbDirectory -Force | Out-Null
-        # A rule that was in Block mode before the run, one that was absent, a setting, and an
+        # A rule that was in Audit mode before the run, one that was absent, a setting, and an
         # allowed application the run added.
         [pscustomobject]@{
             Timestamp = '20260101_000000'
             AsrMode = 'Audit'
             ChangedSettings = @(
-                [pscustomobject]@{ Category = 'AsrRule'; Setting = 'd4f940ab-401b-4efc-aadc-ad5f3c50688a'; RequiresAdmin = $true; PriorValue = 1; AppliedValue = 2 }
+                [pscustomobject]@{ Category = 'AsrRule'; Setting = 'd4f940ab-401b-4efc-aadc-ad5f3c50688a'; RequiresAdmin = $true; PriorValue = 2; AppliedValue = 1 }
                 [pscustomobject]@{ Category = 'AsrRule'; Setting = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'; RequiresAdmin = $true; PriorValue = 'absent'; AppliedValue = 2 }
                 [pscustomobject]@{ Category = 'PuaProtection'; Setting = 'PUAProtection'; RequiresAdmin = $true; PriorValue = 0; AppliedValue = 1 }
                 [pscustomobject]@{ Category = 'CfaAllowedApplication'; Setting = 'C:\tools\example\python.exe'; RequiresAdmin = $true; PriorValue = 'absent'; AppliedValue = 'present' }
@@ -286,7 +286,7 @@ Describe 'Set-WindowsDefenderHardening -Rollback' {
     }
 
     It 'plans to restore each prior value, including absent' {
-        ($script:rbItems | Where-Object Setting -eq 'd4f940ab-401b-4efc-aadc-ad5f3c50688a').DesiredValue | Should -Be 1
+        ($script:rbItems | Where-Object Setting -eq 'd4f940ab-401b-4efc-aadc-ad5f3c50688a').DesiredValue | Should -Be 2
         ($script:rbItems | Where-Object Setting -eq '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2').DesiredValue | Should -Be 'absent'
         ($script:rbItems | Where-Object Setting -eq 'PUAProtection').DesiredValue | Should -Be 0
         ($script:rbItems | Where-Object Category -eq 'CfaAllowedApplication').DesiredValue | Should -Be 'absent'
@@ -300,9 +300,364 @@ Describe 'Set-WindowsDefenderHardening -Rollback' {
         $records = @(Get-OpsMutationRecord -Path $script:rb.ExecuteLog)
         $restore = @($records | Where-Object { $_.Command -eq 'Add-MpPreference' -and $_.Target -eq 'd4f940ab-401b-4efc-aadc-ad5f3c50688a' })
         $restore.Count | Should -Be 1
-        $restore[0].Detail | Should -Match 'AttackSurfaceReductionRules_Actions=1'
+        $restore[0].Detail | Should -Match 'AttackSurfaceReductionRules_Actions=2'
         @($records | Where-Object { $_.Command -eq 'Remove-MpPreference' -and $_.Target -eq '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2' }).Count | Should -Be 1
         @($records | Where-Object { $_.Command -eq 'Remove-MpPreference' -and $_.Target -eq 'C:\tools\example\python.exe' }).Count | Should -Be 1
         @($records | Where-Object { $_.Command -eq 'Set-MpPreference' -and $_.Detail -match 'PUAProtection=0' }).Count | Should -Be 1
+    }
+}
+
+Describe 'Set-WindowsDefenderHardening rollback safety' {
+    BeforeAll {
+        $script:rbDirCounter = 0
+        $script:defScriptFullPath = Join-Path (Get-RepositoryRoot) $script:relativePath
+        $script:rbName = 'defender-hardening-rollback-20260101_000000.json'
+
+        function Get-LiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:defScriptFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        # A copy of the script that reports itself elevated, so the executing half of a rollback can
+        # be exercised in an unelevated session. Every Defender command still goes to the staged fake
+        # module, so nothing real is changed. FailPua also makes the PUA restore throw.
+        function New-ScriptCopy {
+            param([string]$Name, [switch]$FailPua)
+            $text = Get-Content -LiteralPath $script:defScriptFullPath -Raw
+            $elevated = '$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+            $text.Contains($elevated) | Should -BeTrue -Because 'the elevation check this copy replaces must still exist'
+            $patched = $text.Replace($elevated, '$true')
+            if ($FailPua) {
+                $restore = "'PuaProtection' { Set-MpPreference -PUAProtection ([int]`$Item.DesiredValue) -ErrorAction Stop }"
+                $patched.Contains($restore) | Should -BeTrue -Because 'the PUA restore this copy replaces must still exist'
+                $patched = $patched.Replace($restore, "'PuaProtection' { throw 'injected failure' }")
+            }
+            $copy = Join-Path $script:workRoot "$Name.ps1"
+            Set-Content -LiteralPath $copy -Value $patched -Encoding utf8
+            [System.IO.Path]::GetRelativePath((Get-RepositoryRoot), $copy)
+        }
+
+        function New-RollbackDir {
+            $script:rbDirCounter++
+            $dir = Join-Path $script:workRoot "defSafety$($script:rbDirCounter)"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $dir
+        }
+
+        function New-DefEntry {
+            param($Category = 'PuaProtection', $Setting = 'PUAProtection', $Prior = 0, $Applied = 1, $RequiresAdmin = $true)
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; RequiresAdmin = $RequiresAdmin; PriorValue = $Prior; AppliedValue = $Applied }
+        }
+
+        function Write-DefRollbackFile {
+            param([string]$Dir, [string]$Name = $script:rbName, [object[]]$Entry)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]@{ Timestamp = '20260101_000000'; AsrMode = 'Audit'; ChangedSettings = @($Entry) } |
+                ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-DefRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute, [string]$Relative = $script:relativePath)
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $setup = (Get-WindowsMutationStubText -MutationLogPath $log) + (Get-DefenderFixtureText)
+            $run = Invoke-ScriptUnderTest -RelativePath $Relative -ModulePath $script:systemModulePath -Setup $setup -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-DefRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because)
+            $r = Invoke-DefRollback -Dir $Dir -Tag "defRefused$($script:rbDirCounter)"
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $r.Run.Output | Should -Match 'refused' -Because $Because
+            $r.Run.Output | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $r.Run.Output | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'defender-hardening-rollback-plan-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'defender-hardening-rollback-state-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because $Because
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted entry outside the controls the forward plan sets, under -Rollback -WhatIf' {
+        $cases = @(
+            @{ Name = 'unknown category'; Entry = (New-DefEntry -Category 'DisableRealtime' -Setting 'DisableRealtimeMonitoring') },
+            @{ Name = 'known category, unknown setting'; Entry = (New-DefEntry -Setting 'DisableRealtimeMonitoring') },
+            @{ Name = 'setting of another category'; Entry = (New-DefEntry -Category 'PuaProtection' -Setting 'MAPSReporting') },
+            @{ Name = 'ASR rule outside the built-in list'; Entry = (New-DefEntry -Category 'AsrRule' -Setting '00000000-0000-0000-0000-000000000000' -Prior 'absent' -Applied 2) },
+            @{ Name = 'report-only category'; Entry = (New-DefEntry -Category 'TamperProtection' -Setting 'IsTamperProtected' -Prior 'True' -Applied 'True') },
+            @{ Name = 'applied value the forward plan never sets'; Entry = (New-DefEntry -Prior 1 -Applied 0) },
+            @{ Name = 'prior value that outranks the applied one'; Entry = (New-DefEntry -Category 'CloudBlockLevel' -Setting 'CloudBlockLevel' -Prior 4 -Applied 2) },
+            @{ Name = 'prior value that is not a value the setting holds'; Entry = (New-DefEntry -Prior 7 -Applied 1) },
+            @{ Name = 'absent prior on a plain setting'; Entry = (New-DefEntry -Prior 'absent' -Applied 1) },
+            @{ Name = 'RequiresAdmin false'; Entry = (New-DefEntry -RequiresAdmin $false) }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RollbackDir
+            $null = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry), $case.Entry)
+            Assert-DefRefused -Dir $dir -FileName $script:rbName -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-RollbackDir
+        $null = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry), (New-DefEntry -Setting 'DisableRealtimeMonitoring'))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        $r.Run.Output | Should -Match 'entry 1 '
+        $r.Run.Output | Should -Match 'DisableRealtimeMonitoring'
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $good = '{ "Category": "PuaProtection", "Setting": "PUAProtection", "RequiresAdmin": true, "PriorValue": 0, "AppliedValue": 1 }'
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "Timestamp": "20260101_000000" }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "PuaProtection" } }'
+            'ChangedSettings a string'  = '{ "ChangedSettings": "PUAProtection" }'
+            'ChangedSettings one valid entry, not in an array' = "{ `"ChangedSettings`": $good }"
+            'top level is an array'     = '[ { "Category": "PuaProtection" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "PUAProtection" ] }'
+            'entry lacks AppliedValue'  = '{ "ChangedSettings": [ { "Category": "PuaProtection", "Setting": "PUAProtection", "RequiresAdmin": true, "PriorValue": 0 } ] }'
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-RollbackDir
+            Set-Content -LiteralPath (Join-Path $dir $script:rbName) -Value $bodies[$label] -Encoding utf8
+            Assert-DefRefused -Dir $dir -FileName $script:rbName -Because $label
+        }
+    }
+
+    It 'refuses a value of the wrong type' {
+        $cases = @(
+            @{ Name = 'PriorValue abc'; Entry = (New-DefEntry -Prior 'abc') },
+            @{ Name = 'PriorValue unknown'; Entry = (New-DefEntry -Prior 'unknown') },
+            @{ Name = 'PriorValue numeric string'; Entry = (New-DefEntry -Prior '0') },
+            @{ Name = 'PriorValue boolean'; Entry = (New-DefEntry -Prior $false) },
+            @{ Name = 'PriorValue array'; Entry = (New-DefEntry -Prior @(0, 1)) },
+            @{ Name = 'PriorValue null'; Entry = (New-DefEntry -Prior $null) },
+            @{ Name = 'PriorValue fraction'; Entry = (New-DefEntry -Prior 0.5) },
+            @{ Name = 'PriorValue out of range'; Entry = (New-DefEntry -Prior 99999999999) },
+            @{ Name = 'ASR PriorValue present'; Entry = (New-DefEntry -Category 'AsrRule' -Setting 'd4f940ab-401b-4efc-aadc-ad5f3c50688a' -Prior 'present' -Applied 2) },
+            @{ Name = 'AppliedValue abc'; Entry = (New-DefEntry -Applied 'abc') },
+            @{ Name = 'AppliedValue unknown'; Entry = (New-DefEntry -Applied 'unknown') },
+            @{ Name = 'AppliedValue numeric string'; Entry = (New-DefEntry -Applied '1') },
+            @{ Name = 'allowed application PriorValue number'; Entry = (New-DefEntry -Category 'CfaAllowedApplication' -Setting 'C:\tools\x.exe' -Prior 0 -Applied 'present') },
+            @{ Name = 'allowed application AppliedValue absent'; Entry = (New-DefEntry -Category 'CfaAllowedApplication' -Setting 'C:\tools\x.exe' -Prior 'absent' -Applied 'absent') },
+            @{ Name = 'allowed application empty path'; Entry = (New-DefEntry -Category 'CfaAllowedApplication' -Setting '' -Prior 'absent' -Applied 'present') }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RollbackDir
+            $null = Write-DefRollbackFile -Dir $dir -Entry @($case.Entry)
+            Assert-DefRefused -Dir $dir -FileName $script:rbName -Because $case.Name
+        }
+    }
+
+    It 'does not pick a consumed file: the older unconsumed file is planned instead' {
+        $dir = New-RollbackDir
+        # The consumed file is newer and deliberately unreadable, so picking it would fail loudly.
+        Set-Content -LiteralPath (Join-Path $dir 'defender-hardening-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry -Category 'CloudProtection' -Setting 'MAPSReporting' -Prior 0 -Applied 2))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+        $plan = @(Get-PlanItem -Run $r.Run)
+        @($plan | ForEach-Object { $_.Setting }) | Should -Be @('MAPSReporting')
+    }
+
+    It 'picks the newest file by name, not by write time' {
+        $dir = New-RollbackDir
+        $newer = Write-DefRollbackFile -Dir $dir -Name 'defender-hardening-rollback-20260301_000000.json' -Entry @((New-DefEntry))
+        $older = Write-DefRollbackFile -Dir $dir -Name 'defender-hardening-rollback-20260101_000000.json' -Entry @((New-DefEntry -Category 'CloudProtection' -Setting 'MAPSReporting' -Prior 0 -Applied 2))
+        (Get-Item -LiteralPath $newer).LastWriteTime = (Get-Date).AddDays(-30)
+        (Get-Item -LiteralPath $older).LastWriteTime = (Get-Date)
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defByName'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $newer)
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips every item for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-RollbackDir
+        $file = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defUnelevatedExec' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -Be 1
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:rbName
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf, even from a session that reports itself elevated' {
+        $elevated = New-ScriptCopy -Name 'def-elevated-whatif'
+        $dir = New-RollbackDir
+        $file = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defWhatIfKeeps' -Relative $elevated
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('Previewed')
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:rbName
+        $r.Run.Summary.RollbackNote | Should -Match 'WhatIf'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0
+    }
+
+    It 'consumes the file after an executing rollback that restored every item, and does not pick it again' {
+        $elevated = New-ScriptCopy -Name 'def-elevated-consume'
+        $dir = New-RollbackDir
+        $file = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry), (New-DefEntry -Category 'CloudProtection' -Setting 'MAPSReporting' -Prior 1 -Applied 2))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defConsume' -Execute -Relative $elevated
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('Reverted', 'Reverted')
+        @(Get-OpsMutationRecord -Path $r.Log | Where-Object { $_.Command -eq 'Set-MpPreference' }).Count | Should -Be 2
+        Test-Path -LiteralPath $file | Should -BeFalse -Because 'the used file is renamed'
+        $r.Run.Summary.RollbackConsumedPath | Should -Match 'defender-hardening-rollback-20260101_000000\.consumed-\d{8}_\d{6}\.json$'
+        Test-Path -LiteralPath $r.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:rbName
+        $again = Invoke-DefRollback -Dir $dir -Tag 'defConsume2' -Execute -Relative $elevated
+        $again.Run.ExitCode | Should -Not -Be 0
+        $again.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'leaves the file unconsumed when an executing rollback fails on an item' {
+        $failing = New-ScriptCopy -Name 'def-elevated-fail' -FailPua
+        $dir = New-RollbackDir
+        $file = Write-DefRollbackFile -Dir $dir -Entry @((New-DefEntry -Category 'CloudProtection' -Setting 'MAPSReporting' -Prior 1 -Applied 2), (New-DefEntry))
+        $r = Invoke-DefRollback -Dir $dir -Tag 'defPartial' -Execute -Relative $failing
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('Reverted', 'Failed: injected failure')
+        Test-Path -LiteralPath $file | Should -BeTrue -Because 'a partial rollback can be run again'
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-LiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-State { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-State 'Reverted', 'NoChange', 'Reverted') $false | Should -BeTrue
+        & $decide (New-State 'NoChange') $false | Should -BeTrue
+        & $decide (New-State 'Reverted', 'Failed: access denied') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-State 'Previewed', 'Previewed') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Previewed') $false | Should -BeFalse
+        & $decide (New-State 'Reverted', 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+        & $decide (New-State 'NoChange') $true | Should -BeFalse
+    }
+
+    It 'validates one entry in a pure function lifted from the script, against whatever control table it is given' {
+        $text = (Get-LiftedFunctionText -Name 'Test-RollbackNumber') + "`n" + (Get-LiftedFunctionText -Name 'Get-RollbackEntryProblem')
+        $check = [scriptblock]::Create("param(`$Entry, `$Controls)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -Controls `$Controls")
+        $controls = @(
+            [pscustomobject]@{ Category = 'Ranked'; Settings = @('R'); Kind = 'Value'; Desired = @(2); Rank = @{ 0 = 0; 1 = 1; 2 = 2 }; AllowAbsent = $true }
+            [pscustomobject]@{ Category = 'Plain'; Settings = @('P'); Kind = 'Value'; Desired = @(50); Rank = $null; AllowAbsent = $false }
+            [pscustomobject]@{ Category = 'Members'; Settings = $null; Kind = 'List'; Desired = @(); Rank = $null; AllowAbsent = $true }
+        )
+        function New-Probe { param($Category = 'Ranked', $Setting = 'R', $Prior = 1, $Applied = 2, $Admin = $true) [pscustomobject]@{ Category = $Category; Setting = $Setting; RequiresAdmin = $Admin; PriorValue = $Prior; AppliedValue = $Applied } }
+
+        & $check (New-Probe) $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Prior 'absent') $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Category 'Plain' -Setting 'P' -Prior 10 -Applied 50) $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Category 'Members' -Setting 'C:\any\path.exe' -Prior 'absent' -Applied 'present') $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Setting 'X') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Category 'Other') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Prior 2) $controls | Should -Not -BeNullOrEmpty -Because 'a forward run only raises a setting'
+        & $check (New-Probe -Prior 9) $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Prior 'unknown') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Applied 1) $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Admin $false) $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Category 'Plain' -Setting 'P' -Prior 'absent' -Applied 50) $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Category 'Plain' -Setting 'P' -Prior 50 -Applied 50) $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Category 'Members' -Setting '' -Prior 'absent' -Applied 'present') $controls | Should -Not -BeNullOrEmpty
+        & $check (New-Probe -Prior 1) @() | Should -Not -BeNullOrEmpty -Because 'a table without the entry allows nothing'
+        $twice = @($controls[0], $controls[0])
+        & $check (New-Probe) $twice | Should -Not -BeNullOrEmpty -Because 'a category that matches two rows is ambiguous, so nothing is allowed'
+    }
+
+    It 'accepts every control the forward plan can produce, so the validator cannot drift from it' {
+        $variants = @(
+            @{ Tag = 'driftBlock'; Argument = @{ AsrMode = 'Block'; ControlledFolderAccess = 'Enabled'; NetworkProtection = 'Enabled'; ControlledFolderAllowedApplication = @('C:\tools\example\python.exe') } },
+            @{ Tag = 'driftAudit'; Argument = @{} }
+        )
+        foreach ($variant in $variants) {
+            $plan = Invoke-DefenderPair -Tag $variant.Tag -Argument $variant.Argument
+            $plan.WhatIf.ExitCode | Should -Be 0 -Because $plan.WhatIf.Output
+            $forward = @(Get-PlanItem -Run $plan.WhatIf | Where-Object { $_.Action -like 'Set*' -or $_.Action -like 'Allow*' })
+            $forward.Count | Should -BeGreaterThan 8
+            $entries = @($forward | ForEach-Object {
+                    if ($_.Category -eq 'CfaAllowedApplication') {
+                        New-DefEntry -Category $_.Category -Setting $_.Setting -Prior 'absent' -Applied 'present'
+                    } elseif ($_.Category -eq 'AsrRule') {
+                        New-DefEntry -Category $_.Category -Setting $_.Setting -Prior 'absent' -Applied $_.DesiredValue
+                    } else {
+                        New-DefEntry -Category $_.Category -Setting $_.Setting -Prior 0 -Applied $_.DesiredValue
+                    }
+                })
+            $dir = New-RollbackDir
+            $null = Write-DefRollbackFile -Dir $dir -Entry $entries
+            $r = Invoke-DefRollback -Dir $dir -Tag "$($variant.Tag)Rollback"
+            $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+            @($r.Run.Summary.Items).Count | Should -Be $forward.Count
+        }
+    }
+
+    It 'rolls back newest first and consumes each file as it goes' {
+        $elevated = New-ScriptCopy -Name 'def-elevated-lifo'
+        $dir = New-RollbackDir
+        $applied = @{ ASR = (($script:allAsrIds | ForEach-Object { "$_=2" }) -join ';'); CFA = 2; NETPROT = 2; PUA = 1; MAPS = 2; SAMPLES = 1; CLOUDBLOCK = 2; CLOUDTIMEOUT = 50 }
+        # Apply 1 sets the audit defaults on a clean machine. Apply 2 (a second later) raises the ASR
+        # rules and Controlled Folder Access on a machine that already has apply 1 in place.
+        $log1 = Join-Path $script:workRoot 'defLifoApply1.log'
+        $log2 = Join-Path $script:workRoot 'defLifoApply2.log'
+        $apply1 = Invoke-ScriptUnderTest -RelativePath $elevated -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log1) + (Get-DefenderFixtureText)) `
+            -Argument @{ ReportDirectory = $dir; Confirm = $false }
+        $apply1.ExitCode | Should -Be 0 -Because $apply1.Output
+        Start-Sleep -Milliseconds 1200
+        $apply2 = Invoke-ScriptUnderTest -RelativePath $elevated -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log2) + (Get-DefenderFixtureText -State $applied)) `
+            -Argument @{ ReportDirectory = $dir; AsrMode = 'Block'; ControlledFolderAccess = 'Enabled'; Confirm = $false }
+        $apply2.ExitCode | Should -Be 0 -Because $apply2.Output
+        $apply1.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+        $apply2.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+
+        $rb1 = Invoke-DefRollback -Dir $dir -Tag 'defLifoRollback1' -Execute -Relative $elevated
+        $rb1.Run.ExitCode | Should -Be 0 -Because $rb1.Run.Output
+        (Split-Path -Leaf $rb1.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply2.Summary.RollbackJsonPath)
+        $rb1.Run.Summary.RollbackConsumedPath | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $rb1.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        Test-Path -LiteralPath $apply2.Summary.RollbackJsonPath | Should -BeFalse -Because 'the used file is renamed'
+        $rb1.Run.Summary.RollbackConsumedPath | Should -Match 'rollback-\d{8}_\d{6}\.consumed-\d{8}_\d{6}\.json$'
+        $details1 = @(Get-OpsMutationRecord -Path $rb1.Log | ForEach-Object { $_.Detail }) -join ' '
+        $details1 | Should -Match 'EnableControlledFolderAccess=2'
+        $details1 | Should -Not -Match 'PUAProtection'
+
+        $rb2 = Invoke-DefRollback -Dir $dir -Tag 'defLifoRollback2' -Execute -Relative $elevated
+        $rb2.Run.ExitCode | Should -Be 0 -Because $rb2.Run.Output
+        (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
+        Test-Path -LiteralPath $apply1.Summary.RollbackJsonPath | Should -BeFalse
+        $records2 = @(Get-OpsMutationRecord -Path $rb2.Log)
+        @($records2 | Where-Object { $_.Command -eq 'Remove-MpPreference' }).Count | Should -Be 14
+        @($records2 | Where-Object { $_.Command -eq 'Set-MpPreference' -and $_.Detail -match 'PUAProtection=0' }).Count | Should -Be 1
+
+        $rb3 = Invoke-DefRollback -Dir $dir -Tag 'defLifoRollback3' -Execute -Relative $elevated
+        $rb3.Run.ExitCode | Should -Not -Be 0
+        $rb3.Run.Output | Should -Match 'Nothing to roll back'
     }
 }

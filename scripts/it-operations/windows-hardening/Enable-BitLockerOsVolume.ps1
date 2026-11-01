@@ -34,14 +34,29 @@ Instructions:
   and used-space-only encryption. If the write or the read-back fails the script removes the
   recovery protector it just added and stops without enabling anything.
 - The recovery password is never written to the plan, state, summary, rollback JSON or console.
-  Reports hold only the protector ID and the key file path. The key file itself holds the
+  Reports hold only the protector ID and the key file path; the rollback JSON holds the protector
+  ID but no key file path. The key file itself holds the
   password in clear text: move it off the machine to a password manager or sealed storage, and
   restrict who can read the directory.
 - Enable-BitLocker without -SkipHardwareTest runs a hardware test at the next restart, and
   encryption begins after it. Restart when convenient; the summary reports RebootRequired.
-- -Rollback runs Disable-BitLocker on the volume recorded in the latest rollback file, and only
-  if that file shows this script enabled it. Decryption takes hours, proportional to disk size,
-  and is not a quick undo. Keep the recovery key file until decryption completes.
+- -Rollback runs Disable-BitLocker on the volume recorded in the newest unconsumed rollback file
+  (newest by name), and only if that file shows this script enabled it. Decryption takes hours,
+  proportional to disk size, and is not a quick undo. Keep the recovery key file until decryption
+  completes.
+- Rollback can only decrypt the operating-system volume this script enables. Before any plan is
+  written or any change made, the whole file is checked and refused, also under -WhatIf, with an
+  error naming the file and the first bad entry (or the top-level fields), when the JSON does not
+  parse, ChangedSettings is missing, not an array or empty, a record carries any field this script
+  does not write (so a key file path, an added protector or a second volume cannot be smuggled
+  in), MountPoint is not the operating-system volume ($env:SystemDrive), ProtectorId is not a
+  GUID, ScriptEnabledBitLocker is not true, EncryptionMethod is not XtsAes256, or a value is not
+  a string or a boolean as recorded. The rollback only ever calls Disable-BitLocker on that one
+  volume; it never adds a protector and never reads or writes a key file. Move a refused file
+  aside (out of the report directory) to roll back an older run. After an executing -Rollback
+  that completed, the file is renamed bitlocker-enable-rollback-<timestamp>.consumed-<timestamp>.json
+  and is no longer picked; under -WhatIf, or when the step failed or was skipped, it is left in
+  place and the summary says so.
 - There is no PIN option in this build. TPM plus a pre-boot PIN is the stronger posture because
   a TPM-only volume unlocks for anyone who can boot the machine; it is a later item.
 
@@ -57,8 +72,8 @@ pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps
 
 .OUTPUTS
 Writes plan and state CSV/JSON under the report directory, plus on a live run that enabled
-BitLocker a rollback JSON holding the protector ID, key file path and volume (never the
-password). Returns a summary object.
+BitLocker a rollback JSON holding the volume and protector ID (never the password or a key file
+path). Returns a summary object.
 
 .NOTES
 Status:
@@ -89,6 +104,13 @@ $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new
 $script:StopReason = $null
 $script:AlreadyProtected = $false
 $script:ResolvedKeyDirectory = $null
+$script:RollbackSourceFile = $null
+# What the forward run records, shared with the rollback validator. The rollback file may carry
+# exactly these fields and no other: in particular no key file path and nothing that adds a protector.
+$script:EnableCategory = 'EnableOsVolume'
+$script:EncryptionMethod = 'XtsAes256'
+$script:RollbackTopField = @('Timestamp', 'ComputerName', 'MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod', 'ChangedSettings')
+$script:RollbackEntryField = @('Category', 'MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod')
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -263,39 +285,124 @@ function Get-ForwardPlan {
     $action = if ($script:AlreadyProtected) {
         "No change (OS volume $mount is already encrypted or encrypting: $volStatus, protection $protStatus)"
     } else {
-        "Protect ${mount}: add recovery password protector, save it to $keyDir, read it back, then enable BitLocker (TPM protector, XtsAes256, used space only)"
+        "Protect ${mount}: add recovery password protector, save it to $keyDir, read it back, then enable BitLocker (TPM protector, $($script:EncryptionMethod), used space only)"
     }
-    $items.Add((Get-PlanItem -Category 'EnableOsVolume' -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
-                -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue 'TPM protector plus recovery password, XtsAes256' `
+    $items.Add((Get-PlanItem -Category $script:EnableCategory -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
+                -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue "TPM protector plus recovery password, $($script:EncryptionMethod)" `
                 -Action $action))
     $items
 }
 
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
-    # Exact name: the wildcard form would also match the rollback-plan file a -Rollback run writes.
+    # Exact name: the wildcard form would also match the rollback-plan file a -Rollback run writes,
+    # and a '.consumed-' file does not match, so a used file is never picked again.
     $pattern = '^' + [regex]::Escape($script:Prefix) + '-rollback-\d{8}_\d{6}\.json$'
     Get-ChildItem -LiteralPath $ReportDirectory -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match $pattern } |
-        Sort-Object LastWriteTime, Name -Descending | Select-Object -First 1
+        Sort-Object Name -Descending | Select-Object -First 1
+}
+
+# Returns $null when the record is acceptable, otherwise a short text saying what is wrong with it.
+# A record (the file's top level, or one ChangedSettings entry) may carry only the fields in
+# AllowedField, each of the type the forward run writes: the volume must be the operating-system
+# volume (OsDrive), the protector ID a GUID, ScriptEnabledBitLocker true and the encryption method
+# the one this script uses. A key file path, or any other field, is outside the set and is refused.
+# Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param(
+        $Entry,
+        [Parameter(Mandatory = $true)][string[]]$AllowedField,
+        [Parameter(Mandatory = $true)][string[]]$RequiredField,
+        [string]$OsDrive,
+        [Parameter(Mandatory = $true)][string]$EnableCategory,
+        [Parameter(Mandatory = $true)][string]$EncryptionMethod
+    )
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($property in $Entry.PSObject.Properties) {
+        if ($property.Name -cnotin $AllowedField) { return "field '$($property.Name)' is not one this script records in a rollback file" }
+    }
+    foreach ($field in $RequiredField) {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    if ($Entry.PSObject.Properties['Category']) {
+        if ($Entry.Category -isnot [string] -or $Entry.Category -cne $EnableCategory) { return "Category '$($Entry.Category)' is not $EnableCategory" }
+    }
+    foreach ($field in 'Timestamp', 'ComputerName') {
+        if ($Entry.PSObject.Properties[$field]) {
+            $v = $Entry.PSObject.Properties[$field].Value
+            if ($v -isnot [string]) { return "$field is not a string" }
+            if ($field -eq 'Timestamp' -and $v -cnotmatch '^\d{8}_\d{6}\z') { return "Timestamp '$v' is not a yyyyMMdd_HHmmss stamp" }
+            if ($field -eq 'ComputerName' -and $v -cnotmatch '^[A-Za-z0-9_.-]{1,63}\z') { return "ComputerName '$v' is not a computer name" }
+        }
+    }
+    if ($Entry.MountPoint -isnot [string] -or $Entry.MountPoint -cnotmatch '^[A-Za-z]:\z') { return "MountPoint '$($Entry.MountPoint)' is not a drive letter such as C:" }
+    $os = if ($OsDrive) { $OsDrive.TrimEnd('\') } else { '' }
+    if (-not $os) { return 'the operating-system volume could not be determined, so no volume can be matched' }
+    if ($Entry.MountPoint -ine $os) { return "MountPoint '$($Entry.MountPoint)' is not the operating-system volume $os that this script encrypts" }
+    if ($Entry.ProtectorId -isnot [string] -or $Entry.ProtectorId -notmatch '^\{[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}\z') { return "ProtectorId '$($Entry.ProtectorId)' is not a protector GUID" }
+    if ($Entry.ScriptEnabledBitLocker -isnot [bool] -or $Entry.ScriptEnabledBitLocker -ne $true) { return 'ScriptEnabledBitLocker is not true, so the file does not show this script enabled BitLocker' }
+    if ($Entry.EncryptionMethod -isnot [string] -or $Entry.EncryptionMethod -cne $EncryptionMethod) { return "EncryptionMethod '$($Entry.EncryptionMethod)' is not $EncryptionMethod" }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No $($script:Prefix)-rollback-<timestamp>.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
-    $enabled = Get-OpsPropertyValue -InputObject $data -Name 'ScriptEnabledBitLocker'
-    $mount = [string](Get-OpsPropertyValue -InputObject $data -Name 'MountPoint')
-    $items = [System.Collections.Generic.List[pscustomobject]]::new()
-    if ($enabled -ne $true -or -not $mount) {
-        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RollbackFile' -RequiresAdmin $false `
-                    -CurrentValue $file.Name -DesiredValue 'ScriptEnabledBitLocker = true' `
-                    -Action "Precondition: rollback file $($file.Name) shows this script enabled BitLocker"))
-        return $items
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
     }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    if ($data.ChangedSettings -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($data.ChangedSettings)
+    if ($entries.Count -eq 0) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is empty. $advice"
+    }
+    $osDrive = [string]$env:SystemDrive
+    $problem = Get-RollbackEntryProblem -Entry $data -AllowedField $script:RollbackTopField `
+        -RequiredField @('MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod', 'ChangedSettings') `
+        -OsDrive $osDrive -EnableCategory $script:EnableCategory -EncryptionMethod $script:EncryptionMethod
+    if ($problem) {
+        throw "Rollback file '$($file.FullName)' refused at the top-level fields: $problem. $advice"
+    }
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -AllowedField $script:RollbackEntryField `
+            -RequiredField $script:RollbackEntryField -OsDrive $osDrive `
+            -EnableCategory $script:EnableCategory -EncryptionMethod $script:EncryptionMethod
+        if (-not $problem -and ($entries[$i].MountPoint -ine $data.MountPoint -or $entries[$i].ProtectorId -ine $data.ProtectorId)) {
+            $problem = 'MountPoint or ProtectorId differs from the file top level'
+        }
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
+
+    $mount = $osDrive.TrimEnd('\')
+    $items = [System.Collections.Generic.List[pscustomobject]]::new()
     $items.Add((Get-PlanItem -Category 'DisableOsVolume' -Setting $mount -RequiresAdmin $true `
                 -CurrentValue 'encrypted by this script' -DesiredValue 'decrypted' `
-                -Action "Disable BitLocker on $mount (decryption takes hours and is not a quick undo; keep recovery key file $([string](Get-OpsPropertyValue -InputObject $data -Name 'KeyFilePath')) until it completes)"))
+                -Action "Disable BitLocker on $mount (decryption takes hours and is not a quick undo; keep the recovery key file you saved until it completes)"))
     $items
 }
 
@@ -379,10 +486,6 @@ function Test-PreconditionItem {
             }
             return 'Met'
         }
-        'RollbackFile' {
-            $script:StopReason = 'rollback file does not show this script enabled BitLocker'
-            return "Failed: $($script:StopReason)"
-        }
     }
     "Failed: unknown precondition $($Item.Setting)"
 }
@@ -432,7 +535,7 @@ function Invoke-EnableOsVolume {
         }
 
         # Step 4: only now start encryption.
-        Enable-BitLocker -MountPoint $mount -TpmProtector -EncryptionMethod XtsAes256 -UsedSpaceOnly -ErrorAction Stop | Out-Null
+        Enable-BitLocker -MountPoint $mount -TpmProtector -EncryptionMethod $script:EncryptionMethod -UsedSpaceOnly -ErrorAction Stop | Out-Null
     } catch {
         $message = $_.Exception.Message
         if ($password) { $message = $message.Replace($password, '[redacted]') }
@@ -456,8 +559,8 @@ function Invoke-EnableOsVolume {
 
     $Item.Detail = "ProtectorId=$protectorId;KeyFile=$keyFile"
     [void]$script:ChangedSettings.Add([pscustomobject]@{
-            Category = $Item.Category; MountPoint = $mount; ProtectorId = $protectorId; KeyFilePath = $keyFile
-            ScriptEnabledBitLocker = $true; EncryptionMethod = 'XtsAes256'
+            Category = $script:EnableCategory; MountPoint = $mount; ProtectorId = $protectorId
+            ScriptEnabledBitLocker = $true; EncryptionMethod = $script:EncryptionMethod
         })
     'Applied'
 }
@@ -473,7 +576,7 @@ function Invoke-PlanItem {
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
 
     switch ($Item.Category) {
-        'EnableOsVolume' { return (Invoke-EnableOsVolume -Item $Item) }
+        { $_ -eq $script:EnableCategory } { return (Invoke-EnableOsVolume -Item $Item) }
         'DisableOsVolume' {
             try {
                 Disable-BitLocker -MountPoint $Item.Setting -ErrorAction Stop | Out-Null
@@ -520,7 +623,30 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
-# Rollback record: only a live forward run that enabled BitLocker. Never holds the password.
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: the step failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
+# Rollback record: only a live forward run that enabled BitLocker. Never holds the password or a key file path.
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
     $rollbackPath = Join-Path $resolvedReportDirectory "$($script:Prefix)-rollback-$timestamp.json"
@@ -530,7 +656,6 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
         ComputerName = $env:COMPUTERNAME
         MountPoint = $first.MountPoint
         ProtectorId = $first.ProtectorId
-        KeyFilePath = $first.KeyFilePath
         ScriptEnabledBitLocker = $true
         EncryptionMethod = $first.EncryptionMethod
         ChangedSettings = @($script:ChangedSettings)
@@ -546,6 +671,9 @@ $summary = [pscustomobject]@{
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     RebootRequired = [bool](@($state | Where-Object { $_.Result -in @('Applied') -and $_.RequiresReboot }).Count)
     StoppedReason = $script:StopReason
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count

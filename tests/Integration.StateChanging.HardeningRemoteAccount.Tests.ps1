@@ -661,3 +661,693 @@ Describe 'Set-WindowsLocalAccountPolicy' {
         }
     }
 }
+
+Describe 'Set-WindowsRemoteAccessPosture rollback safety' {
+    BeforeAll {
+        $script:raSafeCounter = 0
+        $script:raSafeScript = 'scripts\it-operations\windows-hardening\Set-WindowsRemoteAccessPosture.ps1'
+        $script:raSafeFullPath = Join-Path (Get-RepositoryRoot) $script:raSafeScript
+        $script:raSafeName = 'remote-access-posture-rollback-20260101_000000.json'
+        $script:raSafeWinRm = @'
+
+$global:OpsWinRm = [string]$env:OPSTOOLKIT_TEST_WINRM
+function Get-Service {
+    [CmdletBinding()]
+    param($Name)
+    if (-not $global:OpsWinRm -or $global:OpsWinRm -eq 'absent') { return }
+    $parts = $global:OpsWinRm -split '/'
+    [pscustomobject]@{ Name = 'WinRM'; StartType = $parts[0]; Status = $parts[1] }
+}
+'@
+
+        function Get-RaLiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:raSafeFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        function New-RaSafeDir {
+            $script:raSafeCounter++
+            $dir = Join-Path $script:workRoot "raSafety$($script:raSafeCounter)"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $dir
+        }
+
+        function New-RaRegEntry {
+            param($Category = 'RemoteAssistance', $Path = $script:raPath, $Name = 'fAllowToGetHelp', $Prior = 1, $Kind = 'Registry', $PriorStatus = '', $Setting = $null)
+            if ($null -eq $Setting) { $Setting = $Name }
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; Kind = $Kind; Path = $Path; Name = $Name; ValueType = 'DWord'; PriorStatus = $PriorStatus; PriorValue = $Prior; AppliedValue = 0 }
+        }
+
+        function New-RaServiceEntry {
+            param($Setting = 'WinRM', $Prior = 'Manual/Running', $PriorStatus = 'Running', $Path = '', $Name = '')
+            [pscustomobject]@{ Category = 'WinRmService'; Setting = $Setting; Kind = 'Service'; Path = $Path; Name = $Name; ValueType = ''; PriorStatus = $PriorStatus; PriorValue = $Prior; AppliedValue = 'Disabled/Stopped' }
+        }
+
+        function Write-RaRollbackFile {
+            param([string]$Dir, [string]$Name = $script:raSafeName, [object[]]$Entry)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]@{ Timestamp = '20260101_000000'; ChangedSettings = @($Entry) } |
+                ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-RaRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute)
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $run = Invoke-ScriptUnderTest -RelativePath $script:raSafeScript -ModulePath $script:systemModulePath `
+                -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + $script:raSafeWinRm) -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-RaRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because)
+            $r = Invoke-RaRollback -Dir $Dir -Tag "raRefused$($script:raSafeCounter)"
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $r.Run.Output | Should -Match 'refused' -Because $Because
+            $r.Run.Output | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $r.Run.Output | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'remote-access-posture-rollback-plan-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'remote-access-posture-rollback-state-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because "$Because must be refused before any change"
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted entry outside the registry values and service the forward plan sets, under -Rollback -WhatIf' {
+        $cases = @(
+            @{ Name = 'unknown category'; Entry = (New-RaRegEntry -Category 'DeleteEverything') },
+            @{ Name = 'path outside the control'; Entry = (New-RaRegEntry -Path 'HKLM:\SOFTWARE\Evil') },
+            @{ Name = 'path of another control'; Entry = (New-RaRegEntry -Category 'RdpNla' -Path $script:raPath -Name 'UserAuthentication') },
+            @{ Name = 'value name outside the control'; Entry = (New-RaRegEntry -Name 'fAllowFullControl') },
+            @{ Name = 'Setting differs from Name'; Entry = (New-RaRegEntry -Setting 'Other') },
+            @{ Name = 'registry category with Kind Service'; Entry = (New-RaRegEntry -Kind 'Service') },
+            @{ Name = 'registry entry carrying a PriorStatus'; Entry = (New-RaRegEntry -PriorStatus 'Running') },
+            @{ Name = 'service other than WinRM'; Entry = (New-RaServiceEntry -Setting 'Spooler') },
+            @{ Name = 'service entry with a registry path'; Entry = (New-RaServiceEntry -Path $script:raPath) },
+            @{ Name = 'service start type outside the restorable set'; Entry = (New-RaServiceEntry -Prior 'Evil/Running') },
+            @{ Name = 'service status outside the set'; Entry = (New-RaServiceEntry -Prior 'Manual/Exploded' -PriorStatus 'Exploded') }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RaSafeDir
+            $null = Write-RaRollbackFile -Dir $dir -Entry @((New-RaRegEntry), $case.Entry)
+            Assert-RaRefused -Dir $dir -FileName $script:raSafeName -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-RaSafeDir
+        $null = Write-RaRollbackFile -Dir $dir -Entry @((New-RaRegEntry), (New-RaRegEntry), (New-RaRegEntry -Category 'Evil'))
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        $r.Run.Output | Should -Match 'entry 2 '
+        $r.Run.Output | Should -Match 'Evil'
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "Timestamp": "20260101_000000" }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "RemoteAssistance" } }'
+            'ChangedSettings a string'  = '{ "ChangedSettings": "all" }'
+            'ChangedSettings one valid entry, not in an array' = ('{ "ChangedSettings": ' + ((New-RaRegEntry) | ConvertTo-Json -Compress) + ' }')
+            'top level is an array'     = '[ { "Category": "RemoteAssistance" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "RemoteAssistance" ] }'
+            'entry lacks PriorValue'    = '{ "ChangedSettings": [ { "Category": "RemoteAssistance", "Setting": "fAllowToGetHelp", "Kind": "Registry", "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Remote Assistance", "Name": "fAllowToGetHelp" } ] }'
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-RaSafeDir
+            Set-Content -LiteralPath (Join-Path $dir $script:raSafeName) -Value $bodies[$label] -Encoding utf8
+            Assert-RaRefused -Dir $dir -FileName $script:raSafeName -Because $label
+        }
+    }
+
+    It 'refuses a prior value of the wrong type or outside the range of its control' {
+        $cases = @(
+            @{ Name = 'word maybe'; Entry = (New-RaRegEntry -Prior 'maybe') },
+            @{ Name = 'unknown'; Entry = (New-RaRegEntry -Prior 'unknown') },
+            @{ Name = 'numeric text'; Entry = (New-RaRegEntry -Prior '1') },
+            @{ Name = 'above the range of fAllowToGetHelp'; Entry = (New-RaRegEntry -Prior 2) },
+            @{ Name = 'negative'; Entry = (New-RaRegEntry -Prior -1) },
+            @{ Name = 'fraction'; Entry = (New-RaRegEntry -Prior 0.5) },
+            @{ Name = 'boolean'; Entry = (New-RaRegEntry -Prior $true) },
+            @{ Name = 'null'; Entry = (New-RaRegEntry -Prior $null) },
+            @{ Name = 'array'; Entry = (New-RaRegEntry -Prior @(0, 1)) },
+            @{ Name = 'SecurityLayer above 2'; Entry = (New-RaRegEntry -Category 'RdpSecurityLayer' -Path $script:rdpTcpPath -Name 'SecurityLayer' -Prior 3) },
+            @{ Name = 'service prior without a status'; Entry = (New-RaServiceEntry -Prior 'Manual') },
+            @{ Name = 'service prior is a number'; Entry = (New-RaServiceEntry -Prior 3) },
+            @{ Name = 'service PriorStatus disagrees with PriorValue'; Entry = (New-RaServiceEntry -Prior 'Manual/Stopped' -PriorStatus 'Running') }
+        )
+        foreach ($case in $cases) {
+            $dir = New-RaSafeDir
+            $null = Write-RaRollbackFile -Dir $dir -Entry @($case.Entry)
+            Assert-RaRefused -Dir $dir -FileName $script:raSafeName -Because $case.Name
+        }
+    }
+
+    It 'accepts every entry the forward plan can produce, so the validator cannot drift from it' {
+        $fixture = ConvertTo-RegistryFixtureText -Table @{
+            $script:tsPath = @{ fDenyTSConnections = 0 }
+            $script:rdpTcpPath = @{ UserAuthentication = 0 }
+            $script:raPath = @{ fAllowToGetHelp = 1 }
+            $script:tsPolicyPath = $null
+        }
+        $log = Join-Path $script:workRoot 'raDriftApply.log'
+        $apply = Invoke-ScriptUnderTest -RelativePath $script:raSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + $fixture + "`n`$env:OPSTOOLKIT_TEST_WINRM = 'Manual/Running'`n" + $script:raSafeWinRm) `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'raDriftPlan'); DisableRemoteDesktop = $true; DisableWinRM = $true; WhatIf = $true }
+        $apply.ExitCode | Should -Be 0 -Because $apply.Output
+        $forward = @(Get-Content -LiteralPath $apply.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object { $_.Kind -in @('Registry', 'Service') })
+        @($forward | ForEach-Object { $_.Category } | Sort-Object) | Should -Be @('RdpDisable', 'RdpNla', 'RdpSecurityLayer', 'RemoteAssistance', 'WinRmService')
+        $entries = @($forward | ForEach-Object {
+                [pscustomobject]@{ Category = $_.Category; Setting = $_.Setting; Kind = $_.Kind; Path = $_.Path; Name = $_.Name; ValueType = $_.ValueType
+                    PriorStatus = $_.PriorStatus; PriorValue = $_.CurrentValue; AppliedValue = $_.DesiredValue }
+            })
+        $dir = New-RaSafeDir
+        $null = Write-RaRollbackFile -Dir $dir -Entry $entries
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raDriftRollback'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items).Count | Should -Be 5
+    }
+
+    It 'picks the newest rollback file by name and not a consumed one' {
+        $dir = New-RaSafeDir
+        # The consumed file is newer and deliberately unreadable, so picking it would fail loudly.
+        Set-Content -LiteralPath (Join-Path $dir 'remote-access-posture-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-RaRollbackFile -Dir $dir -Entry @((New-RaRegEntry -Prior 1))
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+        $plan = Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json
+        @($plan | ForEach-Object { $_.Setting }) | Should -Be @('fAllowToGetHelp')
+
+        # Name order, not write time: the file with the earlier name is written last.
+        $dir2 = New-RaSafeDir
+        $newerName = Write-RaRollbackFile -Dir $dir2 -Name 'remote-access-posture-rollback-20260201_000000.json' -Entry @((New-RaRegEntry -Prior 0))
+        Start-Sleep -Milliseconds 50
+        $null = Write-RaRollbackFile -Dir $dir2 -Name 'remote-access-posture-rollback-20260101_000000.json' -Entry @((New-RaRegEntry -Prior 1))
+        $r2 = Invoke-RaRollback -Dir $dir2 -Tag 'raNameOrder'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        (Split-Path -Leaf $r2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $newerName)
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips every item for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-RaSafeDir
+        $file = Write-RaRollbackFile -Dir $dir -Entry @((New-RaRegEntry))
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raUnelevatedExec' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -Be 1
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:raSafeName
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf' {
+        $dir = New-RaSafeDir
+        $file = Write-RaRollbackFile -Dir $dir -Entry @((New-RaRegEntry))
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raWhatIfKeeps'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:raSafeName
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+
+        # With nothing to revert there is no item to preview, so only the -WhatIf rule itself keeps the file.
+        $dir2 = New-RaSafeDir
+        $file2 = Write-RaRollbackFile -Dir $dir2 -Entry @()
+        $r2 = Invoke-RaRollback -Dir $dir2 -Tag 'raWhatIfKeeps2'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        Test-Path -LiteralPath $file2 | Should -BeTrue
+        $r2.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+    }
+
+    It 'consumes the file after an executing rollback with nothing left to revert' {
+        $dir = New-RaSafeDir
+        $file = Write-RaRollbackFile -Dir $dir -Entry @()
+        $r = Invoke-RaRollback -Dir $dir -Tag 'raConsumeEmpty' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeFalse -Because 'the used file is renamed'
+        $r.Run.Summary.RollbackConsumedPath | Should -Match 'remote-access-posture-rollback-20260101_000000\.consumed-\d{8}_\d{6}\.json$'
+        Test-Path -LiteralPath $r.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        $again = Invoke-RaRollback -Dir $dir -Tag 'raConsumeEmpty2' -Execute
+        $again.Run.ExitCode | Should -Not -Be 0
+        $again.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-RaLiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-RaState { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-RaState 'Reverted', 'NoChange', 'Reverted') $false | Should -BeTrue
+        & $decide (New-RaState 'NoChange') $false | Should -BeTrue
+        & $decide (New-RaState 'Reverted', 'Failed: access denied') $false | Should -BeFalse
+        & $decide (New-RaState 'Reverted', 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-RaState 'Previewed', 'Previewed') $false | Should -BeFalse
+        & $decide (New-RaState 'Reverted', 'Previewed') $false | Should -BeFalse
+        & $decide (New-RaState 'Reverted', 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+        & $decide (New-RaState 'NoChange') $true | Should -BeFalse
+    }
+
+    It 'validates one entry in a pure function lifted from the script, against the tables it is given' {
+        $text = Get-RaLiftedFunctionText -Name 'Get-RollbackEntryProblem'
+        $check = [scriptblock]::Create("param(`$Entry, `$Registry, `$Service)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -RegistryControls `$Registry -ServiceControl `$Service")
+        $registry = @([pscustomobject]@{ Category = 'RemoteAssistance'; Path = $script:raPath; Name = 'fAllowToGetHelp'; Min = 0; Max = 1 })
+        $service = [pscustomobject]@{ Category = 'WinRmService'; ServiceName = 'WinRM'; StartupTypes = @('Manual', 'Disabled'); Statuses = @('Running', 'Stopped') }
+
+        & $check (New-RaRegEntry -Prior 1) $registry $service | Should -BeNullOrEmpty
+        & $check (New-RaRegEntry -Prior 0) $registry $service | Should -BeNullOrEmpty
+        & $check (New-RaRegEntry -Prior 'absent') $registry $service | Should -BeNullOrEmpty
+        & $check (New-RaServiceEntry) $registry $service | Should -BeNullOrEmpty
+        & $check (New-RaRegEntry -Prior 2) $registry $service | Should -Not -BeNullOrEmpty
+        & $check (New-RaRegEntry -Prior 'Absent') $registry $service | Should -Not -BeNullOrEmpty -Because 'absent is matched exactly'
+        & $check (New-RaRegEntry -Category 'RdpNla' -Path $script:rdpTcpPath -Name 'UserAuthentication') $registry $service | Should -Not -BeNullOrEmpty -Because 'the category is not in the table it was given'
+        & $check (New-RaServiceEntry -Prior 'Automatic/Running') $registry $service | Should -Not -BeNullOrEmpty -Because 'the start type is not in the list it was given'
+        & $check $null $registry $service | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rolls back newest first and consumes each file as it goes' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session'; return }
+        $dir = New-RaSafeDir
+        $enabled = ConvertTo-RegistryFixtureText -Table @{
+            $script:tsPath = @{ fDenyTSConnections = 0 }
+            $script:rdpTcpPath = @{ UserAuthentication = 0 }
+            $script:raPath = @{ fAllowToGetHelp = 1 }
+            $script:tsPolicyPath = $null
+        }
+        $compliant = ConvertTo-RegistryFixtureText -Table @{
+            $script:tsPath = @{ fDenyTSConnections = 0 }
+            $script:rdpTcpPath = @{ UserAuthentication = 1; SecurityLayer = 2 }
+            $script:raPath = @{ fAllowToGetHelp = 0 }
+            $script:tsPolicyPath = $null
+        }
+        $log1 = Join-Path $script:workRoot 'raLifoApply1.log'
+        $log2 = Join-Path $script:workRoot 'raLifoApply2.log'
+        # Apply 1 changes the registry values. Apply 2, a second later, disables WinRM on a machine whose
+        # registry values already match.
+        $apply1 = Invoke-ScriptUnderTest -RelativePath $script:raSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log1) + $enabled + $script:raSafeWinRm) -Argument @{ ReportDirectory = $dir; Confirm = $false }
+        $apply1.ExitCode | Should -Be 0 -Because $apply1.Output
+        Start-Sleep -Milliseconds 1200
+        $apply2 = Invoke-ScriptUnderTest -RelativePath $script:raSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log2) + $compliant + "`n`$env:OPSTOOLKIT_TEST_WINRM = 'Manual/Running'`n" + $script:raSafeWinRm) `
+            -Argument @{ ReportDirectory = $dir; DisableWinRM = $true; Confirm = $false }
+        $apply2.ExitCode | Should -Be 0 -Because $apply2.Output
+        $apply1.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+        $apply2.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+
+        $rb1 = Invoke-RaRollback -Dir $dir -Tag 'raLifoRollback1' -Execute
+        $rb1.Run.ExitCode | Should -Be 0 -Because $rb1.Run.Output
+        (Split-Path -Leaf $rb1.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply2.Summary.RollbackJsonPath)
+        Test-Path -LiteralPath $apply2.Summary.RollbackJsonPath | Should -BeFalse -Because 'the used file is renamed'
+        $m1 = @(Get-OpsMutationRecord -Path $rb1.Log)
+        @($m1 | Where-Object { $_.Command -eq 'Set-Service' }).Count | Should -Be 1
+        @($m1 | Where-Object { $_.Command -eq 'Set-ItemProperty' }).Count | Should -Be 0
+
+        $rb2 = Invoke-RaRollback -Dir $dir -Tag 'raLifoRollback2' -Execute
+        $rb2.Run.ExitCode | Should -Be 0 -Because $rb2.Run.Output
+        (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
+        $m2 = @(Get-OpsMutationRecord -Path $rb2.Log)
+        @($m2 | Where-Object { $_.Command -eq 'Set-ItemProperty' }).Count | Should -BeGreaterThan 0
+        @($m2 | Where-Object { $_.Command -eq 'Set-Service' }).Count | Should -Be 0
+
+        $rb3 = Invoke-RaRollback -Dir $dir -Tag 'raLifoRollback3' -Execute
+        $rb3.Run.ExitCode | Should -Not -Be 0
+        $rb3.Run.Output | Should -Match 'Nothing to roll back'
+    }
+}
+
+Describe 'Set-WindowsLocalAccountPolicy rollback safety' {
+    BeforeAll {
+        $script:laSafeCounter = 0
+        $script:laSafeScript = 'scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPolicy.ps1'
+        $script:laSafeFullPath = Join-Path (Get-RepositoryRoot) $script:laSafeScript
+        $script:laSafeName = 'local-account-policy-rollback-20260101_000000.json'
+        $script:laSafeSid = 'S-1-5-21-111111111-222222222-333333333'
+        $script:laSafeNet = Get-NetExeStubText -Line $script:netDefault
+        $script:laSafeUsers = "`n`$env:OPSTOOLKIT_TEST_LOCALUSERS = 'Administrator|$($script:laSafeSid)-500|True;Guest|$($script:laSafeSid)-501|True;alice|$($script:laSafeSid)-1001|True'" +
+        "`n`$env:OPSTOOLKIT_TEST_LOCALADMINS = 'HOST\Administrator|$($script:laSafeSid)-500|User;HOST\alice|$($script:laSafeSid)-1001|User'`n"
+        $script:laSafeUsersGuestOff = "`n`$env:OPSTOOLKIT_TEST_LOCALUSERS = 'Administrator|$($script:laSafeSid)-500|True;Guest|$($script:laSafeSid)-501|False;alice|$($script:laSafeSid)-1001|True'" +
+        "`n`$env:OPSTOOLKIT_TEST_LOCALADMINS = 'HOST\Administrator|$($script:laSafeSid)-500|User;HOST\alice|$($script:laSafeSid)-1001|User'`n"
+        $script:laSafeNonCompliant = ConvertTo-RegistryFixtureText -Table @{
+            $script:uacPath = @{ EnableLUA = 0; ConsentPromptBehaviorAdmin = 5; PromptOnSecureDesktop = 0 }
+            $script:lsaPath = @{ LimitBlankPasswordUse = 0 }
+        }
+        $script:laSafeCompliant = ConvertTo-RegistryFixtureText -Table @{
+            $script:uacPath = @{ EnableLUA = 1; ConsentPromptBehaviorAdmin = 2; PromptOnSecureDesktop = 1 }
+            $script:lsaPath = @{ LimitBlankPasswordUse = 1 }
+        }
+
+        function Get-LaLiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:laSafeFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        function New-LaSafeDir {
+            $script:laSafeCounter++
+            $dir = Join-Path $script:workRoot "laSafety$($script:laSafeCounter)"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $dir
+        }
+
+        function New-LaLockoutEntry {
+            param($Setting = 'lockoutthreshold', $Prior = 0, $Applied = 10, $Kind = 'Lockout', $Category = 'Lockout', $Sid = '')
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; Kind = $Kind; Path = ''; Name = ''; ValueType = ''; Sid = $Sid; PriorValue = $Prior; AppliedValue = $Applied }
+        }
+
+        function New-LaAccountEntry {
+            param($Category = 'GuestAccount', $Setting = 'Guest account', $Kind = 'LocalUserEnabled', $Sid = "$($script:laSafeSid)-501", $Prior = 'Enabled', $Path = '')
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; Kind = $Kind; Path = $Path; Name = ''; ValueType = ''; Sid = $Sid; PriorValue = $Prior; AppliedValue = 'Disabled' }
+        }
+
+        function New-LaRenameEntry {
+            param($Prior = 'Administrator', $Sid = "$($script:laSafeSid)-500")
+            [pscustomobject]@{ Category = 'BuiltInAdminRename'; Setting = 'Built-in Administrator name'; Kind = 'LocalUserName'; Path = ''; Name = ''; ValueType = ''; Sid = $Sid; PriorValue = $Prior; AppliedValue = 'labadmin' }
+        }
+
+        function New-LaRegEntry {
+            param($Category = 'UacConsentPrompt', $Path = $script:uacPath, $Name = 'ConsentPromptBehaviorAdmin', $Prior = 5, $Kind = 'Registry', $Sid = '', $Setting = $null)
+            if ($null -eq $Setting) { $Setting = $Name }
+            [pscustomobject]@{ Category = $Category; Setting = $Setting; Kind = $Kind; Path = $Path; Name = $Name; ValueType = 'DWord'; Sid = $Sid; PriorValue = $Prior; AppliedValue = 2 }
+        }
+
+        function Write-LaRollbackFile {
+            param([string]$Dir, [string]$Name = $script:laSafeName, [object[]]$Entry)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]@{ Timestamp = '20260101_000000'; ChangedSettings = @($Entry) } |
+                ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-LaRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute)
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $run = Invoke-ScriptUnderTest -RelativePath $script:laSafeScript -ModulePath $script:systemModulePath `
+                -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + $script:laSafeUsers + $script:laSafeNet) -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-LaRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because)
+            $r = Invoke-LaRollback -Dir $Dir -Tag "laRefused$($script:laSafeCounter)"
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $r.Run.Output | Should -Match 'refused' -Because $Because
+            $r.Run.Output | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $r.Run.Output | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'local-account-policy-rollback-plan-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'local-account-policy-rollback-state-*' -ErrorAction SilentlyContinue).Count |
+                Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because "$Because must be refused before any change"
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted entry outside the lockout settings, accounts and registry values the forward plan changes, under -Rollback -WhatIf' {
+        $cases = @(
+            @{ Name = 'unknown category'; Entry = (New-LaLockoutEntry -Category 'DeleteAccounts') },
+            @{ Name = 'lockout setting the script never sets'; Entry = (New-LaLockoutEntry -Setting 'forcelogoff') },
+            @{ Name = 'lockout with the wrong Kind'; Entry = (New-LaLockoutEntry -Kind 'Registry') },
+            @{ Name = 'lockout carrying a Sid'; Entry = (New-LaLockoutEntry -Sid "$($script:laSafeSid)-500") },
+            @{ Name = 'Guest entry pointed at the built-in Administrator SID'; Entry = (New-LaAccountEntry -Sid "$($script:laSafeSid)-500") },
+            @{ Name = 'Guest entry pointed at an ordinary user SID'; Entry = (New-LaAccountEntry -Sid "$($script:laSafeSid)-1001") },
+            @{ Name = 'Guest entry with a well-known system SID'; Entry = (New-LaAccountEntry -Sid 'S-1-5-18') },
+            @{ Name = 'Guest entry with an empty Sid'; Entry = (New-LaAccountEntry -Sid '') },
+            @{ Name = 'rename entry pointed at the Guest SID'; Entry = (New-LaRenameEntry -Sid "$($script:laSafeSid)-501") },
+            @{ Name = 'account entry with the wrong Kind'; Entry = (New-LaAccountEntry -Kind 'LocalUserName') },
+            @{ Name = 'account entry with the wrong Setting'; Entry = (New-LaAccountEntry -Setting 'Everyone') },
+            @{ Name = 'account entry carrying a registry Path'; Entry = (New-LaAccountEntry -Path $script:uacPath) },
+            @{ Name = 'registry path of another control'; Entry = (New-LaRegEntry -Category 'UacEnableLua' -Path $script:lsaPath -Name 'EnableLUA') },
+            @{ Name = 'registry path outside the controls'; Entry = (New-LaRegEntry -Path 'HKLM:\SOFTWARE\Evil') },
+            @{ Name = 'registry value name outside the control'; Entry = (New-LaRegEntry -Name 'EnableSmartScreen') },
+            @{ Name = 'registry entry with the wrong Kind'; Entry = (New-LaRegEntry -Kind 'Lockout') },
+            @{ Name = 'registry entry carrying a Sid'; Entry = (New-LaRegEntry -Sid "$($script:laSafeSid)-500") }
+        )
+        foreach ($case in $cases) {
+            $dir = New-LaSafeDir
+            $null = Write-LaRollbackFile -Dir $dir -Entry @((New-LaLockoutEntry), $case.Entry)
+            Assert-LaRefused -Dir $dir -FileName $script:laSafeName -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-LaSafeDir
+        $null = Write-LaRollbackFile -Dir $dir -Entry @((New-LaLockoutEntry), (New-LaLockoutEntry), (New-LaLockoutEntry -Category 'Evil'))
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        $r.Run.Output | Should -Match 'entry 2 '
+        $r.Run.Output | Should -Match 'Evil'
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "Timestamp": "20260101_000000" }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "Lockout" } }'
+            'ChangedSettings one valid entry, not in an array' = ('{ "ChangedSettings": ' + ((New-LaLockoutEntry) | ConvertTo-Json -Compress) + ' }')
+            'ChangedSettings a string'  = '{ "ChangedSettings": "all" }'
+            'top level is an array'     = '[ { "Category": "Lockout" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "Lockout" ] }'
+            'entry lacks PriorValue'    = '{ "ChangedSettings": [ { "Category": "Lockout", "Setting": "lockoutthreshold", "Kind": "Lockout", "Path": "", "Name": "", "Sid": "", "AppliedValue": 10 } ] }'
+            'entry lacks Sid'           = '{ "ChangedSettings": [ { "Category": "Lockout", "Setting": "lockoutthreshold", "Kind": "Lockout", "Path": "", "Name": "", "PriorValue": 0, "AppliedValue": 10 } ] }'
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-LaSafeDir
+            Set-Content -LiteralPath (Join-Path $dir $script:laSafeName) -Value $bodies[$label] -Encoding utf8
+            Assert-LaRefused -Dir $dir -FileName $script:laSafeName -Because $label
+        }
+    }
+
+    It 'refuses a value of the wrong type or outside the range of its setting' {
+        $cases = @(
+            @{ Name = 'threshold prior is a word'; Entry = (New-LaLockoutEntry -Prior 'ten') },
+            @{ Name = 'threshold prior is numeric text'; Entry = (New-LaLockoutEntry -Prior '10') },
+            @{ Name = 'threshold prior unknown'; Entry = (New-LaLockoutEntry -Prior 'unknown') },
+            @{ Name = 'threshold above 999'; Entry = (New-LaLockoutEntry -Prior 1000) },
+            @{ Name = 'threshold negative'; Entry = (New-LaLockoutEntry -Prior -1) },
+            @{ Name = 'duration zero'; Entry = (New-LaLockoutEntry -Setting 'lockoutduration' -Prior 0) },
+            @{ Name = 'window above 99999'; Entry = (New-LaLockoutEntry -Setting 'lockoutwindow' -Prior 100000) },
+            @{ Name = 'lockout prior is an array'; Entry = (New-LaLockoutEntry -Prior @(1, 2)) },
+            @{ Name = 'lockout prior is null'; Entry = (New-LaLockoutEntry -Prior $null) },
+            @{ Name = 'lockout AppliedValue is text'; Entry = (New-LaLockoutEntry -Applied 'x') },
+            @{ Name = 'lockout AppliedValue is null'; Entry = (New-LaLockoutEntry -Applied $null) },
+            @{ Name = 'Guest prior wrong case'; Entry = (New-LaAccountEntry -Prior 'enabled') },
+            @{ Name = 'Guest prior is a word'; Entry = (New-LaAccountEntry -Prior 'Maybe') },
+            @{ Name = 'Guest prior is a boolean'; Entry = (New-LaAccountEntry -Prior $true) },
+            @{ Name = 'Guest prior absent'; Entry = (New-LaAccountEntry -Prior 'absent') },
+            @{ Name = 'rename prior has a forbidden character'; Entry = (New-LaRenameEntry -Prior 'bad;name') },
+            @{ Name = 'rename prior has a slash'; Entry = (New-LaRenameEntry -Prior 'a/b') },
+            @{ Name = 'rename prior longer than 20 characters'; Entry = (New-LaRenameEntry -Prior ('a' * 21)) },
+            @{ Name = 'rename prior empty'; Entry = (New-LaRenameEntry -Prior '') },
+            @{ Name = 'rename prior only dots'; Entry = (New-LaRenameEntry -Prior '..') },
+            @{ Name = 'rename prior with leading space'; Entry = (New-LaRenameEntry -Prior ' admin') },
+            @{ Name = 'rename prior is a number'; Entry = (New-LaRenameEntry -Prior 5) },
+            @{ Name = 'rename prior is null'; Entry = (New-LaRenameEntry -Prior $null) },
+            @{ Name = 'registry prior unknown'; Entry = (New-LaRegEntry -Prior 'unknown') },
+            @{ Name = 'registry prior numeric text'; Entry = (New-LaRegEntry -Prior '2') },
+            @{ Name = 'ConsentPromptBehaviorAdmin above 5'; Entry = (New-LaRegEntry -Prior 6) },
+            @{ Name = 'EnableLUA above 1'; Entry = (New-LaRegEntry -Category 'UacEnableLua' -Name 'EnableLUA' -Prior 2) },
+            @{ Name = 'registry prior is a boolean'; Entry = (New-LaRegEntry -Prior $true) },
+            @{ Name = 'registry prior is a fraction'; Entry = (New-LaRegEntry -Prior 0.5) },
+            @{ Name = 'registry ValueType is an array'; Entry = (& { $e = New-LaRegEntry; $e.ValueType = @('DWord', 'String'); $e }) },
+            @{ Name = 'registry AppliedValue is an object'; Entry = (& { $e = New-LaRegEntry; $e.AppliedValue = [pscustomobject]@{ a = 1 }; $e }) }
+        )
+        foreach ($case in $cases) {
+            $dir = New-LaSafeDir
+            $null = Write-LaRollbackFile -Dir $dir -Entry @($case.Entry)
+            Assert-LaRefused -Dir $dir -FileName $script:laSafeName -Because $case.Name
+        }
+    }
+
+    It 'accepts every entry the forward plan can produce, so the validator cannot drift from it' {
+        $log = Join-Path $script:workRoot 'laDriftApply.log'
+        $apply = Invoke-ScriptUnderTest -RelativePath $script:laSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + $script:laSafeNonCompliant + $script:laSafeUsers + $script:laSafeNet) `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'laDriftPlan'); DisableBuiltInAdministrator = $true; RenameBuiltInAdministrator = 'labadmin'; WhatIf = $true }
+        $apply.ExitCode | Should -Be 0 -Because $apply.Output
+        $forward = @(Get-Content -LiteralPath $apply.Summary.PlanJsonPath -Raw | ConvertFrom-Json |
+                Where-Object { $_.Kind -in @('Registry', 'Lockout', 'LocalUserEnabled', 'LocalUserName') })
+        @($forward | ForEach-Object { $_.Category } | Sort-Object) |
+            Should -Be @('BlankPasswordLimit', 'BuiltInAdminDisable', 'BuiltInAdminRename', 'GuestAccount', 'Lockout', 'Lockout', 'Lockout', 'UacConsentPrompt', 'UacEnableLua', 'UacSecureDesktop')
+        $entries = @($forward | ForEach-Object {
+                [pscustomobject]@{ Category = $_.Category; Setting = $_.Setting; Kind = $_.Kind; Path = $_.Path; Name = $_.Name; ValueType = $_.ValueType
+                    Sid = $_.Sid; PriorValue = $_.CurrentValue; AppliedValue = $_.DesiredValue }
+            })
+        $dir = New-LaSafeDir
+        $null = Write-LaRollbackFile -Dir $dir -Entry $entries
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laDriftRollback'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items).Count | Should -Be 10
+    }
+
+    It 'picks the newest rollback file by name and not a consumed one' {
+        $dir = New-LaSafeDir
+        # The consumed file is newer and deliberately unreadable, so picking it would fail loudly.
+        Set-Content -LiteralPath (Join-Path $dir 'local-account-policy-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-LaRollbackFile -Dir $dir -Entry @((New-LaRegEntry -Prior 5))
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+        $plan = Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json
+        @($plan | ForEach-Object { $_.Setting }) | Should -Be @('ConsentPromptBehaviorAdmin')
+
+        # Name order, not write time: the file with the earlier name is written last.
+        $dir2 = New-LaSafeDir
+        $newerName = Write-LaRollbackFile -Dir $dir2 -Name 'local-account-policy-rollback-20260201_000000.json' -Entry @((New-LaRegEntry -Prior 4))
+        Start-Sleep -Milliseconds 50
+        $null = Write-LaRollbackFile -Dir $dir2 -Name 'local-account-policy-rollback-20260101_000000.json' -Entry @((New-LaRegEntry -Prior 5))
+        $r2 = Invoke-LaRollback -Dir $dir2 -Tag 'laNameOrder'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        (Split-Path -Leaf $r2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $newerName)
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips every item for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-LaSafeDir
+        $file = Write-LaRollbackFile -Dir $dir -Entry @((New-LaRegEntry))
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laUnelevatedExec' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -Be 1
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:laSafeName
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf' {
+        $dir = New-LaSafeDir
+        $file = Write-LaRollbackFile -Dir $dir -Entry @((New-LaRegEntry))
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laWhatIfKeeps'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:laSafeName
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+
+        # With nothing to revert there is no item to preview, so only the -WhatIf rule itself keeps the file.
+        $dir2 = New-LaSafeDir
+        $file2 = Write-LaRollbackFile -Dir $dir2 -Entry @()
+        $r2 = Invoke-LaRollback -Dir $dir2 -Tag 'laWhatIfKeeps2'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        Test-Path -LiteralPath $file2 | Should -BeTrue
+        $r2.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+    }
+
+    It 'consumes the file after an executing rollback with nothing left to revert' {
+        $dir = New-LaSafeDir
+        $file = Write-LaRollbackFile -Dir $dir -Entry @()
+        $r = Invoke-LaRollback -Dir $dir -Tag 'laConsumeEmpty' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeFalse -Because 'the used file is renamed'
+        $r.Run.Summary.RollbackConsumedPath | Should -Match 'local-account-policy-rollback-20260101_000000\.consumed-\d{8}_\d{6}\.json$'
+        Test-Path -LiteralPath $r.Run.Summary.RollbackConsumedPath | Should -BeTrue
+        $again = Invoke-LaRollback -Dir $dir -Tag 'laConsumeEmpty2' -Execute
+        $again.Run.ExitCode | Should -Not -Be 0
+        $again.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-LaLiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-LaState { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-LaState 'Reverted', 'NoChange', 'Reverted') $false | Should -BeTrue
+        & $decide (New-LaState 'NoChange') $false | Should -BeTrue
+        & $decide (New-LaState 'Reverted', 'Failed: access denied') $false | Should -BeFalse
+        & $decide (New-LaState 'Reverted', 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-LaState 'Previewed', 'Previewed') $false | Should -BeFalse
+        & $decide (New-LaState 'Reverted', 'Previewed') $false | Should -BeFalse
+        & $decide (New-LaState 'Reverted', 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+        & $decide (New-LaState 'NoChange') $true | Should -BeFalse
+    }
+
+    It 'validates one entry in a pure function lifted from the script, against the tables it is given' {
+        $text = Get-LaLiftedFunctionText -Name 'Get-RollbackEntryProblem'
+        $check = [scriptblock]::Create("param(`$Entry, `$Registry, `$Lockout, `$Account)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -RegistryControls `$Registry -LockoutControls `$Lockout -AccountControls `$Account")
+        $registry = @([pscustomobject]@{ Category = 'UacConsentPrompt'; Kind = 'Registry'; Path = $script:uacPath; Name = 'ConsentPromptBehaviorAdmin'; Min = 0; Max = 5 })
+        $lockout = @([pscustomobject]@{ Category = 'Lockout'; Kind = 'Lockout'; Name = 'lockoutthreshold'; Min = 0; Max = 999 })
+        $account = @(
+            [pscustomobject]@{ Category = 'GuestAccount'; Setting = 'Guest account'; Kind = 'LocalUserEnabled'; SidSuffix = '501'; ValueKind = 'Enabled' }
+            [pscustomobject]@{ Category = 'BuiltInAdminRename'; Setting = 'Built-in Administrator name'; Kind = 'LocalUserName'; SidSuffix = '500'; ValueKind = 'Name' }
+        )
+
+        & $check (New-LaRegEntry -Prior 5) $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaRegEntry -Prior 'absent') $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaLockoutEntry -Prior 0 -Applied 10) $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaAccountEntry -Prior 'Disabled') $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaRenameEntry -Prior 'Administrateur') $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaRenameEntry -Prior 'Local Admin') $registry $lockout $account | Should -BeNullOrEmpty
+        & $check (New-LaRegEntry -Prior 6) $registry $lockout $account | Should -Not -BeNullOrEmpty
+        & $check (New-LaRegEntry -Category 'UacEnableLua' -Name 'EnableLUA' -Prior 1) $registry $lockout $account | Should -Not -BeNullOrEmpty -Because 'the category is not in the table it was given'
+        & $check (New-LaLockoutEntry -Setting 'lockoutduration' -Prior 5) $registry $lockout $account | Should -Not -BeNullOrEmpty -Because 'the setting is not in the table it was given'
+        & $check (New-LaAccountEntry -Sid "$($script:laSafeSid)-500") $registry $lockout $account | Should -Not -BeNullOrEmpty -Because 'Guest is found by RID 501'
+        & $check (New-LaAccountEntry -Category 'BuiltInAdminDisable' -Setting 'Built-in Administrator' -Sid "$($script:laSafeSid)-500") $registry $lockout $account | Should -Not -BeNullOrEmpty -Because 'the category is not in the table it was given'
+        & $check (New-LaRenameEntry -Prior 'bad|name') $registry $lockout $account | Should -Not -BeNullOrEmpty
+        & $check $null $registry $lockout $account | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rolls back newest first and consumes each file as it goes' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session'; return }
+        $dir = New-LaSafeDir
+        $log1 = Join-Path $script:workRoot 'laLifoApply1.log'
+        $log2 = Join-Path $script:workRoot 'laLifoApply2.log'
+        # Apply 1 changes lockout, Guest and the registry values. Apply 2, a second later, renames the built-in
+        # Administrator on a machine whose other settings already match.
+        $apply1 = Invoke-ScriptUnderTest -RelativePath $script:laSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log1) + $script:laSafeNonCompliant + $script:laSafeUsers + $script:laSafeNet) `
+            -Argument @{ ReportDirectory = $dir; Confirm = $false }
+        $apply1.ExitCode | Should -Be 0 -Because $apply1.Output
+        Start-Sleep -Milliseconds 1200
+        $netCompliant = Get-NetExeStubText -Line $script:netCompliant
+        $apply2 = Invoke-ScriptUnderTest -RelativePath $script:laSafeScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log2) + $script:laSafeCompliant + $script:laSafeUsersGuestOff + $netCompliant) `
+            -Argument @{ ReportDirectory = $dir; RenameBuiltInAdministrator = 'labadmin'; Confirm = $false }
+        $apply2.ExitCode | Should -Be 0 -Because $apply2.Output
+        $apply1.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+        $apply2.Summary.RollbackJsonPath | Should -Not -BeNullOrEmpty
+
+        $rb1 = Invoke-LaRollback -Dir $dir -Tag 'laLifoRollback1' -Execute
+        $rb1.Run.ExitCode | Should -Be 0 -Because $rb1.Run.Output
+        (Split-Path -Leaf $rb1.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply2.Summary.RollbackJsonPath)
+        Test-Path -LiteralPath $apply2.Summary.RollbackJsonPath | Should -BeFalse -Because 'the used file is renamed'
+        $m1 = @(Get-OpsMutationRecord -Path $rb1.Log)
+        @($m1 | Where-Object { $_.Command -eq 'Rename-LocalUser' }).Count | Should -Be 1
+        @($m1 | Where-Object { $_.Command -in @('net.exe', 'Set-ItemProperty') }).Count | Should -Be 0
+
+        $rb2 = Invoke-LaRollback -Dir $dir -Tag 'laLifoRollback2' -Execute
+        $rb2.Run.ExitCode | Should -Be 0 -Because $rb2.Run.Output
+        (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
+        $m2 = @(Get-OpsMutationRecord -Path $rb2.Log)
+        @($m2 | Where-Object { $_.Command -eq 'net.exe' }).Count | Should -BeGreaterThan 0
+        @($m2 | Where-Object { $_.Command -eq 'Rename-LocalUser' }).Count | Should -Be 0
+
+        $rb3 = Invoke-LaRollback -Dir $dir -Tag 'laLifoRollback3' -Execute
+        $rb3.Run.ExitCode | Should -Not -Be 0
+        $rb3.Run.Output | Should -Match 'Nothing to roll back'
+    }
+}

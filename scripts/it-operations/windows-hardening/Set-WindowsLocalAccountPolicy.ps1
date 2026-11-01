@@ -33,8 +33,9 @@ Instructions:
 - The 24H2 Administrator Protection setting is deliberately not covered: its registry value name and
   data were not verified against Microsoft documentation, so it is left out rather than guessed.
 - Windows Hello enrollment, LAPS, and domain policy are out of scope for a standalone machine.
-- Use -Rollback to restore the exact values this script changed from the newest rollback file in
-  the report directory.
+- Use -Rollback to restore the exact values this script changed from the newest unconsumed rollback
+  file in the report directory. Each executing -Rollback that restores everything marks its file
+  consumed, so running -Rollback again undoes the run before it, newest first.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   developer's workstation must never be applied to someone else's machine. Generated reports
   belong under a data root outside the repo.
@@ -46,6 +47,19 @@ Microsoft.PowerShell.LocalAccounts cmdlets, and local policy registry values. No
 Active Directory, or Entra mechanism is used.
 
 Every change is recorded in a rollback JSON so the policy can be reversed with -Rollback.
+
+Rollback: -Rollback reads the newest local-account-policy-rollback-<timestamp>.json in the report
+directory (newest by name). Before any plan is written or any change made, every recorded entry is
+checked and the whole file is refused, also under -WhatIf, with an error naming the file and the
+first bad entry when the JSON does not parse, ChangedSettings is not an array, or an entry names a
+category, lockout setting, registry value or account this script does not change, or carries a value
+of the wrong type or outside the range of that setting. The bounds come from the same control tables
+the forward plan uses: the three lockout settings, the four registry values, the Guest account and
+the built-in Administrator (each found by its well-known SID ending -501 or -500, so a rollback file
+cannot point at any other account). Move a refused file aside to roll back an older run. After an
+executing -Rollback in which every item was reverted or needed no change, the file is renamed
+local-account-policy-rollback-<timestamp>.consumed-<timestamp>.json and is no longer picked; under
+-WhatIf, or when any item failed or was skipped, it is left in place and the summary says so.
 
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPolicy.ps1 -ReportDirectory <dir> -WhatIf
@@ -102,6 +116,31 @@ if (-not $Rollback -and $LockoutObservationWindowMinutes -gt $LockoutDurationMin
 
 $script:UacPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 $script:LsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+
+# Everything the forward plan can change, as three tables. The forward plan builds its items from these
+# and the rollback validator accepts exactly these, so they cannot drift. Min and Max bound the value a
+# rollback may restore. Registry values are DWords; a rollback may also restore 'absent'.
+$script:RegistryControls = @(
+    [pscustomobject]@{ Category = 'UacEnableLua'; Kind = 'Registry'; Path = $script:UacPath; Name = 'EnableLUA'; Min = 0; Max = 1 }
+    [pscustomobject]@{ Category = 'UacConsentPrompt'; Kind = 'Registry'; Path = $script:UacPath; Name = 'ConsentPromptBehaviorAdmin'; Min = 0; Max = 5 }
+    [pscustomobject]@{ Category = 'UacSecureDesktop'; Kind = 'Registry'; Path = $script:UacPath; Name = 'PromptOnSecureDesktop'; Min = 0; Max = 1 }
+    [pscustomobject]@{ Category = 'BlankPasswordLimit'; Kind = 'Registry'; Path = $script:LsaPath; Name = 'LimitBlankPasswordUse'; Min = 0; Max = 1 }
+)
+# The three net.exe accounts settings, in the order the forward plan lists them. Key is the field of
+# Get-LockoutState that holds the current value.
+$script:LockoutControls = @(
+    [pscustomobject]@{ Category = 'Lockout'; Kind = 'Lockout'; Name = 'lockoutthreshold'; Label = 'Account lockout threshold'; Key = 'Threshold'; Min = 0; Max = 999 }
+    [pscustomobject]@{ Category = 'Lockout'; Kind = 'Lockout'; Name = 'lockoutduration'; Label = 'Account lockout duration (minutes)'; Key = 'Duration'; Min = 1; Max = 99999 }
+    [pscustomobject]@{ Category = 'Lockout'; Kind = 'Lockout'; Name = 'lockoutwindow'; Label = 'Lockout observation window (minutes)'; Key = 'Window'; Min = 1; Max = 99999 }
+)
+# The accounts the forward plan can touch. SidSuffix is the well-known RID the account is found by;
+# ValueKind says whether the recorded prior value is Enabled/Disabled or an account name.
+$script:AccountControls = @(
+    [pscustomobject]@{ Category = 'GuestAccount'; Setting = 'Guest account'; Kind = 'LocalUserEnabled'; SidSuffix = '501'; ValueKind = 'Enabled' }
+    [pscustomobject]@{ Category = 'BuiltInAdminDisable'; Setting = 'Built-in Administrator'; Kind = 'LocalUserEnabled'; SidSuffix = '500'; ValueKind = 'Enabled' }
+    [pscustomobject]@{ Category = 'BuiltInAdminRename'; Setting = 'Built-in Administrator name'; Kind = 'LocalUserName'; SidSuffix = '500'; ValueKind = 'Name' }
+)
+$script:RollbackSourceFile = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 
 function Test-IsAdministrator {
@@ -140,16 +179,26 @@ function Get-PlanEntry {
     }
 }
 
+function Get-RegistryControl {
+    param([Parameter(Mandatory = $true)][string]$Category)
+    $hit = @($script:RegistryControls | Where-Object { $_.Category -eq $Category })
+    if ($hit.Count -ne 1) { throw "No registry control for category '$Category' is defined." }
+    $hit[0]
+}
+
 function Get-RegistryPlanEntry {
     param(
-        [string]$Category, [string]$Path, [string]$Name, [int]$Desired, [string]$Label, [switch]$NeedsReboot
+        [string]$Category, [int]$Desired, [string]$Label, [switch]$NeedsReboot
     )
+    $control = Get-RegistryControl -Category $Category
+    $Path = $control.Path
+    $Name = $control.Name
     $state = Get-RegistryValueState -Path $Path -Name $Name
     $current = switch ($state.State) { 'present' { $state.Value } 'absent' { 'absent' } default { 'unknown' } }
     $action = if ($state.State -eq 'unknown') { "Skipped: current value of $Name could not be read" }
     elseif ($state.State -eq 'present' -and "$($state.Value)" -eq "$Desired") { "No change ($Label already $Desired)" }
     else { "Set $Label ($Name) to $Desired" }
-    Get-PlanEntry -Category $Category -Setting $Name -Kind 'Registry' -Path $Path -Name $Name -ValueType 'DWord' `
+    Get-PlanEntry -Category $Category -Setting $Name -Kind $control.Kind -Path $Path -Name $Name -ValueType 'DWord' `
         -CurrentValue $current -DesiredValue $Desired -RequiresReboot ([bool]($NeedsReboot -and $action -like 'Set*')) -Action $action
 }
 
@@ -203,22 +252,21 @@ function Get-LockoutOrder {
 function Get-LockoutItem {
     param([int]$Threshold, [int]$Duration, [int]$Window)
     $state = Get-LockoutState
-    $specs = @(
-        @{ Name = 'lockoutthreshold'; Label = 'Account lockout threshold'; Key = 'Threshold'; Desired = $Threshold }
-        @{ Name = 'lockoutduration'; Label = 'Account lockout duration (minutes)'; Key = 'Duration'; Desired = $Duration }
-        @{ Name = 'lockoutwindow'; Label = 'Lockout observation window (minutes)'; Key = 'Window'; Desired = $Window }
-    )
+    $desiredByKey = @{ Threshold = $Threshold; Duration = $Duration; Window = $Window }
+    $specs = @($script:LockoutControls | ForEach-Object {
+            @{ Category = $_.Category; Kind = $_.Kind; Name = $_.Name; Label = $_.Label; Key = $_.Key; Desired = $desiredByKey[$_.Key] }
+        })
     $built = @{}
     foreach ($spec in $specs) {
         if ($null -eq $state) {
-            $built[$spec.Name] = Get-PlanEntry -Category 'Lockout' -Setting $spec.Name -Kind 'Lockout' -CurrentValue 'unknown' `
+            $built[$spec.Name] = Get-PlanEntry -Category $spec.Category -Setting $spec.Name -Kind $spec.Kind -CurrentValue 'unknown' `
                 -DesiredValue $spec.Desired -Action "Skipped: $($spec.Label) could not be read from net.exe accounts"
             continue
         }
         $current = $state[$spec.Key]
         $action = if ($current -eq $spec.Desired) { "No change ($($spec.Label) already $current)" }
         else { "Set $($spec.Label) to $($spec.Desired)" }
-        $built[$spec.Name] = Get-PlanEntry -Category 'Lockout' -Setting $spec.Name -Kind 'Lockout' -CurrentValue $current `
+        $built[$spec.Name] = Get-PlanEntry -Category $spec.Category -Setting $spec.Name -Kind $spec.Kind -CurrentValue $current `
             -DesiredValue $spec.Desired -Action $action
     }
     $curWindow = if ($null -ne $state) { $state.Window } else { 0 }
@@ -253,6 +301,17 @@ function Get-AdministratorsMemberList {
     }
 }
 
+# A plan item for one of the account controls; Setting and Kind come from the control table.
+function Get-AccountPlanEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Category, [string]$Sid = '', $CurrentValue, $DesiredValue, [string]$Action
+    )
+    $hit = @($script:AccountControls | Where-Object { $_.Category -eq $Category })
+    if ($hit.Count -ne 1) { throw "No account control for category '$Category' is defined." }
+    Get-PlanEntry -Category $Category -Setting $hit[0].Setting -Kind $hit[0].Kind -Sid $Sid `
+        -CurrentValue $CurrentValue -DesiredValue $DesiredValue -Action $Action
+}
+
 function Get-AccountItem {
     param([switch]$DisableBuiltInAdministrator, [string]$RenameBuiltInAdministrator)
 
@@ -262,16 +321,16 @@ function Get-AccountItem {
 
     # Guest, by well-known SID.
     if ($null -eq $users) {
-        $items.Add((Get-PlanEntry -Category 'GuestAccount' -Setting 'Guest account' -Kind 'LocalUserEnabled' -CurrentValue 'unknown' `
+        $items.Add((Get-AccountPlanEntry -Category 'GuestAccount' -CurrentValue 'unknown' `
                     -DesiredValue 'Disabled' -Action 'Skipped: local users could not be read'))
     } else {
         $guest = @($users | Where-Object { $_.Sid -match '-501$' }) | Select-Object -First 1
         if ($null -eq $guest) {
-            $items.Add((Get-PlanEntry -Category 'GuestAccount' -Setting 'Guest account' -Kind 'LocalUserEnabled' -CurrentValue 'absent' `
+            $items.Add((Get-AccountPlanEntry -Category 'GuestAccount' -CurrentValue 'absent' `
                         -DesiredValue 'Disabled' -Action 'No change (no Guest account is present)'))
         } else {
             $now = if ($guest.Enabled) { 'Enabled' } else { 'Disabled' }
-            $items.Add((Get-PlanEntry -Category 'GuestAccount' -Setting 'Guest account' -Kind 'LocalUserEnabled' -Sid $guest.Sid `
+            $items.Add((Get-AccountPlanEntry -Category 'GuestAccount' -Sid $guest.Sid `
                         -CurrentValue $now -DesiredValue 'Disabled' `
                         -Action $(if ($guest.Enabled) { 'Disable the Guest account' } else { 'No change (Guest account already disabled)' })))
         }
@@ -282,10 +341,10 @@ function Get-AccountItem {
 
     if ($DisableBuiltInAdministrator) {
         if ($null -eq $users) {
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminDisable' -Setting 'Built-in Administrator' -Kind 'LocalUserEnabled' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminDisable' `
                         -CurrentValue 'unknown' -DesiredValue 'Disabled' -Action 'Skipped: local users could not be read'))
         } elseif ($null -eq $builtIn) {
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminDisable' -Setting 'Built-in Administrator' -Kind 'LocalUserEnabled' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminDisable' `
                         -CurrentValue 'absent' -DesiredValue 'Disabled' -Action 'No change (no built-in Administrator account is present)'))
         } else {
             $now = if ($builtIn.Enabled) { 'Enabled' } else { 'Disabled' }
@@ -300,24 +359,24 @@ function Get-AccountItem {
                 if ($others.Count -eq 0) { 'Skipped: no other enabled local administrator exists, refusing to disable the only administrator' }
                 else { 'Disable the built-in Administrator account' }
             }
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminDisable' -Setting 'Built-in Administrator' -Kind 'LocalUserEnabled' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminDisable' `
                         -Sid $builtIn.Sid -CurrentValue $now -DesiredValue 'Disabled' -Action $action))
         }
     }
 
     if ($RenameBuiltInAdministrator) {
         if ($null -eq $users) {
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminRename' -Setting 'Built-in Administrator name' -Kind 'LocalUserName' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminRename' `
                         -CurrentValue 'unknown' -DesiredValue $RenameBuiltInAdministrator -Action 'Skipped: local users could not be read'))
         } elseif ($null -eq $builtIn) {
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminRename' -Setting 'Built-in Administrator name' -Kind 'LocalUserName' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminRename' `
                         -CurrentValue 'absent' -DesiredValue $RenameBuiltInAdministrator -Action 'No change (no built-in Administrator account is present)'))
         } else {
             $clash = @($users | Where-Object { $_.Name -eq $RenameBuiltInAdministrator -and $_.Sid -ne $builtIn.Sid }).Count -gt 0
             $action = if ($builtIn.Name -eq $RenameBuiltInAdministrator) { "No change (built-in Administrator already named '$RenameBuiltInAdministrator')" }
             elseif ($clash) { "Skipped: another local account is already named '$RenameBuiltInAdministrator'" }
             else { "Rename the built-in Administrator to '$RenameBuiltInAdministrator'" }
-            $items.Add((Get-PlanEntry -Category 'BuiltInAdminRename' -Setting 'Built-in Administrator name' -Kind 'LocalUserName' `
+            $items.Add((Get-AccountPlanEntry -Category 'BuiltInAdminRename' `
                         -Sid $builtIn.Sid -CurrentValue $builtIn.Name -DesiredValue $RenameBuiltInAdministrator -Action $action))
         }
     }
@@ -352,12 +411,12 @@ function Get-ForwardPlan {
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
     foreach ($i in @(Get-LockoutItem -Threshold $Threshold -Duration $Duration -Window $Window)) { $items.Add($i) }
     foreach ($i in @(Get-AccountItem -DisableBuiltInAdministrator:$DisableBuiltInAdministrator -RenameBuiltInAdministrator $RenameBuiltInAdministrator)) { $items.Add($i) }
-    $items.Add((Get-RegistryPlanEntry -Category 'UacEnableLua' -Path $script:UacPath -Name 'EnableLUA' -Desired 1 -Label 'UAC Admin Approval Mode' -NeedsReboot))
-    $items.Add((Get-RegistryPlanEntry -Category 'UacConsentPrompt' -Path $script:UacPath -Name 'ConsentPromptBehaviorAdmin' -Desired 2 `
+    $items.Add((Get-RegistryPlanEntry -Category 'UacEnableLua' -Desired 1 -Label 'UAC Admin Approval Mode' -NeedsReboot))
+    $items.Add((Get-RegistryPlanEntry -Category 'UacConsentPrompt' -Desired 2 `
                 -Label 'UAC admin prompt (consent on the secure desktop for every elevation)'))
-    $items.Add((Get-RegistryPlanEntry -Category 'UacSecureDesktop' -Path $script:UacPath -Name 'PromptOnSecureDesktop' -Desired 1 `
+    $items.Add((Get-RegistryPlanEntry -Category 'UacSecureDesktop' -Desired 1 `
                 -Label 'UAC secure desktop prompt'))
-    $items.Add((Get-RegistryPlanEntry -Category 'BlankPasswordLimit' -Path $script:LsaPath -Name 'LimitBlankPasswordUse' -Desired 1 `
+    $items.Add((Get-RegistryPlanEntry -Category 'BlankPasswordLimit' -Desired 1 `
                 -Label 'blank-password network logon restriction'))
     $items
 }
@@ -367,15 +426,133 @@ function Get-LatestRollbackFile {
     # The timestamp pattern keeps this from matching the 'local-account-policy-rollback-plan-*' and '-state-*' reports.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter 'local-account-policy-rollback-*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^local-account-policy-rollback-\d{8}_\d{6}\.json$' } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Sort-Object Name -Descending | Select-Object -First 1
+}
+
+# Returns $null when the entry is acceptable, otherwise a short text saying what is wrong with it.
+# Lockout entries must name one of the three net.exe accounts settings with a whole number inside its
+# range. Account entries must name a category in the account table, carry that account's well-known SID
+# (a machine SID ending -501 or -500) and a prior state or name the restore can apply. Registry entries
+# must name a control's exact path and value name with 'absent' or a whole number inside its range.
+# Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param(
+        $Entry,
+        [Parameter(Mandatory = $true)]$RegistryControls,
+        [Parameter(Mandatory = $true)]$LockoutControls,
+        [Parameter(Mandatory = $true)]$AccountControls
+    )
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($field in 'Category', 'Setting', 'Kind', 'Path', 'Name', 'Sid', 'PriorValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    foreach ($field in 'Category', 'Setting', 'Kind') {
+        if ($Entry.$field -isnot [string]) { return "$field is not a string" }
+    }
+    foreach ($field in 'Path', 'Name', 'Sid') {
+        if ($null -ne $Entry.$field -and $Entry.$field -isnot [string]) { return "$field is not a string" }
+    }
+    foreach ($field in 'ValueType', 'AppliedValue') {
+        if ($Entry.PSObject.Properties[$field]) {
+            $v = $Entry.PSObject.Properties[$field].Value
+            if ($null -ne $v -and $v -isnot [string] -and $v -isnot [int] -and $v -isnot [long]) { return "$field is not a single value" }
+        }
+    }
+    $prior = $Entry.PriorValue
+    $category = $Entry.Category
+
+    $lockout = @($LockoutControls | Where-Object { $_.Category -eq $category -and $_.Name -eq $Entry.Setting })
+    if ($lockout.Count -eq 1) {
+        $control = $lockout[0]
+        if ($Entry.Kind -ne $control.Kind) { return "Kind '$($Entry.Kind)' is not $($control.Kind) for $($control.Name)" }
+        if (-not [string]::IsNullOrEmpty($Entry.Path) -or -not [string]::IsNullOrEmpty($Entry.Name) -or -not [string]::IsNullOrEmpty($Entry.Sid)) {
+            return 'a lockout entry must not carry a Path, Name or Sid'
+        }
+        if (($prior -isnot [int] -and $prior -isnot [long]) -or $prior -lt $control.Min -or $prior -gt $control.Max) {
+            return "PriorValue '$prior' of $($control.Name) is not a whole number from $($control.Min) to $($control.Max)"
+        }
+        $applied = if ($Entry.PSObject.Properties['AppliedValue']) { $Entry.AppliedValue } else { $null }
+        if (($applied -isnot [int] -and $applied -isnot [long]) -or $applied -lt $control.Min -or $applied -gt $control.Max) {
+            return "AppliedValue '$applied' of $($control.Name) is not a whole number from $($control.Min) to $($control.Max)"
+        }
+        return $null
+    }
+
+    $account = @($AccountControls | Where-Object { $_.Category -eq $category })
+    if ($account.Count -eq 1) {
+        $control = $account[0]
+        if ($Entry.Kind -ne $control.Kind) { return "Kind '$($Entry.Kind)' is not $($control.Kind) for $category" }
+        if ($Entry.Setting -ne $control.Setting) { return "Setting '$($Entry.Setting)' is not '$($control.Setting)' for $category" }
+        if (-not [string]::IsNullOrEmpty($Entry.Path) -or -not [string]::IsNullOrEmpty($Entry.Name)) { return 'an account entry must not carry a Path or Name' }
+        if ($Entry.Sid -isnot [string] -or $Entry.Sid -notmatch ('^S-1-5-21-\d{1,10}-\d{1,10}-\d{1,10}-' + [regex]::Escape($control.SidSuffix) + '$')) {
+            return "Sid '$($Entry.Sid)' is not the well-known account ending -$($control.SidSuffix)"
+        }
+        if ($control.ValueKind -eq 'Enabled') {
+            if ($prior -isnot [string] -or $prior -cnotin @('Enabled', 'Disabled')) { return "PriorValue '$prior' is not Enabled or Disabled" }
+            return $null
+        }
+        # An account name: at most 20 characters, none of the characters Windows forbids, not blank or dots only.
+        if ($prior -isnot [string] -or $prior -notmatch '^[^"/\\\[\]:;|=,+*?<>\x00-\x1f]{1,20}$' -or $prior -ne $prior.Trim() -or $prior -match '^\.+$') {
+            return "PriorValue '$prior' is not a valid local account name"
+        }
+        return $null
+    }
+
+    $registry = @($RegistryControls | Where-Object { $_.Category -eq $category })
+    if ($registry.Count -ne 1) { return "Category '$category' is not one this script records" }
+    $control = $registry[0]
+    if ($Entry.Kind -ne $control.Kind) { return "Kind '$($Entry.Kind)' is not $($control.Kind) for $category" }
+    if ($Entry.Path -ne $control.Path) { return "Path '$($Entry.Path)' is not the registry key this script sets for $category" }
+    if ($Entry.Name -ne $control.Name -or $Entry.Setting -ne $control.Name) { return "Name '$($Entry.Name)' is not the value this script sets for $category" }
+    if (-not [string]::IsNullOrEmpty($Entry.Sid)) { return 'a registry entry must not carry a Sid' }
+    if ($prior -is [string]) {
+        if ($prior -ceq 'absent') { return $null }
+        return "PriorValue '$prior' is neither absent nor a whole number"
+    }
+    if ($prior -isnot [int] -and $prior -isnot [long]) { return "PriorValue '$prior' is neither absent nor a whole number" }
+    if ($prior -lt $control.Min -or $prior -gt $control.Max) { return "PriorValue $prior of $($control.Name) is outside $($control.Min) to $($control.Max)" }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No local-account-policy-rollback-*.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
+    }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    $changed = $data.ChangedSettings
+    if ($changed -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($changed)
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -RegistryControls $script:RegistryControls `
+            -LockoutControls $script:LockoutControls -AccountControls $script:AccountControls
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
 
-    $entries = @($data.ChangedSettings | Where-Object { $_ })
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
     foreach ($entry in $entries) {
         $items.Add((Get-PlanEntry -Category $entry.Category -Setting $entry.Setting -Kind $entry.Kind -Path $entry.Path `
@@ -483,6 +660,29 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: at least one item failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
     $rollbackPath = Join-Path $resolvedReportDirectory "local-account-policy-rollback-$timestamp.json"
@@ -500,6 +700,9 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count
     ReportOnlyCount = @($state | Where-Object Result -eq 'ReportOnly').Count

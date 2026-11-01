@@ -493,9 +493,13 @@ Describe 'Enable-BitLockerOsVolume rollback' {
         $script:blRbReports = New-WorkDirectory 'bl-rb-reports'
         [pscustomobject]@{
             Timestamp = '20260101_000000'; ComputerName = 'TESTPC'; MountPoint = 'Q:'
-            ProtectorId = '{AAAAAAAA-0000-4000-8000-000000000001}'; KeyFilePath = 'E:\keys\BitLocker-Recovery-TESTPC-x.txt'
+            ProtectorId = '{AAAAAAAA-0000-4000-8000-000000000001}'
             ScriptEnabledBitLocker = $true; EncryptionMethod = 'XtsAes256'
-        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:blRbReports 'bitlocker-enable-rollback-20260101_000000.json') -Encoding utf8
+            ChangedSettings = @([pscustomobject]@{
+                    Category = 'EnableOsVolume'; MountPoint = 'Q:'; ProtectorId = '{AAAAAAAA-0000-4000-8000-000000000001}'
+                    ScriptEnabledBitLocker = $true; EncryptionMethod = 'XtsAes256'
+                })
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $script:blRbReports 'bitlocker-enable-rollback-20260101_000000.json') -Encoding utf8
         $script:blRb = Invoke-Pair -Tag 'bl-rb' -RelativePath $script:blScript `
             -Argument @{ ReportDirectory = $script:blRbReports; Rollback = $true } -FixtureEnvironment $script:blGoodEnv
     }
@@ -705,11 +709,21 @@ function CiTool.exe {
 Describe 'Set-WdacAuditPolicy rollback' {
     BeforeAll {
         $script:plantedId = '{22222222-3333-4444-8555-666666666666}'
-        $script:wdacRbReports = New-WorkDirectory 'wdac-rb-reports'
-        [pscustomobject]@{
-            Timestamp = '20260101_000000'; PolicyName = 'ops-toolkit WDAC audit'; PolicyId = $script:plantedId
-            CipPath = 'x.cip'; XmlPath = 'x.xml'; BasePolicy = 'DefaultWindows'
-        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:wdacRbReports 'wdac-audit-rollback-20260101_000000.json') -Encoding utf8
+        # A fresh report directory per run: an elevated executing rollback consumes the file it uses.
+        function New-WdacRbReports {
+            param([string]$Name)
+            $dir = New-WorkDirectory $Name
+            $rec = [ordered]@{
+                PolicyName = 'ops-toolkit WDAC audit'; PolicyId = $script:plantedId
+                CipPath = 'E:\reports\22222222-3333-4444-8555-666666666666.cip'
+                XmlPath = 'E:\reports\wdac-audit-policy-20260101_000000.xml'; BasePolicy = 'DefaultWindows'
+            }
+            $file = [ordered]@{ Timestamp = '20260101_000000' }
+            foreach ($k in $rec.Keys) { $file[$k] = $rec[$k] }
+            $file['ChangedSettings'] = @([pscustomobject](@{ Category = 'DeployAuditPolicy' } + $rec))
+            [pscustomobject]$file | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dir 'wdac-audit-rollback-20260101_000000.json') -Encoding utf8
+            $dir
+        }
         $script:ciStub2 = @'
 function CiTool.exe {
     $a = $args -join ' '
@@ -723,7 +737,7 @@ function CiTool.exe {
     It 'removes the planted policy ID when executing, and previews it under -WhatIf' {
         $env = "`$env:OPSTOOLKIT_TEST_CITOOL_POLICIES = '{`"Policies`":[{`"PolicyID`":`"22222222-3333-4444-8555-666666666666`",`"FriendlyName`":`"ops-toolkit WDAC audit`",`"IsEnforced`":false,`"IsSystemPolicy`":false}],`"OperationResult`":0}'"
         $pair = Invoke-Pair -Tag 'wdac-rb' -RelativePath $script:wdacScript `
-            -Argument @{ ReportDirectory = $script:wdacRbReports; Rollback = $true } -FixtureEnvironment $env -ExtraSetup $script:ciStub2
+            -Argument @{ ReportDirectory = (New-WdacRbReports 'wdac-rb-reports'); Rollback = $true } -FixtureEnvironment $env -ExtraSetup $script:ciStub2
         $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
         $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
         Assert-OpsNoChangeUnderWhatIf -Pair $pair
@@ -744,7 +758,7 @@ function CiTool.exe {
     It 'is NoChange when the planted policy is no longer active' {
         $env = "`$env:OPSTOOLKIT_TEST_CITOOL_POLICIES = '{`"Policies`":[],`"OperationResult`":0}'"
         $pair = Invoke-Pair -Tag 'wdac-rb-gone' -RelativePath $script:wdacScript `
-            -Argument @{ ReportDirectory = $script:wdacRbReports; Rollback = $true } -FixtureEnvironment $env -ExtraSetup $script:ciStub2
+            -Argument @{ ReportDirectory = (New-WdacRbReports 'wdac-rb-gone-reports'); Rollback = $true } -FixtureEnvironment $env -ExtraSetup $script:ciStub2
         $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
         @(Get-OpsMutationRecord -Path $pair.ExecuteLog).Count | Should -Be 0
         $pair.Execute.Summary.NoChangeCount | Should -Be 1
@@ -827,5 +841,655 @@ function Get-WinEvent {
         $run.ExitCode | Should -Be 0 -Because $run.Output
         $run.Summary.Status | Should -Be 'Unreadable'
         $run.Summary.ReadError | Should -Match 'channel could not be found'
+    }
+}
+
+Describe 'Set-WdacAuditPolicy rollback safety' {
+    BeforeAll {
+        $script:wdSafeCounter = 0
+        $script:wdSafeFullPath = Get-RepositoryScriptPath -RelativePath $script:wdacScript
+        $script:wdSafeName = 'wdac-audit-rollback-20260101_000000.json'
+        $script:wdSafeId = '{22222222-3333-4444-8555-666666666666}'
+        $script:wdSafeActive = '{"Policies":[{"PolicyID":"22222222-3333-4444-8555-666666666666","FriendlyName":"ops-toolkit WDAC audit","IsEnforced":false,"IsSystemPolicy":false}],"OperationResult":0}'
+        $script:wdSafeCi = @'
+function CiTool.exe {
+    $a = $args -join ' '
+    if ($a -like '--list-policies*') { $env:OPSTOOLKIT_TEST_CITOOL_POLICIES; return }
+    Write-OpsTestMutation -Command 'CiTool.exe' -Target $a -Detail ''
+    '{"OperationResult":0}'
+}
+'@
+        $script:wdSafeExampleXml = @'
+<?xml version="1.0" encoding="utf-8"?>
+<SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy" PolicyType="Base Policy">
+  <VersionEx>10.0.3.0</VersionEx>
+  <PolicyID>{E0ABDA1F-CCF0-468E-8855-3E0F08B02D6A}</PolicyID>
+  <BasePolicyID>{E0ABDA1F-CCF0-468E-8855-3E0F08B02D6A}</BasePolicyID>
+  <Rules>
+    <Rule><Option>Enabled:UMCI</Option></Rule>
+    <Rule><Option>Enabled:Unsigned System Integrity Policy</Option></Rule>
+    <Rule><Option>Enabled:Audit Mode</Option></Rule>
+  </Rules>
+</SiPolicy>
+'@
+
+        function Get-WdLiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:wdSafeFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        function New-WdSafeDir {
+            $script:wdSafeCounter++
+            New-WorkDirectory "wdSafety$($script:wdSafeCounter)"
+        }
+
+        # One record as the forward run writes it. An override value of '__remove__' drops the field.
+        function New-WdRecord {
+            param([hashtable]$Override = @{}, [switch]$Entry)
+            $r = [ordered]@{}
+            if ($Entry) { $r['Category'] = 'DeployAuditPolicy' }
+            $r['PolicyName'] = 'ops-toolkit WDAC audit'
+            $r['PolicyId'] = $script:wdSafeId
+            $r['CipPath'] = 'E:\reports\22222222-3333-4444-8555-666666666666.cip'
+            $r['XmlPath'] = 'E:\reports\wdac-audit-policy-20260101_000000.xml'
+            $r['BasePolicy'] = 'DefaultWindows'
+            foreach ($key in @($Override.Keys)) {
+                if ($Override[$key] -is [string] -and $Override[$key] -ceq '__remove__') { $r.Remove($key) } else { $r[$key] = $Override[$key] }
+            }
+            [pscustomobject]$r
+        }
+
+        function Write-WdRollbackFile {
+            param([string]$Dir, [string]$Name = $script:wdSafeName, [hashtable]$Top = @{}, [object[]]$Entries)
+            if (-not $PSBoundParameters.ContainsKey('Entries')) { $Entries = @((New-WdRecord -Entry)) }
+            $record = New-WdRecord -Override $Top
+            $file = [ordered]@{ Timestamp = '20260101_000000' }
+            foreach ($p in $record.PSObject.Properties) { $file[$p.Name] = $p.Value }
+            $file['ChangedSettings'] = @($Entries)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]$file | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-WdRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute, [string]$Active = $script:wdSafeActive)
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $setup = (Get-WindowsMutationStubText -MutationLogPath $log) + "`n`$env:OPSTOOLKIT_TEST_CITOOL_POLICIES = '$Active'`n" + $script:wdSafeCi
+            $run = Invoke-ScriptUnderTest -RelativePath $script:wdacScript -ModulePath $script:systemModulePath -Setup $setup -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-WdRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because, [string]$Active = $script:wdSafeActive)
+            $r = Invoke-WdRollback -Dir $Dir -Tag "wdRefused$($script:wdSafeCounter)" -Active $Active
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $flat = Get-FlatText $r.Run.Output
+            $flat | Should -Match 'refused' -Because $Because
+            $flat | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $flat | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'wdac-audit-rollback-plan-*' -ErrorAction SilentlyContinue).Count | Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'wdac-audit-rollback-state-*' -ErrorAction SilentlyContinue).Count | Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because "$Because must be refused before any change"
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted record outside what the forward run deploys, under -Rollback -WhatIf' {
+        $otherId = '{33333333-4444-4555-8666-777777777777}'
+        $cases = @(
+            @{ Name = 'top level names another policy'; Top = @{ PolicyName = 'Microsoft Windows Driver Policy' } },
+            @{ Name = 'top level name differs in case'; Top = @{ PolicyName = 'OPS-TOOLKIT WDAC AUDIT' } },
+            @{ Name = 'top level PolicyId is an option'; Top = @{ PolicyId = '--remove-policy' } },
+            @{ Name = 'top level PolicyId is not a GUID'; Top = @{ PolicyId = 'all' } },
+            @{ Name = 'top level PolicyId has an extra token'; Top = @{ PolicyId = "$($script:wdSafeId) --json" } },
+            @{ Name = 'top level PolicyId has a trailing newline'; Top = @{ PolicyId = "$($script:wdSafeId)`n" } },
+            @{ Name = 'top level PolicyId is empty'; Top = @{ PolicyId = '' } },
+            @{ Name = 'top level PolicyId has a leading token and a matching CipPath'; Top = @{ PolicyId = '--remove-policy {22222222-3333-4444-8555-666666666666}'; CipPath = 'E:'+[char]92+'reports'+[char]92+'--remove-policy {22222222-3333-4444-8555-666666666666.cip' }; Entry = @{ PolicyId = '--remove-policy {22222222-3333-4444-8555-666666666666}'; CipPath = 'E:'+[char]92+'reports'+[char]92+'--remove-policy {22222222-3333-4444-8555-666666666666.cip' } },
+            @{ Name = 'top level BasePolicy is not offered'; Top = @{ BasePolicy = 'Enforced' } },
+            @{ Name = 'top level CipPath names another file'; Top = @{ CipPath = 'E:\reports\evil.cip' } },
+            @{ Name = 'top level CipPath names another policy'; Top = @{ CipPath = "E:\reports\$($otherId.Trim('{','}')).cip" } },
+            @{ Name = 'top level XmlPath names another file'; Top = @{ XmlPath = 'C:\Windows\System32\config\SAM' } },
+            @{ Name = 'top level lacks PolicyId'; Top = @{ PolicyId = '__remove__' } },
+            @{ Name = 'top level lacks CipPath'; Top = @{ CipPath = '__remove__' } },
+            @{ Name = 'entry category is another one'; Entry = @{ Category = 'RemoveAuditPolicy' } },
+            @{ Name = 'entry lacks a category'; Entry = @{ Category = '__remove__' } },
+            @{ Name = 'entry names another policy'; Entry = @{ PolicyName = 'Microsoft Windows Driver Policy' } },
+            @{ Name = 'entry carries another policy ID'; Entry = @{ PolicyId = $otherId; CipPath = "E:\reports\$($otherId.Trim('{','}')).cip" } },
+            @{ Name = 'entry lacks PolicyId'; Entry = @{ PolicyId = '__remove__' } },
+            @{ Name = 'entry BasePolicy is not offered'; Entry = @{ BasePolicy = 'Enforced' } },
+            @{ Name = 'entry XmlPath is not a policy file this script writes'; Entry = @{ XmlPath = 'E:\reports\policy.xml' } }
+        )
+        foreach ($case in $cases) {
+            $dir = New-WdSafeDir
+            $top = if ($case.Top) { $case.Top } else { @{} }
+            $entry = if ($case.Entry) { New-WdRecord -Entry -Override $case.Entry } else { New-WdRecord -Entry }
+            $null = Write-WdRollbackFile -Dir $dir -Top $top -Entries @($entry)
+            Assert-WdRefused -Dir $dir -FileName $script:wdSafeName -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-WdSafeDir
+        $null = Write-WdRollbackFile -Dir $dir -Entries @((New-WdRecord -Entry), (New-WdRecord -Entry), (New-WdRecord -Entry -Override @{ PolicyName = 'Evil' }))
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        Get-FlatText $r.Run.Output | Should -Match 'entry 2 \(zero-based\)'
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "PolicyId": "{22222222-3333-4444-8555-666666666666}", "PolicyName": "ops-toolkit WDAC audit" }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "DeployAuditPolicy" } }'
+            'ChangedSettings a string'  = '{ "ChangedSettings": "all" }'
+            'ChangedSettings one valid entry, not in an array' = ((New-WdRecord | Add-Member -NotePropertyName ChangedSettings -NotePropertyValue (New-WdRecord -Entry) -PassThru) | ConvertTo-Json -Depth 4 -Compress)
+            'ChangedSettings empty'     = '{ "ChangedSettings": [], "PolicyId": "{22222222-3333-4444-8555-666666666666}", "PolicyName": "ops-toolkit WDAC audit", "CipPath": "22222222-3333-4444-8555-666666666666.cip", "XmlPath": "wdac-audit-policy-20260101_000000.xml", "BasePolicy": "DefaultWindows" }'
+            'top level is an array'     = '[ { "PolicyId": "x" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "DeployAuditPolicy" ] }'
+            'the old shape: PolicyId only' = '{ "PolicyId": "{22222222-3333-4444-8555-666666666666}", "PolicyName": "ops-toolkit WDAC audit", "CipPath": "x.cip", "XmlPath": "x.xml", "BasePolicy": "DefaultWindows" }'
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-WdSafeDir
+            Set-Content -LiteralPath (Join-Path $dir $script:wdSafeName) -Value $bodies[$label] -Encoding utf8
+            Assert-WdRefused -Dir $dir -FileName $script:wdSafeName -Because $label
+        }
+    }
+
+    It 'refuses a value of the wrong type' {
+        $cases = @(
+            @{ Name = 'PolicyId is a number'; Top = @{ PolicyId = 5 } },
+            @{ Name = 'PolicyId is an array'; Top = @{ PolicyId = @($script:wdSafeId, $script:wdSafeId) } },
+            @{ Name = 'PolicyId is null'; Top = @{ PolicyId = $null } },
+            @{ Name = 'PolicyName is a number'; Top = @{ PolicyName = 7 } },
+            @{ Name = 'PolicyName is a boolean'; Top = @{ PolicyName = $true } },
+            @{ Name = 'BasePolicy is an array'; Top = @{ BasePolicy = @('DefaultWindows') } },
+            @{ Name = 'CipPath is a number'; Top = @{ CipPath = 1 } },
+            @{ Name = 'XmlPath is a boolean'; Top = @{ XmlPath = $false } },
+            @{ Name = 'entry PolicyId is a number'; Entry = @{ PolicyId = 5 } },
+            @{ Name = 'entry Category is a number'; Entry = @{ Category = 3 } }
+        )
+        foreach ($case in $cases) {
+            $dir = New-WdSafeDir
+            $top = if ($case.Top) { $case.Top } else { @{} }
+            $entry = if ($case.Entry) { New-WdRecord -Entry -Override $case.Entry } else { New-WdRecord -Entry }
+            $null = Write-WdRollbackFile -Dir $dir -Top $top -Entries @($entry)
+            Assert-WdRefused -Dir $dir -FileName $script:wdSafeName -Because $case.Name
+        }
+    }
+
+    It 'refuses to remove a policy with the recorded ID that is active under another name, under -WhatIf' {
+        $dir = New-WdSafeDir
+        $null = Write-WdRollbackFile -Dir $dir
+        $foreign = '{"Policies":[{"PolicyID":"22222222-3333-4444-8555-666666666666","FriendlyName":"Microsoft Windows Driver Policy","IsEnforced":true,"IsSystemPolicy":true}],"OperationResult":0}'
+        Assert-WdRefused -Dir $dir -FileName $script:wdSafeName -Because 'a policy this script did not deploy' -Active $foreign
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdForeignMsg' -Active $foreign
+        Get-FlatText $r.Run.Output | Should -Match 'did not deploy it and will not remove it'
+    }
+
+    It 'accepts the record the forward run builds for each base policy, so the validator cannot drift from it' {
+        $examples = New-WorkDirectory 'wdSafetyExamples'
+        $script:wdSafeExampleXml | Set-Content -LiteralPath (Join-Path $examples 'AllowMicrosoft.xml') -Encoding utf8
+        $script:wdSafeExampleXml | Set-Content -LiteralPath (Join-Path $examples 'DefaultWindows_Audit.xml') -Encoding utf8
+        foreach ($base in 'DefaultWindows', 'AllowMicrosoft') {
+            $fwdDir = New-WdSafeDir
+            $log = Join-Path $script:workRoot "wdDrift$base.log"
+            $setup = (Get-WindowsMutationStubText -MutationLogPath $log) + "`n`$env:OPSTOOLKIT_TEST_CITOOL_POLICIES = '{`"Policies`":[],`"OperationResult`":0}'`n" + $script:wdSafeCi
+            $fwd = Invoke-ScriptUnderTest -RelativePath $script:wdacScript -ModulePath $script:systemModulePath -Setup $setup `
+                -Argument @{ ReportDirectory = $fwdDir; ExamplePolicyDirectory = $examples; BasePolicy = $base; WhatIf = $true }
+            $fwd.ExitCode | Should -Be 0 -Because $fwd.Output
+            $s = $fwd.Summary
+            $s.PolicyId | Should -Not -BeNullOrEmpty
+            $record = [ordered]@{ Category = 'DeployAuditPolicy'; PolicyName = 'ops-toolkit WDAC audit'; PolicyId = $s.PolicyId; CipPath = $s.PolicyBinaryPath; XmlPath = $s.PolicyXmlPath; BasePolicy = $base }
+            $file = [ordered]@{ Timestamp = '20260101_000000'; PolicyName = 'ops-toolkit WDAC audit'; PolicyId = $s.PolicyId; CipPath = $s.PolicyBinaryPath; XmlPath = $s.PolicyXmlPath; BasePolicy = $base; ChangedSettings = @([pscustomobject]$record) }
+            $dir = New-WdSafeDir
+            [pscustomobject]$file | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dir $script:wdSafeName) -Encoding utf8
+            $active = '{"Policies":[{"PolicyID":"' + $s.PolicyId.Trim('{', '}') + '","FriendlyName":"ops-toolkit WDAC audit","IsEnforced":false,"IsSystemPolicy":false}],"OperationResult":0}'
+            $r = Invoke-WdRollback -Dir $dir -Tag "wdDriftRollback$base" -Active $active
+            $r.Run.ExitCode | Should -Be 0 -Because "$base : $($r.Run.Output)"
+            $remove = @(Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object Category -eq 'RemoveAuditPolicy')
+            $remove.Count | Should -Be 1
+            $remove[0].Setting | Should -Be $s.PolicyId
+        }
+    }
+
+    It 'picks the newest rollback file by name and never a consumed one' {
+        $dir = New-WdSafeDir
+        # The consumed file is newer and deliberately unreadable, so picking it would fail loudly.
+        Set-Content -LiteralPath (Join-Path $dir 'wdac-audit-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-WdRollbackFile -Dir $dir
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+
+        # Name order, not write time: the file with the earlier name is written last.
+        $dir2 = New-WdSafeDir
+        $newerName = Write-WdRollbackFile -Dir $dir2 -Name 'wdac-audit-rollback-20260201_000000.json'
+        Start-Sleep -Milliseconds 50
+        $null = Write-WdRollbackFile -Dir $dir2 -Name 'wdac-audit-rollback-20260101_000000.json'
+        $r2 = Invoke-WdRollback -Dir $dir2 -Tag 'wdNameOrder'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        (Split-Path -Leaf $r2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $newerName)
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips the removal for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-WdSafeDir
+        $file = Write-WdRollbackFile -Dir $dir
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdUnelevatedExec' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -BeGreaterThan 0
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $r.Log | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf' {
+        $dir = New-WdSafeDir
+        $file = Write-WdRollbackFile -Dir $dir
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdWhatIfKeeps'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:wdSafeName
+        $r.Run.Summary.RollbackNote | Should -Match 'WhatIf'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'removes only the recorded policy ID, consumes the file, and undoes older runs newest first (elevated only)' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session; an unelevated run skips the removal, so nothing can be consumed'; return }
+        $dir = New-WdSafeDir
+        $idA = '{22222222-3333-4444-8555-666666666666}'
+        $idB = '{33333333-4444-4555-8666-777777777777}'
+        $null = Write-WdRollbackFile -Dir $dir -Name 'wdac-audit-rollback-20260101_000000.json'
+        $recB = New-WdRecord -Entry -Override @{ PolicyId = $idB; CipPath = 'E:\reports\33333333-4444-4555-8666-777777777777.cip' }
+        $null = Write-WdRollbackFile -Dir $dir -Name 'wdac-audit-rollback-20260102_000000.json' -Top @{ PolicyId = $idB; CipPath = 'E:\reports\33333333-4444-4555-8666-777777777777.cip' } -Entries @($recB)
+        $both = '{"Policies":[{"PolicyID":"22222222-3333-4444-8555-666666666666","FriendlyName":"ops-toolkit WDAC audit"},{"PolicyID":"33333333-4444-4555-8666-777777777777","FriendlyName":"ops-toolkit WDAC audit"}],"OperationResult":0}'
+        $first = Invoke-WdRollback -Dir $dir -Tag 'wdLifo1' -Execute -Active $both
+        $first.Run.ExitCode | Should -Be 0 -Because $first.Run.Output
+        $ci1 = @(Get-OpsMutationRecord -Path $first.Log | Where-Object { $_.Command -eq 'CiTool.exe' })
+        $ci1.Count | Should -Be 1
+        $ci1[0].Target | Should -Be "--remove-policy $idB --json"
+        Test-Path -LiteralPath (Join-Path $dir 'wdac-audit-rollback-20260102_000000.json') | Should -BeFalse
+        $first.Run.Summary.RollbackConsumedPath | Should -Match 'wdac-audit-rollback-20260102_000000\.consumed-\d{8}_\d{6}\.json$'
+        $second = Invoke-WdRollback -Dir $dir -Tag 'wdLifo2' -Execute -Active $both
+        $second.Run.ExitCode | Should -Be 0 -Because $second.Run.Output
+        $ci2 = @(Get-OpsMutationRecord -Path $second.Log | Where-Object { $_.Command -eq 'CiTool.exe' })
+        $ci2[0].Target | Should -Be "--remove-policy $idA --json"
+        $third = Invoke-WdRollback -Dir $dir -Tag 'wdLifo3' -Execute -Active $both
+        $third.Run.ExitCode | Should -Not -Be 0
+        $third.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'shows a refused removal under -WhatIf when the active policy list cannot be read, and still writes its plan' {
+        $dir = New-WdSafeDir
+        $null = Write-WdRollbackFile -Dir $dir
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdUnreadableWhatIf' -Active 'this is not json'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        $plan = @(Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        $pre = @($plan | Where-Object { $_.Category -eq 'Precondition' -and $_.Setting -eq 'ActivePolicies' })
+        $pre.Count | Should -Be 1
+        $remove = @($plan | Where-Object Category -eq 'RemoveAuditPolicy')
+        $remove.Count | Should -Be 1
+        $remove[0].Action | Should -Match '^Refused: .*could not be read'
+        $remove[0].CurrentValue | Should -Be 'unknown'
+        @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0
+        Test-Path -LiteralPath (Join-Path $dir $script:wdSafeName) | Should -BeTrue
+    }
+
+    It 'never runs --remove-policy and leaves the file unconsumed when the active policy list cannot be read on an executing run' {
+        $dir = New-WdSafeDir
+        $file = Write-WdRollbackFile -Dir $dir
+        $r = Invoke-WdRollback -Dir $dir -Tag 'wdUnreadableExec' -Execute -Active 'this is not json'
+        @(Get-OpsMutationRecord -Path $r.Log | Where-Object { $_.Command -eq 'CiTool.exe' -and $_.Target -like '*--remove-policy*' }).Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0
+        Test-Path -LiteralPath $file | Should -BeTrue
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+        (Get-StateItem -ReportDirectory $dir -Mode 'rollback' -Setting 'ActivePolicies').Result | Should -Match '^Failed: active policies could not be read'
+        (Get-StateItem -ReportDirectory $dir -Mode 'rollback' -Setting $script:wdSafeId).Result | Should -Not -BeIn @('Reverted', 'NoChange')
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-WdLiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-WdState { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-WdState 'Met', 'Met', 'Reverted') $false | Should -BeTrue
+        & $decide (New-WdState 'Met', 'NoChange') $false | Should -BeTrue
+        & $decide (New-WdState 'Met', 'Failed: CiTool returned OperationResult 0x80070005') $false | Should -BeFalse
+        & $decide (New-WdState 'Skipped: requires elevation', 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-WdState 'Met', 'Previewed') $false | Should -BeFalse
+        & $decide (New-WdState 'Met', 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+        & $decide (New-WdState 'NoChange') $true | Should -BeFalse
+    }
+
+    It 'validates one record in a pure function lifted from the script, against the tables it is given' {
+        $text = Get-WdLiftedFunctionText -Name 'Get-RollbackEntryProblem'
+        $check = [scriptblock]::Create("param(`$Entry, [bool]`$RequireCategory, `$Base)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -PolicyName 'ops-toolkit WDAC audit' -Prefix 'wdac-audit' -BaseExampleFiles `$Base -DeployCategory 'DeployAuditPolicy' -RequireCategory `$RequireCategory")
+        $base = [ordered]@{ DefaultWindows = 'a.xml' }
+
+        & $check (New-WdRecord) $false $base | Should -BeNullOrEmpty
+        & $check (New-WdRecord -Entry) $true $base | Should -BeNullOrEmpty
+        & $check (New-WdRecord -Override @{ PolicyId = 'e0abda1f-ccf0-468e-8855-3e0f08b02d6a'; CipPath = 'e0abda1f-ccf0-468e-8855-3e0f08b02d6a.cip' }) $false $base | Should -BeNullOrEmpty
+        & $check (New-WdRecord -Entry) $false ([ordered]@{ AllowMicrosoft = 'b.xml' }) | Should -Not -BeNullOrEmpty -Because 'DefaultWindows is not in the table it was given'
+        & $check (New-WdRecord) $true $base | Should -Not -BeNullOrEmpty -Because 'a required Category is missing'
+        & $check (New-WdRecord -Override @{ PolicyName = 'other' }) $false $base | Should -Not -BeNullOrEmpty
+        & $check (New-WdRecord -Override @{ PolicyId = '{not-a-guid}' }) $false $base | Should -Not -BeNullOrEmpty
+        & $check (New-WdRecord -Override @{ CipPath = 'x.cip' }) $false $base | Should -Not -BeNullOrEmpty
+        & $check (New-WdRecord -Override @{ XmlPath = 'wdac-audit-policy-2026.xml' }) $false $base | Should -Not -BeNullOrEmpty
+        & $check (New-WdRecord -Override @{ PolicyId = 4 }) $false $base | Should -Not -BeNullOrEmpty
+        & $check $null $false $base | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Enable-BitLockerOsVolume rollback safety' {
+    BeforeAll {
+        $script:blSafeCounter = 0
+        $script:blSafeFullPath = Get-RepositoryScriptPath -RelativePath $script:blScript
+        $script:blSafeName = 'bitlocker-enable-rollback-20260101_000000.json'
+        $script:blSafeProtector = '{AAAAAAAA-0000-4000-8000-000000000001}'
+
+        function Get-BlLiftedFunctionText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:blSafeFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object {
+                    $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name
+                })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        function New-BlSafeDir {
+            $script:blSafeCounter++
+            New-WorkDirectory "blSafety$($script:blSafeCounter)"
+        }
+
+        # One record as the forward run writes it. An override value of '__remove__' drops the field.
+        function New-BlRecord {
+            param([hashtable]$Override = @{}, [switch]$Entry)
+            $r = [ordered]@{}
+            if ($Entry) { $r['Category'] = 'EnableOsVolume' } else { $r['Timestamp'] = '20260101_000000'; $r['ComputerName'] = 'TESTPC' }
+            $r['MountPoint'] = 'Q:'
+            $r['ProtectorId'] = $script:blSafeProtector
+            $r['ScriptEnabledBitLocker'] = $true
+            $r['EncryptionMethod'] = 'XtsAes256'
+            foreach ($key in @($Override.Keys)) {
+                if ($Override[$key] -is [string] -and $Override[$key] -ceq '__remove__') { $r.Remove($key) } else { $r[$key] = $Override[$key] }
+            }
+            [pscustomobject]$r
+        }
+
+        function Write-BlRollbackFile {
+            param([string]$Dir, [string]$Name = $script:blSafeName, [hashtable]$Top = @{}, [object[]]$Entries)
+            if (-not $PSBoundParameters.ContainsKey('Entries')) { $Entries = @((New-BlRecord -Entry)) }
+            $record = New-BlRecord -Override $Top
+            $file = [ordered]@{}
+            foreach ($p in $record.PSObject.Properties) { $file[$p.Name] = $p.Value }
+            $file['ChangedSettings'] = @($Entries)
+            $path = Join-Path $Dir $Name
+            [pscustomobject]$file | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+            $path
+        }
+
+        function Invoke-BlRollback {
+            param([string]$Dir, [string]$Tag, [switch]$Execute)
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $argument = @{ ReportDirectory = $Dir; Rollback = $true }
+            if ($Execute) { $argument.Confirm = $false } else { $argument.WhatIf = $true }
+            $setup = (Get-WindowsMutationStubText -MutationLogPath $log) + "`n" + $script:blGoodEnv + "`n"
+            $run = Invoke-ScriptUnderTest -RelativePath $script:blScript -ModulePath $script:systemModulePath -Setup $setup -Argument $argument
+            [pscustomobject]@{ Run = $run; Log = $log }
+        }
+
+        function Assert-BlRefused {
+            param([string]$Dir, [string]$FileName, [string]$Because)
+            $r = Invoke-BlRollback -Dir $Dir -Tag "blRefused$($script:blSafeCounter)"
+            $r.Run.ExitCode | Should -Not -Be 0 -Because "$Because must be refused"
+            $flat = Get-FlatText $r.Run.Output
+            $flat | Should -Match 'refused' -Because $Because
+            $flat | Should -Match ([regex]::Escape($FileName)) -Because "$Because must name the file"
+            $flat | Should -Match 'Move this file aside' -Because $Because
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'bitlocker-enable-rollback-plan-*' -ErrorAction SilentlyContinue).Count | Should -Be 0 -Because "$Because must be refused before any plan file is written"
+            @(Get-ChildItem -LiteralPath $Dir -Filter 'bitlocker-enable-rollback-state-*' -ErrorAction SilentlyContinue).Count | Should -Be 0 -Because $Because
+            @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0 -Because "$Because must be refused before any change"
+            Test-Path -LiteralPath (Join-Path $Dir $FileName) | Should -BeTrue -Because 'a refused file stays where it is'
+        }
+    }
+
+    It 'refuses a planted record that names a key path, a protector to add or another volume, under -Rollback -WhatIf' {
+        $cases = @(
+            @{ Name = 'top level names a key file path'; Top = @{ KeyFilePath = 'E:\keys\BitLocker-Recovery-TESTPC-x.txt' } },
+            @{ Name = 'entry names a key file path'; Entry = @{ KeyFilePath = 'E:\keys\BitLocker-Recovery-TESTPC-x.txt' } },
+            @{ Name = 'entry names a key directory'; Entry = @{ RecoveryKeyDirectory = 'E:\keys' } },
+            @{ Name = 'entry asks to add a recovery password protector'; Entry = @{ AddProtector = 'RecoveryPassword' } },
+            @{ Name = 'entry carries a recovery password'; Entry = @{ RecoveryPassword = '918273-645546-372819-182736-455463-728190-918273-645546' } },
+            @{ Name = 'top level carries a recovery password'; Top = @{ RecoveryPassword = '918273-645546-372819-182736-455463-728190-918273-645546' } },
+            @{ Name = 'top level lists a second volume'; Top = @{ MountPoints = @('Q:', 'D:') } },
+            @{ Name = 'top level volume is not the OS volume'; Top = @{ MountPoint = 'C:' } },
+            @{ Name = 'top level volume is a data drive'; Top = @{ MountPoint = 'D:' } },
+            @{ Name = 'top level volume has a trailing backslash'; Top = @{ MountPoint = 'Q:\' } },
+            @{ Name = 'top level volume is a path'; Top = @{ MountPoint = 'Q:\Windows' } },
+            @{ Name = 'top level volume is a volume GUID path'; Top = @{ MountPoint = '\\?\Volume{11111111-2222-3333-4444-555555555555}\' } },
+            @{ Name = 'top level volume is empty'; Top = @{ MountPoint = '' } },
+            @{ Name = 'top level volume is missing'; Top = @{ MountPoint = '__remove__' } },
+            @{ Name = 'entry volume is not the OS volume'; Entry = @{ MountPoint = 'D:' } },
+            @{ Name = 'entry volume differs from the top level'; Top = @{ MountPoint = 'q:' }; Entry = @{ MountPoint = 'Z:' } },
+            @{ Name = 'entry protector differs from the top level'; Entry = @{ ProtectorId = '{BBBBBBBB-0000-4000-8000-000000000002}' } },
+            @{ Name = 'protector is not a GUID'; Top = @{ ProtectorId = 'x' } },
+            @{ Name = 'protector has no braces'; Top = @{ ProtectorId = 'AAAAAAAA-0000-4000-8000-000000000001' } },
+            @{ Name = 'protector is missing'; Top = @{ ProtectorId = '__remove__' } },
+            @{ Name = 'entry category is another one'; Entry = @{ Category = 'DisableOsVolume' } },
+            @{ Name = 'entry lacks a category'; Entry = @{ Category = '__remove__' } },
+            @{ Name = 'ScriptEnabledBitLocker is false'; Top = @{ ScriptEnabledBitLocker = $false } },
+            @{ Name = 'ScriptEnabledBitLocker is missing'; Top = @{ ScriptEnabledBitLocker = '__remove__' } },
+            @{ Name = 'entry ScriptEnabledBitLocker is false'; Entry = @{ ScriptEnabledBitLocker = $false } },
+            @{ Name = 'encryption method is another one'; Top = @{ EncryptionMethod = 'Aes128' } },
+            @{ Name = 'computer name has a shell character'; Top = @{ ComputerName = 'PC;calc' } },
+            @{ Name = 'timestamp is malformed'; Top = @{ Timestamp = 'yesterday' } }
+        )
+        foreach ($case in $cases) {
+            $dir = New-BlSafeDir
+            $top = if ($case.Top) { $case.Top } else { @{} }
+            $entry = if ($case.Entry) { New-BlRecord -Entry -Override $case.Entry } else { New-BlRecord -Entry }
+            $null = Write-BlRollbackFile -Dir $dir -Top $top -Entries @($entry)
+            Assert-BlRefused -Dir $dir -FileName $script:blSafeName -Because $case.Name
+        }
+    }
+
+    It 'names the first offending entry by index' {
+        $dir = New-BlSafeDir
+        $null = Write-BlRollbackFile -Dir $dir -Entries @((New-BlRecord -Entry), (New-BlRecord -Entry), (New-BlRecord -Entry -Override @{ KeyFilePath = 'E:\k.txt' }))
+        $r = Invoke-BlRollback -Dir $dir -Tag 'blIndex'
+        $r.Run.ExitCode | Should -Not -Be 0
+        $flat = Get-FlatText $r.Run.Output
+        $flat | Should -Match 'entry 2 \(zero-based\)'
+        $flat | Should -Match "field 'KeyFilePath'"
+    }
+
+    It 'refuses a rollback file that is not JSON, or has no usable ChangedSettings array' {
+        $bodies = [ordered]@{
+            'not JSON'                  = 'this is { not json'
+            'ChangedSettings missing'   = '{ "MountPoint": "Q:", "ScriptEnabledBitLocker": true }'
+            'ChangedSettings an object' = '{ "ChangedSettings": { "Category": "EnableOsVolume" } }'
+            'ChangedSettings a string'  = '{ "ChangedSettings": "all" }'
+            'ChangedSettings one valid entry, not in an array' = ((New-BlRecord | Add-Member -NotePropertyName ChangedSettings -NotePropertyValue (New-BlRecord -Entry) -PassThru) | ConvertTo-Json -Depth 4 -Compress)
+            'ChangedSettings empty'     = '{ "ChangedSettings": [], "MountPoint": "Q:", "ProtectorId": "{AAAAAAAA-0000-4000-8000-000000000001}", "ScriptEnabledBitLocker": true, "EncryptionMethod": "XtsAes256" }'
+            'top level is an array'     = '[ { "MountPoint": "Q:" } ]'
+            'entry is null'             = '{ "ChangedSettings": [ null ] }'
+            'entry is a string'         = '{ "ChangedSettings": [ "EnableOsVolume" ] }'
+            'the old shape without ChangedSettings' = '{ "MountPoint": "Q:", "ProtectorId": "{AAAAAAAA-0000-4000-8000-000000000001}", "KeyFilePath": "E:\\keys\\k.txt", "ScriptEnabledBitLocker": true, "EncryptionMethod": "XtsAes256" }'
+        }
+        foreach ($label in $bodies.Keys) {
+            $dir = New-BlSafeDir
+            Set-Content -LiteralPath (Join-Path $dir $script:blSafeName) -Value $bodies[$label] -Encoding utf8
+            Assert-BlRefused -Dir $dir -FileName $script:blSafeName -Because $label
+        }
+    }
+
+    It 'refuses a value of the wrong type' {
+        $cases = @(
+            @{ Name = 'MountPoint is a number'; Top = @{ MountPoint = 5 } },
+            @{ Name = 'MountPoint is an array'; Top = @{ MountPoint = @('Q:') } },
+            @{ Name = 'MountPoint is null'; Top = @{ MountPoint = $null } },
+            @{ Name = 'ProtectorId is a number'; Top = @{ ProtectorId = 5 } },
+            @{ Name = 'ProtectorId is an array'; Top = @{ ProtectorId = @($script:blSafeProtector) } },
+            @{ Name = 'ScriptEnabledBitLocker is the text true'; Top = @{ ScriptEnabledBitLocker = 'true' } },
+            @{ Name = 'ScriptEnabledBitLocker is the number 1'; Top = @{ ScriptEnabledBitLocker = 1 } },
+            @{ Name = 'ScriptEnabledBitLocker is null'; Top = @{ ScriptEnabledBitLocker = $null } },
+            @{ Name = 'EncryptionMethod is a number'; Top = @{ EncryptionMethod = 256 } },
+            @{ Name = 'ComputerName is a number'; Top = @{ ComputerName = 12 } },
+            @{ Name = 'Timestamp is a number'; Top = @{ Timestamp = 20260101 } },
+            @{ Name = 'entry Category is a number'; Entry = @{ Category = 3 } },
+            @{ Name = 'entry MountPoint is a boolean'; Entry = @{ MountPoint = $true } }
+        )
+        foreach ($case in $cases) {
+            $dir = New-BlSafeDir
+            $top = if ($case.Top) { $case.Top } else { @{} }
+            $entry = if ($case.Entry) { New-BlRecord -Entry -Override $case.Entry } else { New-BlRecord -Entry }
+            $null = Write-BlRollbackFile -Dir $dir -Top $top -Entries @($entry)
+            Assert-BlRefused -Dir $dir -FileName $script:blSafeName -Because $case.Name
+        }
+    }
+
+    It 'accepts the record the forward run writes and plans to decrypt only the OS volume' {
+        $dir = New-BlSafeDir
+        $null = Write-BlRollbackFile -Dir $dir
+        $r = Invoke-BlRollback -Dir $dir -Tag 'blAccept'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        $plan = @(Get-Content -LiteralPath $r.Run.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        $plan.Count | Should -Be 1
+        $plan[0].Category | Should -Be 'DisableOsVolume'
+        $plan[0].Setting | Should -Be 'Q:'
+        $plan[0].Action | Should -Not -Match 'BitLocker-Recovery'
+        @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0
+    }
+
+    It 'writes a rollback file with no key path, password or extra field on a live forward run (elevated only)' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session; an unelevated live run fails by design and writes no rollback file'; return }
+        $keys = New-BlSafeDir
+        $reports = New-BlSafeDir
+        $log = Join-Path $script:workRoot 'blFwdSafe.log'
+        $fwd = Invoke-ScriptUnderTest -RelativePath $script:blScript -ModulePath $script:systemModulePath `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + "`n" + $script:blGoodEnv + "`n") `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys; Confirm = $false }
+        $fwd.ExitCode | Should -Be 0 -Because $fwd.Output
+        $text = Get-Content -LiteralPath $fwd.Summary.RollbackJsonPath -Raw
+        $text | Should -Not -Match 'KeyFilePath'
+        $text | Should -Not -Match 'BitLocker-Recovery'
+        $text | Should -Not -Match ([regex]::Escape($script:fakePassword))
+        # The file it wrote is one the rollback accepts.
+        $r = Invoke-BlRollback -Dir $reports -Tag 'blFwdSafeRollback'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+    }
+
+    It 'picks the newest rollback file by name and never a consumed one' {
+        $dir = New-BlSafeDir
+        Set-Content -LiteralPath (Join-Path $dir 'bitlocker-enable-rollback-20260301_000000.consumed-20260302_000000.json') -Value 'garbage' -Encoding utf8
+        $older = Write-BlRollbackFile -Dir $dir
+        $r = Invoke-BlRollback -Dir $dir -Tag 'blConsumedNotPicked'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $older)
+
+        $dir2 = New-BlSafeDir
+        $newerName = Write-BlRollbackFile -Dir $dir2 -Name 'bitlocker-enable-rollback-20260201_000000.json'
+        Start-Sleep -Milliseconds 50
+        $null = Write-BlRollbackFile -Dir $dir2 -Name 'bitlocker-enable-rollback-20260101_000000.json'
+        $r2 = Invoke-BlRollback -Dir $dir2 -Tag 'blNameOrder'
+        $r2.Run.ExitCode | Should -Be 0 -Because $r2.Run.Output
+        (Split-Path -Leaf $r2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $newerName)
+    }
+
+    It 'leaves the file unconsumed when an executing rollback skips the decryption for lack of elevation' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'only meaningful in a session that is not elevated'; return }
+        $dir = New-BlSafeDir
+        $file = Write-BlRollbackFile -Dir $dir
+        $r = Invoke-BlRollback -Dir $dir -Tag 'blUnelevatedExec' -Execute
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        @($r.Run.Summary.Items | Where-Object { $_.Result -like 'Skipped:*' }).Count | Should -Be 1
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        $r.Run.Summary.RollbackNote | Should -Match 'unconsumed'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $r.Log).Count | Should -Be 0
+    }
+
+    It 'never consumes the rollback file under -WhatIf' {
+        $dir = New-BlSafeDir
+        $file = Write-BlRollbackFile -Dir $dir
+        $r = Invoke-BlRollback -Dir $dir -Tag 'blWhatIfKeeps'
+        $r.Run.ExitCode | Should -Be 0 -Because $r.Run.Output
+        Test-Path -LiteralPath $file | Should -BeTrue
+        $r.Run.Summary.RollbackConsumedPath | Should -BeNullOrEmpty
+        (Split-Path -Leaf $r.Run.Summary.RollbackSourcePath) | Should -Be $script:blSafeName
+        $r.Run.Summary.RollbackNote | Should -Match 'WhatIf'
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 0
+    }
+
+    It 'decrypts only the OS volume, consumes the file, and undoes older runs newest first (elevated only)' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session; an unelevated run skips the decryption, so nothing can be consumed'; return }
+        $dir = New-BlSafeDir
+        $null = Write-BlRollbackFile -Dir $dir -Name 'bitlocker-enable-rollback-20260101_000000.json'
+        $null = Write-BlRollbackFile -Dir $dir -Name 'bitlocker-enable-rollback-20260102_000000.json'
+        $first = Invoke-BlRollback -Dir $dir -Tag 'blLifo1' -Execute
+        $first.Run.ExitCode | Should -Be 0 -Because $first.Run.Output
+        $d1 = @(Get-OpsMutationRecord -Path $first.Log | Where-Object { $_.Command -eq 'Disable-BitLocker' })
+        $d1.Count | Should -Be 1
+        $d1[0].Target | Should -Be 'Q:'
+        Test-Path -LiteralPath (Join-Path $dir 'bitlocker-enable-rollback-20260102_000000.json') | Should -BeFalse
+        $first.Run.Summary.RollbackConsumedPath | Should -Match 'bitlocker-enable-rollback-20260102_000000\.consumed-\d{8}_\d{6}\.json$'
+        $second = Invoke-BlRollback -Dir $dir -Tag 'blLifo2' -Execute
+        $second.Run.ExitCode | Should -Be 0 -Because $second.Run.Output
+        (Split-Path -Leaf $second.Run.Summary.RollbackSourcePath) | Should -Be 'bitlocker-enable-rollback-20260101_000000.json'
+        $third = Invoke-BlRollback -Dir $dir -Tag 'blLifo3' -Execute
+        $third.Run.ExitCode | Should -Not -Be 0
+        $third.Run.Output | Should -Match 'Nothing to roll back'
+    }
+
+    It 'decides consumption in a pure function lifted from the script' {
+        $text = Get-BlLiftedFunctionText -Name 'Test-RollbackFileConsumable'
+        $decide = [scriptblock]::Create("param(`$State, [bool]`$Preview)`n$text`nTest-RollbackFileConsumable -State `$State -Preview `$Preview")
+        function New-BlState { param([string[]]$Result) @($Result | ForEach-Object { [pscustomobject]@{ Result = $_ } }) }
+
+        & $decide (New-BlState 'Reverted') $false | Should -BeTrue
+        & $decide (New-BlState 'NoChange') $false | Should -BeTrue
+        & $decide (New-BlState 'Failed: boom') $false | Should -BeFalse
+        & $decide (New-BlState 'Skipped: requires elevation') $false | Should -BeFalse
+        & $decide (New-BlState 'Previewed') $false | Should -BeFalse
+        & $decide (New-BlState 'Reverted') $true | Should -BeFalse -Because '-WhatIf never consumes'
+    }
+
+    It 'validates one record in a pure function lifted from the script, against the tables it is given' {
+        $text = Get-BlLiftedFunctionText -Name 'Get-RollbackEntryProblem'
+        $check = [scriptblock]::Create("param(`$Entry, `$Allowed, `$Required, `$Os)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -AllowedField `$Allowed -RequiredField `$Required -OsDrive `$Os -EnableCategory 'EnableOsVolume' -EncryptionMethod 'XtsAes256'")
+        $allowed = @('Category', 'MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod')
+        $required = $allowed
+
+        & $check (New-BlRecord -Entry) $allowed $required 'Q:' | Should -BeNullOrEmpty
+        & $check (New-BlRecord -Entry) $allowed $required 'q:' | Should -BeNullOrEmpty
+        & $check (New-BlRecord -Entry) $allowed $required 'Q:\' | Should -BeNullOrEmpty -Because 'SystemDrive may carry a trailing backslash'
+        & $check (New-BlRecord -Entry) $allowed $required 'C:' | Should -Not -BeNullOrEmpty -Because 'the volume is not the OS volume it was given'
+        & $check (New-BlRecord -Entry) $allowed $required '' | Should -Not -BeNullOrEmpty -Because 'no OS volume is known'
+        & $check (New-BlRecord -Entry -Override @{ KeyFilePath = 'E:\k.txt' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry) @('Category', 'MountPoint') $required 'Q:' | Should -Not -BeNullOrEmpty -Because 'a field outside the allowed table'
+        & $check (New-BlRecord -Entry -Override @{ ProtectorId = '__remove__' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry -Override @{ ProtectorId = '{nope}' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry -Override @{ ScriptEnabledBitLocker = $false }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry -Override @{ ScriptEnabledBitLocker = 'true' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry -Override @{ EncryptionMethod = 'Aes128' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check (New-BlRecord -Entry -Override @{ Category = 'x' }) $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
+        & $check $null $allowed $required 'Q:' | Should -Not -BeNullOrEmpty
     }
 }

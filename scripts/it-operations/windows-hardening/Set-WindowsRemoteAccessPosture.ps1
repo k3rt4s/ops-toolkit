@@ -20,8 +20,9 @@ Instructions:
 - The plan also carries report-only items (no change is ever made for them): whether a WinRM
   listener is configured, and whether a Remote Desktop policy value overrides the local setting.
   Anything that cannot be read is reported as 'unknown', never as compliant.
-- Use -Rollback to restore the exact values this script changed from the newest rollback file in
-  the report directory.
+- Use -Rollback to restore the exact values this script changed from the newest unconsumed rollback
+  file in the report directory. Each executing -Rollback that restores everything marks its file
+  consumed, so running -Rollback again undoes the run before it, newest first.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   developer's workstation must never be applied to someone else's machine. Generated reports
   belong under a data root outside the repo.
@@ -35,6 +36,17 @@ Remote Desktop policy value is present.
 
 Every change is recorded in a rollback JSON so the posture can be reversed with -Rollback. No
 reboot is required for any change made here.
+
+Rollback: -Rollback reads the newest remote-access-posture-rollback-<timestamp>.json in the report
+directory (newest by name). Before any plan is written or any change made, every recorded entry is
+checked and the whole file is refused, also under -WhatIf, with an error naming the file and the
+first bad entry when the JSON does not parse, ChangedSettings is not an array, or an entry names a
+category, registry path or value name this script does not set, or carries a prior value of the
+wrong type or outside the range of that value (the same control tables the forward plan uses). The
+only service it can touch is WinRM. Move a refused file aside to roll back an older run. After an
+executing -Rollback in which every item was reverted or needed no change, the file is renamed
+remote-access-posture-rollback-<timestamp>.consumed-<timestamp>.json and is no longer picked; under
+-WhatIf, or when any item failed or was skipped, it is left in place and the summary says so.
 
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsRemoteAccessPosture.ps1 -ReportDirectory <dir> -WhatIf
@@ -76,6 +88,23 @@ $script:RdpTcpPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\Win
 $script:RemoteAssistancePath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
 $script:TsPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 $script:WsmanListenerPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Listener'
+
+# Every registry value the forward plan can write, and the range of values a rollback may restore.
+# Get-RegistryPlanEntry reads Path and Name from this table and the rollback validator accepts exactly
+# these, so they cannot drift. Min and Max bound the DWord values the control can hold.
+$script:RegistryControls = @(
+    [pscustomobject]@{ Category = 'RdpNla'; Path = $script:RdpTcpPath; Name = 'UserAuthentication'; Min = 0; Max = 1 }
+    [pscustomobject]@{ Category = 'RdpSecurityLayer'; Path = $script:RdpTcpPath; Name = 'SecurityLayer'; Min = 0; Max = 2 }
+    [pscustomobject]@{ Category = 'RdpDisable'; Path = $script:TerminalServerPath; Name = 'fDenyTSConnections'; Min = 0; Max = 1 }
+    [pscustomobject]@{ Category = 'RemoteAssistance'; Path = $script:RemoteAssistancePath; Name = 'fAllowToGetHelp'; Min = 0; Max = 1 }
+)
+# The one service the forward plan can change, with the startup types and statuses a rollback may restore.
+$script:ServiceControl = [pscustomobject]@{
+    Category = 'WinRmService'; ServiceName = 'WinRM'
+    StartupTypes = @('Automatic', 'AutomaticDelayedStart', 'Manual', 'Disabled')
+    Statuses = @('Running', 'Stopped', 'Paused', 'StartPending', 'StopPending', 'ContinuePending', 'PausePending')
+}
+$script:RollbackSourceFile = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 
 function Test-IsAdministrator {
@@ -136,11 +165,21 @@ function Get-PlanEntry {
     }
 }
 
+function Get-RegistryControl {
+    param([Parameter(Mandatory = $true)][string]$Category)
+    $hit = @($script:RegistryControls | Where-Object { $_.Category -eq $Category })
+    if ($hit.Count -ne 1) { throw "No registry control for category '$Category' is defined." }
+    $hit[0]
+}
+
 # A DWord registry item. $Gate, when set, replaces the action text and leaves the item unapplied.
 function Get-RegistryPlanEntry {
     param(
-        [string]$Category, [string]$Path, [string]$Name, [int]$Desired, [string]$Label, [string]$Gate = ''
+        [string]$Category, [int]$Desired, [string]$Label, [string]$Gate = ''
     )
+    $control = Get-RegistryControl -Category $Category
+    $Path = $control.Path
+    $Name = $control.Name
     $state = Get-RegistryValueState -Path $Path -Name $Name
     $current = switch ($state.State) { 'present' { $state.Value } 'absent' { 'absent' } default { 'unknown' } }
     $action = if ($Gate) { $Gate }
@@ -167,9 +206,9 @@ function Get-ForwardPlan {
     }
     # With -DisableRemoteDesktop the NLA settings are moot, so they are left alone.
     if ($DisableRemoteDesktop -and -not $rdpGate) { $rdpGate = 'No change (Remote Desktop is being disabled in this run)' }
-    $items.Add((Get-RegistryPlanEntry -Category 'RdpNla' -Path $script:RdpTcpPath -Name 'UserAuthentication' -Desired 1 `
+    $items.Add((Get-RegistryPlanEntry -Category 'RdpNla' -Desired 1 `
                 -Label 'Network Level Authentication' -Gate $rdpGate))
-    $items.Add((Get-RegistryPlanEntry -Category 'RdpSecurityLayer' -Path $script:RdpTcpPath -Name 'SecurityLayer' -Desired 2 `
+    $items.Add((Get-RegistryPlanEntry -Category 'RdpSecurityLayer' -Desired 2 `
                 -Label 'RDP security layer (TLS)' -Gate $rdpGate))
 
     if ($DisableRemoteDesktop) {
@@ -179,24 +218,24 @@ function Get-ForwardPlan {
             'unknown' { 'Skipped: could not determine whether the current session is remote' }
             default { '' }
         }
-        $items.Add((Get-RegistryPlanEntry -Category 'RdpDisable' -Path $script:TerminalServerPath -Name 'fDenyTSConnections' `
+        $items.Add((Get-RegistryPlanEntry -Category 'RdpDisable' `
                     -Desired 1 -Label 'Remote Desktop connections denied' -Gate $gate))
     }
 
-    $items.Add((Get-RegistryPlanEntry -Category 'RemoteAssistance' -Path $script:RemoteAssistancePath -Name 'fAllowToGetHelp' `
+    $items.Add((Get-RegistryPlanEntry -Category 'RemoteAssistance' `
                 -Desired 0 -Label 'Remote Assistance'))
 
     if ($DisableWinRM) {
         $service = $null
         $readError = $false
         try {
-            $service = Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq 'WinRM' } | Select-Object -First 1
+            $service = Get-Service -ErrorAction Stop | Where-Object { $_.Name -eq $script:ServiceControl.ServiceName } | Select-Object -First 1
         } catch { $readError = $true }
         if ($readError) {
-            $items.Add((Get-PlanEntry -Category 'WinRmService' -Setting 'WinRM' -Kind 'Service' -CurrentValue 'unknown' `
+            $items.Add((Get-PlanEntry -Category $script:ServiceControl.Category -Setting $script:ServiceControl.ServiceName -Kind 'Service' -CurrentValue 'unknown' `
                         -DesiredValue 'Disabled/Stopped' -Action 'Skipped: WinRM service state could not be read'))
         } elseif ($null -eq $service) {
-            $items.Add((Get-PlanEntry -Category 'WinRmService' -Setting 'WinRM' -Kind 'Service' -CurrentValue 'absent' `
+            $items.Add((Get-PlanEntry -Category $script:ServiceControl.Category -Setting $script:ServiceControl.ServiceName -Kind 'Service' -CurrentValue 'absent' `
                         -DesiredValue 'Disabled/Stopped' -Action 'No change (WinRM service is not installed)'))
         } else {
             $start = [string]$service.StartType
@@ -204,7 +243,7 @@ function Get-ForwardPlan {
             $action = if (Test-IsPowerShellRemotingSession) { 'Skipped: current session is a PowerShell remoting session' }
             elseif ($start -eq 'Disabled' -and $status -eq 'Stopped') { 'No change (WinRM already Disabled and Stopped)' }
             else { 'Set WinRM service to Disabled and stop it' }
-            $items.Add((Get-PlanEntry -Category 'WinRmService' -Setting 'WinRM' -Kind 'Service' -CurrentValue "$start/$status" `
+            $items.Add((Get-PlanEntry -Category $script:ServiceControl.Category -Setting $script:ServiceControl.ServiceName -Kind 'Service' -CurrentValue "$start/$status" `
                         -DesiredValue 'Disabled/Stopped' -PriorStatus $status -Action $action))
         }
     }
@@ -238,17 +277,102 @@ function Get-LatestRollbackFile {
     # The timestamp pattern keeps this from matching the 'remote-access-posture-rollback-plan-*' and '-state-*' reports.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter 'remote-access-posture-rollback-*.json' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^remote-access-posture-rollback-\d{8}_\d{6}\.json$' } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Sort-Object Name -Descending | Select-Object -First 1
+}
+
+# Returns $null when the entry is acceptable, otherwise a short text saying what is wrong with it.
+# A registry entry must name a category in the control table with that control's exact path and value
+# name, and a prior value that is 'absent' or a whole number inside the control's range. A service
+# entry must be the one WinRM service control with a startup type and status the restore can apply.
+# Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param($Entry, [Parameter(Mandatory = $true)]$RegistryControls, [Parameter(Mandatory = $true)]$ServiceControl)
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($field in 'Category', 'Setting', 'Kind', 'Path', 'Name', 'PriorValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    foreach ($field in 'Category', 'Setting', 'Kind') {
+        if ($Entry.$field -isnot [string]) { return "$field is not a string" }
+    }
+    foreach ($field in 'Path', 'Name') {
+        if ($null -ne $Entry.$field -and $Entry.$field -isnot [string]) { return "$field is not a string" }
+    }
+    foreach ($field in 'ValueType', 'PriorStatus', 'AppliedValue') {
+        if ($Entry.PSObject.Properties[$field]) {
+            $v = $Entry.PSObject.Properties[$field].Value
+            if ($null -ne $v -and $v -isnot [string] -and $v -isnot [int] -and $v -isnot [long]) { return "$field is not a single value" }
+        }
+    }
+    $prior = $Entry.PriorValue
+    if ($Entry.Category -eq $ServiceControl.Category) {
+        if ($Entry.Kind -ne 'Service') { return "Kind '$($Entry.Kind)' is not Service for category $($Entry.Category)" }
+        if ($Entry.Setting -ne $ServiceControl.ServiceName) { return "Setting '$($Entry.Setting)' is not the $($ServiceControl.ServiceName) service" }
+        if (-not [string]::IsNullOrEmpty($Entry.Path) -or -not [string]::IsNullOrEmpty($Entry.Name)) { return 'a service entry must not carry a registry Path or Name' }
+        if ($prior -isnot [string] -or $prior -notmatch '^([A-Za-z]+)/([A-Za-z]+)$') { return "PriorValue '$prior' is not <StartType>/<Status>" }
+        $startType = $Matches[1]
+        $status = $Matches[2]
+        if ($startType -notin @($ServiceControl.StartupTypes)) { return "PriorValue start type '$startType' is not one the restore can set" }
+        if ($status -notin @($ServiceControl.Statuses)) { return "PriorValue status '$status' is not a service status" }
+        $priorStatus = if ($Entry.PSObject.Properties['PriorStatus']) { $Entry.PriorStatus } else { $null }
+        if ($priorStatus -isnot [string] -or $priorStatus -ne $status) { return "PriorStatus '$priorStatus' does not match the status in PriorValue" }
+        return $null
+    }
+    $control = @($RegistryControls | Where-Object { $_.Category -eq $Entry.Category })
+    if ($control.Count -ne 1) { return "Category '$($Entry.Category)' is not one this script records" }
+    $control = $control[0]
+    if ($Entry.Kind -ne 'Registry') { return "Kind '$($Entry.Kind)' is not Registry for category $($Entry.Category)" }
+    if ($Entry.Path -ne $control.Path) { return "Path '$($Entry.Path)' is not the registry key this script sets for $($Entry.Category)" }
+    if ($Entry.Name -ne $control.Name -or $Entry.Setting -ne $control.Name) { return "Name '$($Entry.Name)' is not the value this script sets for $($Entry.Category)" }
+    if ($Entry.PSObject.Properties['PriorStatus'] -and -not [string]::IsNullOrEmpty($Entry.PSObject.Properties['PriorStatus'].Value)) { return 'a registry entry must not carry a PriorStatus' }
+    if ($prior -is [string]) {
+        if ($prior -ceq 'absent') { return $null }
+        return "PriorValue '$prior' is neither absent nor a whole number"
+    }
+    if ($prior -isnot [int] -and $prior -isnot [long]) { return "PriorValue '$prior' is neither absent nor a whole number" }
+    if ($prior -lt $control.Min -or $prior -gt $control.Max) { return "PriorValue $prior of $($control.Name) is outside $($control.Min) to $($control.Max)" }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No remote-access-posture-rollback-*.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
+    }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    $changed = $data.ChangedSettings
+    if ($changed -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($changed)
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -RegistryControls $script:RegistryControls -ServiceControl $script:ServiceControl
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
-    foreach ($entry in @($data.ChangedSettings)) {
-        if (-not $entry) { continue }
+    foreach ($entry in $entries) {
         $items.Add((Get-PlanEntry -Category $entry.Category -Setting $entry.Setting -Kind $entry.Kind -Path $entry.Path `
                     -Name $entry.Name -ValueType $entry.ValueType -RequiresAdmin $true `
                     -PriorStatus ([string]$entry.PriorStatus) -CurrentValue $entry.AppliedValue -DesiredValue $entry.PriorValue `
@@ -271,12 +395,12 @@ function Invoke-PlanItem {
         if ($Item.Kind -eq 'Service') {
             if ($Rollback) {
                 $startup = "$($Item.DesiredValue)".Split('/')[0]
-                Set-Service -Name 'WinRM' -StartupType $startup -ErrorAction Stop
-                if ($Item.PriorStatus -eq 'Running') { Start-Service -Name 'WinRM' -ErrorAction Stop }
+                Set-Service -Name $script:ServiceControl.ServiceName -StartupType $startup -ErrorAction Stop
+                if ($Item.PriorStatus -eq 'Running') { Start-Service -Name $script:ServiceControl.ServiceName -ErrorAction Stop }
             } else {
                 # Disable first so the service manager cannot restart it after the stop.
-                Set-Service -Name 'WinRM' -StartupType Disabled -ErrorAction Stop
-                if ($Item.PriorStatus -ne 'Stopped') { Stop-Service -Name 'WinRM' -Force -ErrorAction Stop }
+                Set-Service -Name $script:ServiceControl.ServiceName -StartupType Disabled -ErrorAction Stop
+                if ($Item.PriorStatus -ne 'Stopped') { Stop-Service -Name $script:ServiceControl.ServiceName -Force -ErrorAction Stop }
             }
         } else {
             if ("$($Item.DesiredValue)" -eq 'absent') {
@@ -334,6 +458,29 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: at least one item failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
     $rollbackPath = Join-Path $resolvedReportDirectory "remote-access-posture-rollback-$timestamp.json"
@@ -351,6 +498,9 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count
     ReportOnlyCount = @($state | Where-Object Result -eq 'ReportOnly').Count

@@ -33,6 +33,11 @@ Instructions:
   block tools that reach unusual hosts. Audit mode only logs.
 - Use -Rollback to restore the exact values this script changed. A rule or allowed
   application the script added is removed again, and a setting is returned to its prior value.
+  The newest unconsumed rollback file is used. Before any plan is written or any change made,
+  every recorded entry is checked against the controls this script sets, and the whole file is
+  refused, also under -WhatIf, if one entry is outside them (see Rollback below). Each executing
+  -Rollback that restores every item marks its file consumed, so running -Rollback again undoes
+  the run before it, newest first.
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   developer's workstation must never be applied to someone else's machine. Supply the report
   directory explicitly on every run, under a data root outside the repo.
@@ -50,6 +55,21 @@ real-time protection and behavior monitoring state, signature age, and whether D
 passive mode because a third-party antivirus is the active provider. When a third-party
 antivirus is active, no Defender setting is planned at all. Defender exclusions are never
 added or removed by this script.
+
+Rollback: -Rollback reads the newest defender-hardening-rollback-<timestamp>.json in the report
+directory, by file name. The file is refused whole, with an error naming the file and the first bad
+entry and before anything is written or changed, also under -WhatIf, when the JSON does not parse,
+ChangedSettings is not an array, or an entry has a category or setting this script does not set, a
+value of the wrong type, or values the forward run could not have recorded: the applied value must
+be one the forward plan sets and the prior value must be a number that ranks below it, or 'absent'
+for an ASR rule or allowed application the run added. ASR rules are bounded by the built-in rule
+list and the other settings by the same control table the forward plan builds its items from.
+Allowed applications are chosen on the command line, so they are bounded by category and action
+(remove a list member the run added), not by path. Move a refused file aside to roll back an
+older run. After an executing -Rollback in which every item was reverted or needed no change, the
+file is renamed defender-hardening-rollback-<timestamp>.consumed-<timestamp>.json and is no longer
+picked; under -WhatIf, or when any item failed or was skipped, it is left in place and the summary
+says so in RollbackNote.
 
 Windows Tamper Protection, when on, can cause Defender to ignore or reject some changes made
 through Set-MpPreference. Tamper Protection can only be turned on or off in Windows Security.
@@ -140,6 +160,29 @@ $script:MapsRank = @{ 0 = 0; 1 = 1; 2 = 2 }                 # Disabled, Basic, A
 $script:SamplesRank = @{ 0 = 0; 2 = 0; 1 = 1; 3 = 2 }      # AlwaysPrompt/NeverSend, SendSafe, SendAll
 $script:CloudRank = @{ 0 = 0; 1 = 1; 2 = 2; 4 = 3; 6 = 4 } # Default, Moderate, High, HighPlus, ZeroTolerance
 
+# The value each -AsrMode asks an ASR rule to take.
+$script:AsrModeValues = @{ Audit = 2; Block = 1 }
+
+# Every control the forward plan can record and a rollback can restore. Get-ForwardPlan builds its
+# preference items from this table and the rollback validator accepts exactly these, so they cannot
+# drift. Settings is the closed list of names an entry may carry, or $null where the forward plan
+# takes the name from the command line (an allowed application path). Desired is every value the
+# forward plan can apply; Rank orders the values so that a forward run only raises a setting (a
+# $null Rank means the number itself is the order). Kind 'Value' restores a number or, where
+# AllowAbsent, removes what the run added; Kind 'List' only ever adds and removes a list member.
+$script:RollbackControls = @(
+    [pscustomobject]@{ Category = 'AsrRule'; Settings = @($script:AsrRuleCatalog.Keys); Kind = 'Value'; Desired = @($script:AsrModeValues.Values); Rank = $script:AsrRank; AllowAbsent = $true }
+    [pscustomobject]@{ Category = 'CfaAllowedApplication'; Settings = $null; Kind = 'List'; Desired = @(); Rank = $null; AllowAbsent = $true }
+    [pscustomobject]@{ Category = 'ControlledFolderAccess'; Settings = @('EnableControlledFolderAccess'); Kind = 'Value'; Desired = @(1, 2); Rank = $script:CfaRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'NetworkProtection'; Settings = @('EnableNetworkProtection'); Kind = 'Value'; Desired = @(1, 2); Rank = $script:AuditRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'PuaProtection'; Settings = @('PUAProtection'); Kind = 'Value'; Desired = @(1); Rank = $script:AuditRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'CloudProtection'; Settings = @('MAPSReporting'); Kind = 'Value'; Desired = @(2); Rank = $script:MapsRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'SampleSubmission'; Settings = @('SubmitSamplesConsent'); Kind = 'Value'; Desired = @(1); Rank = $script:SamplesRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'CloudBlockLevel'; Settings = @('CloudBlockLevel'); Kind = 'Value'; Desired = @(2); Rank = $script:CloudRank; AllowAbsent = $false }
+    [pscustomobject]@{ Category = 'CloudExtendedTimeout'; Settings = @('CloudExtendedTimeout'); Kind = 'Value'; Desired = @(50); Rank = $null; AllowAbsent = $false }
+)
+$script:RollbackSourceFile = $null
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -196,6 +239,25 @@ function ConvertTo-PreferencePlanItem {
     }
     ConvertTo-PlanItem -Category $Category -Setting $Setting -RequiresAdmin $true `
         -CurrentValue $cur -DesiredValue $Desired -Action "Set $Setting to $DesiredLabel ($Desired)"
+}
+
+# The plan item for one Set-MpPreference control. Setting name and value order come from
+# $script:RollbackControls, the table the rollback validator reads, and a desired value the table
+# does not list is a defect in this script, so it throws rather than plan something no rollback accepts.
+function ConvertTo-PreferenceControlItem {
+    param(
+        [Parameter(Mandatory = $true)][string]$Category,
+        $Preference,
+        [Parameter(Mandatory = $true)][int]$Desired,
+        [Parameter(Mandatory = $true)][string]$DesiredLabel
+    )
+    $control = @($script:RollbackControls | Where-Object { $_.Category -eq $Category -and $_.Kind -eq 'Value' })
+    if ($control.Count -ne 1) { throw "No rollback control is defined for category '$Category'." }
+    if ($Desired -notin @($control[0].Desired)) { throw "Desired value $Desired of $Category is not in the rollback control table." }
+    $setting = [string]$control[0].Settings[0]
+    ConvertTo-PreferencePlanItem -Category $Category -Setting $setting `
+        -Current (Get-OptionalProperty -InputObject $Preference -Name $setting) `
+        -Desired $Desired -DesiredLabel $DesiredLabel -RankMap $control[0].Rank
 }
 
 function Get-SmartAppControlState {
@@ -317,8 +379,8 @@ function Get-ForwardPlan {
     }
 
     # --- Attack surface reduction rules ---
-    $asrDesired = if ($AsrMode -eq 'Block') { 1 } else { 2 }
-    $asrLabel = if ($AsrMode -eq 'Block') { 'Block' } else { 'Audit' }
+    $asrDesired = [int]$script:AsrModeValues[$AsrMode]
+    $asrLabel = $AsrMode
     $hasAsrProps = ($null -ne $Preference.PSObject.Properties['AttackSurfaceReductionRules_Ids']) -and
     ($null -ne $Preference.PSObject.Properties['AttackSurfaceReductionRules_Actions'])
     $curIds = @(@(Get-OptionalProperty -InputObject $Preference -Name 'AttackSurfaceReductionRules_Ids') | Where-Object { $null -ne $_ -and "$_" -ne '' })
@@ -375,32 +437,20 @@ function Get-ForwardPlan {
     }
 
     $cfaDesired = if ($ControlledFolderAccess -eq 'Enabled') { 1 } else { 2 }
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'ControlledFolderAccess' -Setting 'EnableControlledFolderAccess' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'EnableControlledFolderAccess') `
-                -Desired $cfaDesired -DesiredLabel $ControlledFolderAccess -RankMap $script:CfaRank))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'ControlledFolderAccess' -Preference $Preference `
+                -Desired $cfaDesired -DesiredLabel $ControlledFolderAccess))
 
     # --- Network protection ---
     $npDesired = if ($NetworkProtection -eq 'Enabled') { 1 } else { 2 }
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'NetworkProtection' -Setting 'EnableNetworkProtection' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'EnableNetworkProtection') `
-                -Desired $npDesired -DesiredLabel $NetworkProtection -RankMap $script:AuditRank))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'NetworkProtection' -Preference $Preference `
+                -Desired $npDesired -DesiredLabel $NetworkProtection))
 
     # --- PUA, cloud protection ---
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'PuaProtection' -Setting 'PUAProtection' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'PUAProtection') `
-                -Desired 1 -DesiredLabel 'Enabled' -RankMap $script:AuditRank))
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'CloudProtection' -Setting 'MAPSReporting' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'MAPSReporting') `
-                -Desired 2 -DesiredLabel 'Advanced' -RankMap $script:MapsRank))
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'SampleSubmission' -Setting 'SubmitSamplesConsent' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'SubmitSamplesConsent') `
-                -Desired 1 -DesiredLabel 'SendSafeSamples' -RankMap $script:SamplesRank))
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'CloudBlockLevel' -Setting 'CloudBlockLevel' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'CloudBlockLevel') `
-                -Desired 2 -DesiredLabel 'High' -RankMap $script:CloudRank))
-    $items.Add((ConvertTo-PreferencePlanItem -Category 'CloudExtendedTimeout' -Setting 'CloudExtendedTimeout' `
-                -Current (Get-OptionalProperty -InputObject $Preference -Name 'CloudExtendedTimeout') `
-                -Desired 50 -DesiredLabel '50 seconds' -RankMap $null))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'PuaProtection' -Preference $Preference -Desired 1 -DesiredLabel 'Enabled'))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'CloudProtection' -Preference $Preference -Desired 2 -DesiredLabel 'Advanced'))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'SampleSubmission' -Preference $Preference -Desired 1 -DesiredLabel 'SendSafeSamples'))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'CloudBlockLevel' -Preference $Preference -Desired 2 -DesiredLabel 'High'))
+    $items.Add((ConvertTo-PreferenceControlItem -Category 'CloudExtendedTimeout' -Preference $Preference -Desired 50 -DesiredLabel '50 seconds'))
 
     $items
 }
@@ -408,20 +458,111 @@ function Get-ForwardPlan {
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
     # A rollback run writes defender-hardening-rollback-plan-*.json and -state-*.json, which
-    # a bare "rollback-*" wildcard would also match, so the timestamp shape is matched exactly.
+    # a bare "rollback-*" wildcard would also match, so the timestamp shape is matched exactly. That
+    # exact shape also excludes a consumed file (...rollback-<ts>.consumed-<ts>.json), so repeated
+    # rollbacks walk back one run each.
     Get-ChildItem -LiteralPath $ReportDirectory -Filter "$($script:ReportPrefix)-rollback-*.json" -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^defender-hardening-rollback-\d{8}_\d{6}\.json$' } |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Sort-Object Name -Descending | Select-Object -First 1
+}
+
+# A whole number in the range a Defender preference takes, never a boolean, string or fraction.
+function Test-RollbackNumber {
+    param($Value)
+    ($Value -is [int] -or $Value -is [long]) -and $Value -ge 0 -and $Value -le 1000
+}
+
+# Returns $null when the entry is acceptable, otherwise a short text saying what is wrong with it.
+# The entry must name a category in the control table, a setting that category can carry, and values
+# the forward plan could have recorded: an applied value the forward plan can set, and a prior value
+# that is either 'absent' (only where the run added a rule or list member) or a number the setting
+# had before and that ranks below the applied one, because a forward run only raises a setting. An
+# unreadable prior value is never recorded by the forward run (it plans "Cannot assess"), so an
+# 'unknown' prior is refused. Pure: it reads nothing but its arguments.
+function Get-RollbackEntryProblem {
+    param($Entry, [Parameter(Mandatory = $true)]$Controls)
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($field in 'Category', 'Setting', 'RequiresAdmin', 'PriorValue', 'AppliedValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    $category = $Entry.Category
+    if ($category -isnot [string]) { return 'Category is not a string' }
+    $control = @($Controls | Where-Object { $_.Category -ceq $category })
+    if ($control.Count -ne 1) { return "Category '$category' is not one this script records" }
+    $control = $control[0]
+    if ($Entry.Setting -isnot [string] -or [string]::IsNullOrWhiteSpace($Entry.Setting)) { return 'Setting is not a non-empty string' }
+    if ($null -ne $control.Settings -and $Entry.Setting -cnotin @($control.Settings)) {
+        return "Setting '$($Entry.Setting)' is not one this script sets for $category"
+    }
+    if ($Entry.RequiresAdmin -isnot [bool] -or -not $Entry.RequiresAdmin) { return 'RequiresAdmin is not true' }
+    $prior = $Entry.PriorValue
+    $applied = $Entry.AppliedValue
+
+    if ($control.Kind -eq 'List') {
+        if ($applied -isnot [string] -or $applied -cne 'present') { return "AppliedValue '$applied' is not 'present'" }
+        if ($prior -isnot [string] -or $prior -cne 'absent') { return "PriorValue '$prior' is not 'absent'" }
+        return $null
+    }
+
+    if (-not (Test-RollbackNumber $applied) -or $applied -notin @($control.Desired)) {
+        return "AppliedValue '$applied' is not a value this script sets for $category"
+    }
+    if ($prior -is [string]) {
+        if ($control.AllowAbsent -and $prior -ceq 'absent') { return $null }
+        return "PriorValue '$prior' is not a number the setting can hold"
+    }
+    if (-not (Test-RollbackNumber $prior)) { return "PriorValue '$prior' is not a whole number" }
+    if ($null -ne $control.Rank) {
+        if (-not $control.Rank.ContainsKey([int]$prior)) { return "PriorValue $prior is not a value $category can hold" }
+        if ([int]$control.Rank[[int]$prior] -ge [int]$control.Rank[[int]$applied]) {
+            return "PriorValue $prior is not below AppliedValue $applied, so a forward run could not have changed it"
+        }
+    } elseif ($prior -ge $applied) {
+        return "PriorValue $prior is not below AppliedValue $applied, so a forward run could not have changed it"
+    }
+    $null
+}
+
+# True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
+# Only then is the rollback file spent; anything less leaves it for a retry.
+function Test-RollbackFileConsumable {
+    param($State, [bool]$Preview)
+    if ($Preview) { return $false }
+    if ($null -eq $State) { return $true }
+    foreach ($item in @($State)) {
+        if ($null -eq $item) { return $false }
+        if ("$($item.Result)" -notin @('Reverted', 'NoChange')) { return $false }
+    }
+    $true
 }
 
 function Get-RollbackPlan {
     $file = Get-LatestRollbackFile
     if (-not $file) { throw "No $($script:ReportPrefix)-rollback-*.json found in $ReportDirectory. Nothing to roll back." }
-    $data = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    $advice = 'Nothing was changed. Move this file aside (out of the report directory) to roll back an older run.'
+    try {
+        $data = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Rollback file '$($file.FullName)' refused: it could not be read as JSON ($($_.Exception.Message)). $advice"
+    }
+    if ($null -eq $data -or $data -isnot [pscustomobject] -or -not $data.PSObject.Properties['ChangedSettings']) {
+        throw "Rollback file '$($file.FullName)' refused: it has no ChangedSettings array. $advice"
+    }
+    $changed = $data.ChangedSettings
+    if ($changed -isnot [array]) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings is not an array. $advice"
+    }
+    $entries = @($changed)
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -Controls $script:RollbackControls
+        if ($problem) {
+            throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
+        }
+    }
+    $script:RollbackSourceFile = $file
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
-    foreach ($entry in @($data.ChangedSettings)) {
-        if (-not $entry) { continue }
+    foreach ($entry in $entries) {
         $items.Add((ConvertTo-PlanItem -Category $entry.Category -Setting $entry.Setting `
                     -RequiresAdmin ([bool]$entry.RequiresAdmin) -CurrentValue $entry.AppliedValue -DesiredValue $entry.PriorValue `
                     -Action "Restore $($entry.Category) '$($entry.Setting)' to '$($entry.PriorValue)'"))
@@ -532,6 +673,29 @@ $state | Export-Csv -Path $statePath -NoTypeInformation -Encoding utf8 -WhatIf:$
 $stateJson = if (@($state).Count) { @($state) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $stateJsonPath -Value $stateJson -Encoding utf8 -WhatIf:$false
 
+$rollbackSourcePath = $null
+$rollbackConsumedPath = $null
+$rollbackNote = $null
+if ($Rollback -and $script:RollbackSourceFile) {
+    $rollbackSourcePath = $script:RollbackSourceFile.FullName
+    if (Test-RollbackFileConsumable -State $state -Preview ([bool]$WhatIfPreference)) {
+        # Bookkeeping after a real change, not a previewed one: -WhatIf:$false on purpose.
+        $consumedName = $script:RollbackSourceFile.Name -replace '\.json$', ".consumed-$timestamp.json"
+        try {
+            Rename-Item -LiteralPath $rollbackSourcePath -NewName $consumedName -WhatIf:$false -ErrorAction Stop
+            $rollbackConsumedPath = Join-Path (Split-Path -Parent $rollbackSourcePath) $consumedName
+            $rollbackNote = 'Rollback file consumed; the next -Rollback undoes the previous run.'
+        } catch {
+            $rollbackNote = "Rollback file could not be marked consumed ($($_.Exception.Message)); move it aside before the next -Rollback or it is replayed."
+            Write-Warning $rollbackNote
+        }
+    } elseif ($WhatIfPreference) {
+        $rollbackNote = 'Rollback file left unconsumed: -WhatIf changes nothing.'
+    } else {
+        $rollbackNote = 'Rollback file left unconsumed: at least one item failed or was skipped, so -Rollback can be run again.'
+    }
+}
+
 # Write rollback record on a live forward run that changed at least one setting.
 $rollbackPath = $null
 if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Count -gt 0) {
@@ -553,6 +717,9 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
     RollbackJsonPath = $rollbackPath
+    RollbackSourcePath = $rollbackSourcePath
+    RollbackConsumedPath = $rollbackConsumedPath
+    RollbackNote = $rollbackNote
     RebootRequired = [bool](@($state | Where-Object { $_.RequiresReboot -and $_.Result -in @('Applied', 'Reverted') }).Count)
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count

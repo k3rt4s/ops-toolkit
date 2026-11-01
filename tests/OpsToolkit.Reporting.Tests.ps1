@@ -205,6 +205,15 @@ Describe 'Resolve-OpsRunDirectory' {
         Get-Content -LiteralPath (Join-Path $first 'summary.json') | Should -Be 'first run'
     }
 
+    It 'reports the real error for a name Windows rejects, not a retry count' {
+        $badPrefix = 'x' * 300
+        { Resolve-OpsRunDirectory -OutputDirectory $script:runParent -Prefix $badPrefix -Timestamp ([datetime]::new(2026, 1, 1)) } |
+            Should -Throw -ExceptionType ([System.IO.IOException])
+        $thrown = $null
+        try { Resolve-OpsRunDirectory -OutputDirectory $script:runParent -Prefix $badPrefix -Timestamp ([datetime]::new(2026, 1, 1)) } catch { $thrown = $_ }
+        $thrown.Exception.Message | Should -Not -Match 'attempts'
+    }
+
     It 'lists same-second runs newest first, by suffix' {
         $root = Join-Path $script:runParent 'listing'
         $stamp = [datetime]::new(2026, 10, 31, 12, 0, 0)

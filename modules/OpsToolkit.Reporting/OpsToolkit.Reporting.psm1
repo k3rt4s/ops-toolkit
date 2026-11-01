@@ -45,7 +45,7 @@ function Resolve-OpsOutputDirectory {
         [string]$Path
     )
 
-    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    New-Item -ItemType Directory -Path $Path -Force -WhatIf:$false | Out-Null
     (Resolve-Path -LiteralPath $Path).Path
 }
 
@@ -91,7 +91,8 @@ function Resolve-OpsRunDirectory {
     $parent = Resolve-OpsOutputDirectory -Path $OutputDirectory
     $baseName = "$Prefix-$($Timestamp.ToString('yyyyMMdd_HHmmss'))"
     # New-Item without -Force fails on an existing folder, so a run that loses a same-second
-    # race moves on to the next suffix instead of writing into the other run's folder.
+    # race moves on to the next suffix instead of writing into the other run's folder. Any other
+    # IO failure, such as a name Windows rejects or a full disk, is rethrown as it is.
     for ($sequence = 1; $sequence -le 999; $sequence++) {
         $name = if ($sequence -eq 1) { $baseName } else { "${baseName}_$sequence" }
         $runDirectory = Join-Path $parent $name
@@ -101,7 +102,10 @@ function Resolve-OpsRunDirectory {
         try {
             New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop -WhatIf:$false | Out-Null
         } catch [System.IO.IOException] {
-            continue
+            if ($_.FullyQualifiedErrorId -like 'DirectoryExist*' -or (Test-Path -LiteralPath $runDirectory)) {
+                continue
+            }
+            throw
         }
         return (Resolve-Path -LiteralPath $runDirectory).Path
     }
@@ -530,7 +534,7 @@ function Get-OpsRunDirectory {
     # and propagate into the caller's own loops, which aborts a Pester run outright.
     $results = [System.Collections.Generic.List[object]]::new()
     foreach ($directory in (Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue)) {
-        $match = [regex]::Match($directory.Name, '^(?<prefix>.+)-(?<stamp>\d{8}_\d{6})(?:_(?<seq>[1-9]\d{0,2}))?$')
+        $match = [regex]::Match($directory.Name, '^(?<prefix>.+)-(?<stamp>\d{8}_\d{6})(?:_(?<seq>[2-9]|[1-9][0-9]{1,2}))?$')
         if (-not $match.Success) {
             continue
         }

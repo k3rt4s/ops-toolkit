@@ -7,6 +7,15 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-11-01
 
+### Removed: workstation setup scripts
+
+`scripts\it-operations\workstation-setup\` (`Install-WorkstationBootstrap.ps1`,
+`Export-ICloudDiagnostic.ps1` and its README) and `tests\Install-WorkstationBootstrap.Tests.ps1`
+left this repo on the developer's decision to keep the workstation bootstrap private. They were
+also removed from every earlier commit, so commit IDs from 2026-10-20 onward changed; a clone
+made before 2026-11-01 needs `git fetch` and `git reset --hard origin/master` instead of a pull.
+The hardening scripts are unchanged and still run on their own.
+
 ### Changed: hardening rollback validates its file and walks back one run at a time
 
 The eight remaining state-changing scripts in `scripts\it-operations\windows-hardening\`

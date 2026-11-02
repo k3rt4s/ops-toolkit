@@ -17,6 +17,20 @@ Instructions:
 - -ReportDirectory is mandatory: this is a public repository and a path that defaulted to one
   workstation must never be applied to someone else's machine. Generated reports belong under a
   data root outside the repo.
+- Windows automatic device encryption may already have encrypted the volume on its own, with a TPM
+  protector and a recovery password. When the volume is EncryptionInProgress or FullyEncrypted and
+  already carries a RecoveryPassword protector, this script adds no second one and does not enable
+  anything. It plans one BackupRecoveryProtector row per existing recovery password protector,
+  and a live run writes each to the same kind of key file under -RecoveryKeyDirectory (same off-the-
+  OS-volume rules and write probe, behind ShouldProcess; a key file that already holds that
+  protector's password is NoChange, one that does not is a failure). The summary reports the
+  volume's VolumeStatus and ProtectionStatus. The backup file holds the password in clear text, like
+  the one written on an enable. The backup is not recorded in a rollback file: -Rollback never
+  deletes it or decrypts a volume this script did not enable.
+- Secure Boot: firmware that shows Secure Boot as on can still make Confirm-SecureBootUEFI read
+  False while it is in Setup Mode with no Platform Key (PK), until the factory keys are restored in
+  firmware setup. The Secure Boot precondition then stops the run, correctly: it is reading the
+  state the firmware is actually in.
 - Run elevated. A non-elevated live run stops on the elevation precondition ('Failed: session is not
   elevated'), changes nothing and exits non-zero; under -WhatIf it is 'Skipped: requires elevation'
   and exits 0.
@@ -105,6 +119,10 @@ $script:StopReason = $null
 $script:AlreadyProtected = $false
 $script:ResolvedKeyDirectory = $null
 $script:RollbackSourceFile = $null
+$script:BackupCategory = 'BackupRecoveryProtector'
+$script:BackupPlanned = $false
+$script:OsVolumeStatus = $null
+$script:OsProtectionStatus = $null
 # What the forward run records, shared with the rollback validator. The rollback file may carry
 # exactly these fields and no other: in particular no key file path and nothing that adds a protector.
 $script:EnableCategory = 'EnableOsVolume'
@@ -231,6 +249,24 @@ function Resolve-RecoveryKeyDirectory {
     $resolved
 }
 
+# The key file's text. Never log or print the result: it holds the recovery password in clear text.
+function Get-RecoveryKeyFileText {
+    param([string]$Mount, [string]$ProtectorId, [string]$KeyValue)
+    @(
+        'BitLocker recovery key'
+        "Computer: $($env:COMPUTERNAME)"
+        "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        "Volume: $Mount"
+        "Protector ID: $ProtectorId"
+        "Recovery password: $KeyValue"
+    ) -join [Environment]::NewLine
+}
+
+function Get-RecoveryKeyFilePath {
+    param([string]$ProtectorId)
+    Join-Path $script:ResolvedKeyDirectory "BitLocker-Recovery-$($env:COMPUTERNAME)-$($ProtectorId.Trim('{', '}')).txt"
+}
+
 function Get-OsVolumeState {
     # Returns an object with Readable, Reason, Volume. Unreadable is never a pass.
     $mount = [string]$env:SystemDrive
@@ -253,6 +289,7 @@ function Get-ForwardPlan {
     $os = Get-OsVolumeState
     $volStatus = 'unknown'
     $protStatus = 'unknown'
+    $existingRecovery = @()
     if ($os.Readable) {
         $volStatus = [string](Get-OpsPropertyValue -InputObject $os.Volume -Name 'VolumeStatus')
         $protStatus = [string](Get-OpsPropertyValue -InputObject $os.Volume -Name 'ProtectionStatus')
@@ -264,7 +301,15 @@ function Get-ForwardPlan {
         if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'FullyEncryptedWipeInProgress', 'EncryptionSuspended') -or $protStatus -eq 'On' -or $tpmProtector.Count -gt 0) {
             $script:AlreadyProtected = $true
         }
+        # Automatic device encryption leaves an encrypted volume whose recovery password exists only on
+        # the machine. Back each one up; a decrypted volume with a pending enable is not this case.
+        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress')) {
+            $existingRecovery = @(@(Get-OpsPropertyValue -InputObject $os.Volume -Name 'KeyProtector') |
+                    Where-Object { $_ -and [string]$_.KeyProtectorType -eq 'RecoveryPassword' })
+        }
     }
+    $script:OsVolumeStatus = $volStatus
+    $script:OsProtectionStatus = $protStatus
 
     $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RecoveryKeyDirectory' -RequiresAdmin $false `
                 -CurrentValue $keyDir -DesiredValue 'existing directory off the OS volume' `
@@ -290,6 +335,16 @@ function Get-ForwardPlan {
     $items.Add((Get-PlanItem -Category $script:EnableCategory -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
                 -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue "TPM protector plus recovery password, $($script:EncryptionMethod)" `
                 -Action $action))
+    foreach ($protector in $existingRecovery) {
+        $id = [string]$protector.KeyProtectorId
+        $script:BackupPlanned = $true
+        $backup = Get-PlanItem -Category $script:BackupCategory -Setting $id -RequiresAdmin $true `
+            -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus;recovery password protector on $mount" `
+            -DesiredValue "recovery password saved under $keyDir" `
+            -Action "Back up the existing recovery password protector $id of ${mount} to $keyDir (no second protector is added and encryption is not touched)"
+        $backup.Detail = "Volume=$mount;ProtectorId=$id"
+        $items.Add($backup)
+    }
     $items
 }
 
@@ -411,7 +466,8 @@ function Test-PreconditionItem {
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     # An already-protected volume makes the whole run NoChange; the other checks are moot.
-    if ($script:AlreadyProtected -and $Item.Setting -in @('KeyDirectoryWritable', 'Tpm', 'SecureBoot')) { return 'NoChange' }
+    if ($script:AlreadyProtected -and $Item.Setting -in @('Tpm', 'SecureBoot')) { return 'NoChange' }
+    if ($script:AlreadyProtected -and -not $script:BackupPlanned -and $Item.Setting -eq 'KeyDirectoryWritable') { return 'NoChange' }
 
     switch ($Item.Setting) {
         'RecoveryKeyDirectory' { return 'Met' }
@@ -430,7 +486,8 @@ function Test-PreconditionItem {
         'Elevated' {
             if (Test-IsAdministrator) { return 'Met' }
             # A live run that cannot change anything must fail, not exit 0; a -WhatIf preview only reports it.
-            if (-not $WhatIfPreference -and -not $script:AlreadyProtected) {
+            # A planned recovery backup counts as a change: skipping it would exit 0 with no off-machine copy.
+            if (-not $WhatIfPreference -and (-not $script:AlreadyProtected -or $script:BackupPlanned)) {
                 $script:StopReason = 'session is not elevated'
                 return "Failed: $($script:StopReason)"
             }
@@ -517,17 +574,9 @@ function Invoke-EnableOsVolume {
         if ([string]::IsNullOrWhiteSpace($password)) { throw 'The new recovery password protector carried no recovery password.' }
 
         # Step 2: write the key file, then Step 3: read it back. Neither message may contain the password.
-        $idForName = $protectorId.Trim('{', '}')
-        $keyFile = Join-Path $script:ResolvedKeyDirectory "BitLocker-Recovery-$($env:COMPUTERNAME)-$idForName.txt"
+        $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
         if (Test-Path -LiteralPath $keyFile) { throw "Key file $keyFile already exists; refusing to overwrite it." }
-        $content = @(
-            'BitLocker recovery key'
-            "Computer: $($env:COMPUTERNAME)"
-            "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-            "Volume: $mount"
-            "Protector ID: $protectorId"
-            "Recovery password: $password"
-        ) -join [Environment]::NewLine
+        $content = Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password
         Set-Content -LiteralPath $keyFile -Value $content -Encoding ascii -ErrorAction Stop
         $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
         if ($null -eq $readBack -or -not $readBack.Contains($password)) {
@@ -565,6 +614,46 @@ function Invoke-EnableOsVolume {
     'Applied'
 }
 
+# Saves one existing recovery password protector to the key directory. Never returns or logs the password.
+function Invoke-BackupRecoveryProtector {
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    $mount = [string]$script:ResolvedBackupVolume
+    $protectorId = [string]$Item.Setting
+    $password = $null
+    $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
+    try {
+        $volume = @(Get-BitLockerVolume -MountPoint $mount -ErrorAction Stop | Select-Object -First 1)
+        $protectors = @(Get-OpsPropertyValue -InputObject $volume[0] -Name 'KeyProtector')
+        $match = $protectors | Where-Object { $_ -and [string]$_.KeyProtectorType -eq 'RecoveryPassword' -and [string]$_.KeyProtectorId -eq $protectorId } | Select-Object -First 1
+        if (-not $match) { throw "protector $protectorId is no longer on $mount" }
+        $password = [string](Get-OpsPropertyValue -InputObject $match -Name 'RecoveryPassword')
+        if ([string]::IsNullOrWhiteSpace($password)) { throw "protector $protectorId carried no recovery password (is the session elevated?)" }
+        if (Test-Path -LiteralPath $keyFile) {
+            $existing = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
+            if ($null -ne $existing -and $existing.Contains($password)) {
+                $Item.Detail = "Volume=$mount;ProtectorId=$protectorId;KeyFile=$keyFile;AlreadyBackedUp=True"
+                return 'NoChange'
+            }
+            throw "key file $keyFile already exists but does not hold this recovery password; refusing to overwrite it"
+        }
+        Set-Content -LiteralPath $keyFile -Value (Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password) -Encoding ascii -ErrorAction Stop
+        $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
+        if ($null -eq $readBack -or -not $readBack.Contains($password)) {
+            throw "key file $keyFile was written but reading it back did not show the recovery password"
+        }
+    } catch {
+        $message = $_.Exception.Message
+        if ($password) { $message = $message.Replace($password, '[redacted]') }
+        $script:StopReason = "recovery protector backup failed: $message"
+        return "Failed: $($script:StopReason)"
+    } finally {
+        $password = $null
+    }
+    $Item.Detail = "Volume=$mount;ProtectorId=$protectorId;KeyFile=$keyFile"
+    'Applied'
+}
+
 function Invoke-PlanItem {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
@@ -577,6 +666,7 @@ function Invoke-PlanItem {
 
     switch ($Item.Category) {
         { $_ -eq $script:EnableCategory } { return (Invoke-EnableOsVolume -Item $Item) }
+        { $_ -eq $script:BackupCategory } { return (Invoke-BackupRecoveryProtector -Item $Item) }
         'DisableOsVolume' {
             try {
                 Disable-BitLocker -MountPoint $Item.Setting -ErrorAction Stop | Out-Null
@@ -597,6 +687,7 @@ if (-not $Rollback) {
     $script:ResolvedKeyDirectory = Resolve-RecoveryKeyDirectory -Path $RecoveryKeyDirectory
 }
 
+$script:ResolvedBackupVolume = ([string]$env:SystemDrive).TrimEnd('\')
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-Null
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
@@ -674,6 +765,8 @@ $summary = [pscustomobject]@{
     RollbackSourcePath = $rollbackSourcePath
     RollbackConsumedPath = $rollbackConsumedPath
     RollbackNote = $rollbackNote
+    OsVolumeStatus = $script:OsVolumeStatus
+    OsProtectionStatus = $script:OsProtectionStatus
     RebootRequired = [bool](@($state | Where-Object { $_.Result -in @('Applied') -and $_.RequiresReboot }).Count)
     StoppedReason = $script:StopReason
     AppliedCount = @($state | Where-Object { $_.Result -in @('Applied', 'Reverted') }).Count
@@ -686,7 +779,7 @@ $summary = [pscustomobject]@{
 # A live run that stopped on a failed precondition or a failed step must not exit 0. The reports
 # are already written; the message points at them. A -WhatIf run only previews, so it exits 0.
 $failedItem = @($state | Where-Object { $_.Result -like 'Failed:*' }) | Select-Object -First 1
-if (-not $WhatIfPreference -and -not $script:AlreadyProtected -and ($script:StopReason -or $failedItem)) {
+if (-not $WhatIfPreference -and (-not $script:AlreadyProtected -or $script:BackupPlanned) -and ($script:StopReason -or $failedItem)) {
     $why = if ($script:StopReason) { $script:StopReason } else { $failedItem.Result }
     throw "BitLocker change did not complete: $why. Reports: $resolvedReportDirectory"
 }

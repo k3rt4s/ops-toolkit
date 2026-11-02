@@ -431,6 +431,192 @@ Describe 'Enable-BitLockerOsVolume already protected' {
     }
 }
 
+Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
+    BeforeAll {
+        # Windows automatic device encryption already encrypted the volume, with a TPM protector and a
+        # recovery password that so far exists only on the machine.
+        $script:encPassword = '246810-135791-246810-135791-246810-135791-246810-135791'
+        $script:encProtectorId = '{EEEEEEEE-0000-4000-8000-000000000005}'
+        $script:encFullPath = Get-RepositoryScriptPath -RelativePath $script:blScript
+
+        function New-EncEnv {
+            param([string]$Status = 'FullyEncrypted', [string]$Protection = 'On', [string]$Password = $script:encPassword, [string]$ProtectorId = $script:encProtectorId, [switch]$NoRecovery)
+            $recovery = '{"KeyProtectorType":"RecoveryPassword","KeyProtectorId":"' + $ProtectorId + '"' + $(if ($Password) { ',"RecoveryPassword":"' + $Password + '"' } else { '' }) + '}'
+            $recoveryList = if ($NoRecovery) { '' } else { ',' + $recovery }
+            $volume = '[{"MountPoint":"Q:","VolumeType":"OperatingSystem","VolumeStatus":"' + $Status + '","ProtectionStatus":"' + $Protection + '","EncryptionMethod":"XtsAes128","KeyProtector":[{"KeyProtectorType":"Tpm","KeyProtectorId":"{BBBBBBBB-0000-4000-8000-000000000002}"}' + $recoveryList + ']}]'
+            "`$env:SystemDrive = 'Q:'`n`$env:OPSTOOLKIT_TEST_BL_VOLUMES_JSON = '$volume'`n"
+        }
+
+        function Get-EncLiftedText {
+            param([string]$Name)
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:encFullPath, [ref]$tokens, [ref]$parseErrors)
+            $hit = @($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $Name })
+            $hit.Count | Should -Be 1 -Because "the script must define $Name once at its top level"
+            $hit[0].Extent.Text
+        }
+
+        # Runs the script's own backup function in a child process against the staged fake modules. Needed
+        # because the suite is not elevated and the script's executing path stops at its elevation check.
+        function Invoke-EncBackup {
+            param([string]$KeyDirectory, [string]$Environment)
+            $reporting = Join-Path (Split-Path -Parent $script:encFullPath) '..\..\..\modules\OpsToolkit.Reporting'
+            $functions = 'Get-RecoveryKeyFileText', 'Get-RecoveryKeyFilePath', 'Invoke-BackupRecoveryProtector' | ForEach-Object { Get-EncLiftedText -Name $_ }
+            $body = @(
+                "`$env:PSModulePath = '$($script:systemModulePath)' + [IO.Path]::PathSeparator + `$env:PSModulePath"
+                'Set-StrictMode -Version 3.0'
+                "`$ErrorActionPreference = 'Stop'"
+                "Import-Module '$reporting' -Force"
+                $Environment
+                "`$script:ResolvedKeyDirectory = '$KeyDirectory'"
+                "`$script:ResolvedBackupVolume = 'Q:'"
+                '$script:StopReason = $null'
+                ($functions -join "`n")
+                "`$item = [pscustomobject]@{ Setting = '$($script:encProtectorId)'; Detail = '' }"
+                '$result = Invoke-BackupRecoveryProtector -Item $item'
+                '[pscustomobject]@{ Result = $result; Detail = $item.Detail; Stop = $script:StopReason } | ConvertTo-Json -Compress'
+            ) -join "`n"
+            $file = Join-Path $script:workRoot "enc-backup-$([guid]::NewGuid().ToString('N')).ps1"
+            Set-Content -LiteralPath $file -Value $body -Encoding utf8
+            $text = (& pwsh -NoProfile -File $file 2>&1 | Out-String)
+            [pscustomobject]@{ Text = $text; Json = ($text.Trim() | Select-String -Pattern '^\{.*\}$' | Select-Object -Last 1) }
+        }
+    }
+
+    It 'adds no second recovery protector and enables nothing, planning a backup of the existing one (<Status>)' -ForEach @(
+        @{ Status = 'FullyEncrypted'; Protection = 'On' }
+        @{ Status = 'EncryptionInProgress'; Protection = 'Off' }
+    ) {
+        $keys = New-WorkDirectory "bl-enc-keys-$Status"
+        $reports = New-WorkDirectory "bl-enc-reports-$Status"
+        $pair = Invoke-Pair -Tag "bl-enc-$Status" -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment (New-EncEnv -Status $Status -Protection $Protection)
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        # A live run that cannot make the planned backup must fail, so unelevated it exits non-zero.
+        if ($script:isElevated) { $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output } else { $pair.Execute.ExitCode | Should -Not -Be 0 }
+
+        $bitlockerChange = 'Add-BitLockerKeyProtector', 'Remove-BitLockerKeyProtector', 'Enable-BitLocker', 'Disable-BitLocker', 'Suspend-BitLocker', 'Resume-BitLocker'
+        foreach ($log in $pair.WhatIfLog, $pair.ExecuteLog) {
+            @(Get-OpsMutationRecord -Path $log | Where-Object { $_.Command -in $bitlockerChange }).Count | Should -Be 0
+        }
+
+        $plan = @(Get-Content -LiteralPath $pair.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        $backup = @($plan | Where-Object Category -eq 'BackupRecoveryProtector')
+        $backup.Count | Should -Be 1
+        $backup[0].Setting | Should -Be $script:encProtectorId
+        $backup[0].Action | Should -Match 'Back up the existing recovery password protector'
+        $backup[0].RequiresReboot | Should -BeFalse
+        @($plan | Where-Object { $_.Category -eq 'EnableOsVolume' -and $_.Action -like 'No change*' }).Count | Should -Be 1
+
+        $pair.WhatIf.Summary.OsVolumeStatus | Should -Be $Status
+        $pair.WhatIf.Summary.OsProtectionStatus | Should -Be $Protection
+        @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*' -ErrorAction SilentlyContinue).Count | Should -Be 0 -Because '-WhatIf writes no key file'
+        $pair.WhatIf.Summary.RollbackJsonPath | Should -BeNullOrEmpty
+        $pair.Execute.Summary.RollbackJsonPath | Should -BeNullOrEmpty -Because 'a backup is not an enable and is not rolled back'
+
+        (Get-AllReportText -Directory @($reports)) | Should -Not -Match ([regex]::Escape($script:encPassword))
+        $pair.WhatIf.Output | Should -Not -Match ([regex]::Escape($script:encPassword))
+        $pair.Execute.Output | Should -Not -Match ([regex]::Escape($script:encPassword))
+
+        if ($script:isElevated) {
+            $state = Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting $script:encProtectorId
+            $state.Result | Should -Be 'Applied'
+            $keyFile = @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*-EEEEEEEE-0000-4000-8000-000000000005.txt')
+            $keyFile.Count | Should -Be 1
+            (Get-Content -LiteralPath $keyFile[0].FullName -Raw) | Should -Match ([regex]::Escape($script:encPassword))
+        } else {
+            (Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting 'Elevated').Result | Should -Match '^Failed: session is not elevated'
+        }
+    }
+
+    It 'fails a live unelevated run that has a recovery backup planned, writing no key file and leaking no password' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'needs a non-elevated session'; return }
+        $keys = New-WorkDirectory 'bl-enc-unelev-keys'
+        $reports = New-WorkDirectory 'bl-enc-unelev-reports'
+        $pair = Invoke-Pair -Tag 'bl-enc-unelev' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment (New-EncEnv)
+        $pair.Execute.ExitCode | Should -Not -Be 0 -Because 'the recovery password was never backed up'
+        (Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting 'Elevated').Result | Should -Match '^Failed: session is not elevated'
+        @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*' -ErrorAction SilentlyContinue).Count | Should -Be 0
+        (Get-AllReportText -Directory @($reports)) | Should -Not -Match ([regex]::Escape($script:encPassword))
+        $pair.Execute.Output | Should -Not -Match ([regex]::Escape($script:encPassword))
+    }
+
+    It 'plans no backup for a decrypted volume or an encrypted one with no recovery password protector' {
+        $keys = New-WorkDirectory 'bl-enc-none-keys'
+        $reports = New-WorkDirectory 'bl-enc-none-reports'
+        $env = New-EncEnv -Status 'FullyEncrypted' -NoRecovery
+        $env | Should -Not -Match 'RecoveryPassword' -Because 'the fixture must carry no recovery protector'
+        $pair = Invoke-Pair -Tag 'bl-enc-none' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $env
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        @(Get-Content -LiteralPath $pair.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object Category -eq 'BackupRecoveryProtector').Count | Should -Be 0
+        $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+    }
+
+    It 'writes the existing recovery password to the key directory and reads it back' {
+        $keys = New-WorkDirectory 'bl-enc-fn-keys'
+        $run = Invoke-EncBackup -KeyDirectory $keys -Environment (New-EncEnv)
+        $run.Json | Should -Not -BeNullOrEmpty -Because $run.Text
+        $result = $run.Json.Line | ConvertFrom-Json
+        $result.Result | Should -Be 'Applied'
+        $keyFile = @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*-EEEEEEEE-0000-4000-8000-000000000005.txt')
+        $keyFile.Count | Should -Be 1
+        $content = Get-Content -LiteralPath $keyFile[0].FullName -Raw
+        $content | Should -Match ([regex]::Escape($script:encPassword))
+        $content | Should -Match 'Volume: Q:'
+        $run.Text | Should -Not -Match ([regex]::Escape($script:encPassword))
+    }
+
+    It 'treats a key file that already holds the password as NoChange and does not rewrite it' {
+        $keys = New-WorkDirectory 'bl-enc-again-keys'
+        $env = New-EncEnv
+        $null = Invoke-EncBackup -KeyDirectory $keys -Environment $env
+        $keyFile = @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*')
+        $keyFile.Count | Should -Be 1
+        $before = (Get-Item -LiteralPath $keyFile[0].FullName).LastWriteTimeUtc
+        $text = Get-Content -LiteralPath $keyFile[0].FullName -Raw
+        Start-Sleep -Milliseconds 1100
+        $run = Invoke-EncBackup -KeyDirectory $keys -Environment $env
+        ($run.Json.Line | ConvertFrom-Json).Result | Should -Be 'NoChange'
+        (Get-Item -LiteralPath $keyFile[0].FullName).LastWriteTimeUtc | Should -Be $before
+        (Get-Content -LiteralPath $keyFile[0].FullName -Raw) | Should -Be $text
+    }
+
+    It 'fails, without overwriting or leaking, when the key file holds a different password' {
+        $keys = New-WorkDirectory 'bl-enc-clash-keys'
+        $existing = Join-Path $keys "BitLocker-Recovery-$($env:COMPUTERNAME)-EEEEEEEE-0000-4000-8000-000000000005.txt"
+        Set-Content -LiteralPath $existing -Value 'someone else' -Encoding ascii
+        $run = Invoke-EncBackup -KeyDirectory $keys -Environment (New-EncEnv)
+        $result = $run.Json.Line | ConvertFrom-Json
+        $result.Result | Should -Match '^Failed: .*refusing to overwrite'
+        (Get-Content -LiteralPath $existing -Raw).Trim() | Should -Be 'someone else'
+        $run.Text | Should -Not -Match ([regex]::Escape($script:encPassword))
+    }
+
+    It 'fails when the protector carries no recovery password, as an unelevated read returns it' {
+        $keys = New-WorkDirectory 'bl-enc-nopw-keys'
+        $run = Invoke-EncBackup -KeyDirectory $keys -Environment (New-EncEnv -Password '')
+        ($run.Json.Line | ConvertFrom-Json).Result | Should -Match '^Failed: .*no recovery password'
+        @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*').Count | Should -Be 0
+    }
+
+    It 'fails when the protector is no longer on the volume' {
+        $keys = New-WorkDirectory 'bl-enc-gone-keys'
+        $run = Invoke-EncBackup -KeyDirectory $keys -Environment (New-EncEnv -ProtectorId '{FFFFFFFF-0000-4000-8000-000000000009}')
+        ($run.Json.Line | ConvertFrom-Json).Result | Should -Match '^Failed: .*no longer on'
+        @(Get-ChildItem -LiteralPath $keys -Filter 'BitLocker-Recovery-*').Count | Should -Be 0
+    }
+
+    It 'documents automatic device encryption and the Setup Mode Secure Boot reading in its help' {
+        $help = Get-Content -LiteralPath $script:encFullPath -Raw
+        $help | Should -Match 'automatic device encryption'
+        $help | Should -Match 'Setup Mode'
+        $help | Should -Match 'Platform Key'
+    }
+}
+
 Describe 'Enable-BitLockerOsVolume key file failures' {
     It 'removes the recovery protector and never enables BitLocker when the key file cannot be written' {
         if (-not $script:isElevated) {
@@ -578,6 +764,53 @@ function CiTool.exe {
     It 'runs to completion in both modes' {
         $script:wdac.WhatIf.ExitCode | Should -Be 0 -Because "the -WhatIf run failed: $($script:wdac.WhatIf.Output)"
         $script:wdac.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:wdac.Execute.Output)"
+    }
+
+    It 'imports ConfigCI itself, so a -WhatIf run meets the precondition and plans DeployAuditPolicy' {
+        # The ConfigCI fake refuses an import made while the global WhatIfPreference is on, as the real
+        # module's compatibility-layer load does. That only happens when the script is the process's own
+        # `pwsh -File script -WhatIf` entry point, so this starts pwsh directly instead of using the pair.
+        $reports = Join-Path $script:workRoot 'wdac-direct-reports'
+        $log = Join-Path $script:workRoot 'wdac-direct.log'
+        $names = 'PSModulePath', 'OPSTOOLKIT_TEST_CITOOL_POLICIES'
+        $saved = @{}
+        foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+        try {
+            [Environment]::SetEnvironmentVariable('PSModulePath', "$script:systemModulePath$([IO.Path]::PathSeparator)$($saved['PSModulePath'])")
+            [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_CITOOL_POLICIES', ('{"Policies":[' + $script:systemPolicy + '],"OperationResult":0}'))
+            $process = Start-Process -FilePath (Get-Process -Id $PID).Path -NoNewWindow -Wait -PassThru `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$(Get-RepositoryScriptPath -RelativePath $script:wdacScript)`"", '-ReportDirectory', "`"$reports`"", '-ExamplePolicyDirectory', "`"$($script:exampleDir)`"", '-WhatIf') `
+                -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+        } finally {
+            foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+        }
+        $process.ExitCode | Should -Be 0 -Because ((Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue))
+        $planFile = Get-ChildItem -LiteralPath $reports -Filter '*-apply-plan-*.json' -File | Select-Object -First 1
+        $plan = @(Get-Content -LiteralPath $planFile.FullName -Raw | ConvertFrom-Json)
+        $stateFile = Get-ChildItem -LiteralPath $reports -Filter '*-apply-state-*.json' -File | Select-Object -First 1
+        $state = @(Get-Content -LiteralPath $stateFile.FullName -Raw | ConvertFrom-Json)
+        ($state | Where-Object { $_.Category -eq 'Precondition' -and $_.Setting -eq 'ConfigCI' }).Result | Should -Be 'Met'
+        $deploy = @($plan | Where-Object Category -eq 'DeployAuditPolicy')
+        $deploy.Count | Should -Be 1
+        $deploy[0].Action | Should -Not -Match '\(not built\)'
+        $expected = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        ($state | Where-Object Category -eq 'DeployAuditPolicy').Result | Should -Be $expected
+    }
+
+    It 'names PowerShell 7.4 and the compatibility layer, not Windows PowerShell 5.1, when ConfigCI cannot load' {
+        $reports = Join-Path $script:workRoot 'wdac-noci-reports'
+        $pair = Invoke-Pair -Tag 'wdac-noci' -RelativePath $script:wdacScript `
+            -Argument @{ ReportDirectory = $reports; ExamplePolicyDirectory = $script:exampleDir } `
+            -FixtureEnvironment ($script:wdacEnv + "`n`$env:OPSTOOLKIT_TEST_CI_UNAVAILABLE = '1'") -ExtraSetup $script:ciStub
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $row = @($pair.WhatIf.Summary.Items) | Where-Object { $_.Category -eq 'Precondition' -and $_.Setting -eq 'ConfigCI' }
+        $row.Result | Should -Match '^Failed: the ConfigCI cmdlets'
+        $row.Result | Should -Match 'PowerShell 7\.4 or later'
+        $row.Result | Should -Match 'compatibility layer'
+        $row.Result | Should -Not -Match 'try Windows PowerShell 5\.1'
+        $help = Get-Content -LiteralPath (Get-RepositoryScriptPath -RelativePath $script:wdacScript) -Raw
+        $help | Should -Match 'PowerShell 7\.4 or later'
+        $help | Should -Not -Match 'which load in Windows PowerShell 5\.1'
     }
 
     It 'builds one policy artifact although Set-CIPolicyIdInfo writes the new policy ID to the pipeline' {

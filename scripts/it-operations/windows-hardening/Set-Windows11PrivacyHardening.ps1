@@ -8,6 +8,8 @@ Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run from an elevated shell before applying live HKLM, service, or task changes.
 - Backups are written before live registry changes unless -SkipRegistryBackup is used.
+- A value Windows refuses to write is recorded as Failed with its message in the state list and the
+  summary FailedCount; the run continues with the remaining items.
 - Use -Rollback to restore policy values to default/not-configured or re-enable user settings.
 - Store app background access and device sync are left alone unless
   -DenyStoreAppBackgroundAccess is passed, because denying them breaks syncing Store
@@ -35,7 +37,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-Windows11PrivacyHardeni
 Writes plan and state-list CSV/JSON files under reports\windows-hardening by
 default. Live runs also export relevant registry branches to .reg files before
 changes unless -SkipRegistryBackup is used. Returns a summary object with
-report and backup paths, changed/skipped counts, restart-required status, and
+report and backup paths, changed/skipped/failed counts, restart-required status, and
 the items disabled after hardening or enabled/default-restored after rollback.
 
 .NOTES
@@ -533,7 +535,10 @@ function Set-PlannedRegistryValue {
 
     if ($Item.Action -eq 'DeleteValue') {
         if ($PSCmdlet.ShouldProcess($Item.Target, 'Delete registry value')) {
-            Remove-ItemProperty -LiteralPath $Item.RegistryPath -Name $Item.ValueName -ErrorAction SilentlyContinue
+            # A value that is already absent is not an error; a refused delete of one that exists is.
+            if ($null -ne (Get-RegistryValue -Path $Item.RegistryPath -Name $Item.ValueName)) {
+                Remove-ItemProperty -LiteralPath $Item.RegistryPath -Name $Item.ValueName -ErrorAction Stop
+            }
             return $true
         }
 
@@ -544,9 +549,9 @@ function Set-PlannedRegistryValue {
         # New-Item -Force on an existing key deletes and recreates it, wiping its
         # other values and subkeys, so it runs only when the key is missing.
         if (-not (Test-Path -LiteralPath $Item.RegistryPath)) {
-            New-Item -Path $Item.RegistryPath -Force | Out-Null
+            New-Item -Path $Item.RegistryPath -Force -ErrorAction Stop | Out-Null
         }
-        New-ItemProperty -Path $Item.RegistryPath -Name $Item.ValueName -Value $Item.DesiredValue -PropertyType $Item.PropertyType -Force | Out-Null
+        New-ItemProperty -Path $Item.RegistryPath -Name $Item.ValueName -Value $Item.DesiredValue -PropertyType $Item.PropertyType -Force -ErrorAction Stop | Out-Null
         return $true
     }
 
@@ -567,9 +572,9 @@ function Set-PlannedScheduledTaskState {
     $operation = if ($Item.Action -eq 'EnableScheduledTask') { 'Enable scheduled task' } else { 'Disable scheduled task' }
     if ($PSCmdlet.ShouldProcess($Item.Target, $operation)) {
         if ($Item.Action -eq 'EnableScheduledTask') {
-            Enable-ScheduledTask -TaskPath $Item.TaskPath -TaskName $Item.TaskName | Out-Null
+            Enable-ScheduledTask -TaskPath $Item.TaskPath -TaskName $Item.TaskName -ErrorAction Stop | Out-Null
         } else {
-            Disable-ScheduledTask -TaskPath $Item.TaskPath -TaskName $Item.TaskName | Out-Null
+            Disable-ScheduledTask -TaskPath $Item.TaskPath -TaskName $Item.TaskName -ErrorAction Stop | Out-Null
         }
 
         return $true
@@ -601,7 +606,7 @@ function Set-PlannedServiceState {
         }
 
         if ($PSCmdlet.ShouldProcess($serviceName, 'Set service startup type to Disabled')) {
-            Set-Service -Name $serviceName -StartupType Disabled
+            Set-Service -Name $serviceName -StartupType Disabled -ErrorAction Stop
             return $true
         }
 
@@ -609,7 +614,7 @@ function Set-PlannedServiceState {
     }
 
     if ($PSCmdlet.ShouldProcess($serviceName, "Set service startup type to $($Item.RollbackStartupType)")) {
-        Set-Service -Name $serviceName -StartupType $Item.RollbackStartupType
+        Set-Service -Name $serviceName -StartupType $Item.RollbackStartupType -ErrorAction Stop
         return $true
     }
 
@@ -641,6 +646,62 @@ function Get-RunStateList {
             Result = $status
             Reason = $item.Reason
         }
+    }
+}
+
+# Runs every planned item in its own try/catch so one refused write (a protected policy key, a driver
+# that blocks the value) is recorded as Failed with its message and the run goes on to the next item.
+function Invoke-HardeningPlan {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Plan,
+
+        [Parameter()]
+        [bool]$Preview
+    )
+
+    $changedCount = 0
+    $skippedCount = 0
+    $failedCount = 0
+    $runStatuses = @{}
+    foreach ($item in $Plan) {
+        if ($item.Action -in @('NoChange', 'Missing')) {
+            $skippedCount++
+            $runStatuses[$item.Target] = $item.Action
+            continue
+        }
+
+        try {
+            $changed = switch ($item.ItemType) {
+                'Registry' { Set-PlannedRegistryValue -Item $item -WhatIf:$Preview }
+                'ScheduledTask' { Set-PlannedScheduledTaskState -Item $item -WhatIf:$Preview }
+                'Service' { Set-PlannedServiceState -Item $item -WhatIf:$Preview }
+                default { $false }
+            }
+        } catch {
+            $failedCount++
+            $runStatuses[$item.Target] = "Failed: $($_.Exception.Message)"
+            Write-Warning "Windows 11 privacy item $($item.Target) failed: $($_.Exception.Message)"
+            continue
+        }
+
+        if ($changed) {
+            $changedCount++
+            $runStatuses[$item.Target] = 'Changed'
+        } elseif ($Preview) {
+            $runStatuses[$item.Target] = 'Previewed'
+        } else {
+            $skippedCount++
+            $runStatuses[$item.Target] = 'Skipped'
+        }
+    }
+
+    [pscustomobject]@{
+        Statuses = $runStatuses
+        ChangedCount = $changedCount
+        SkippedCount = $skippedCount
+        FailedCount = $failedCount
     }
 }
 
@@ -677,33 +738,11 @@ if (-not $WhatIfPreference -and -not $SkipRegistryBackup) {
     $backupResults = Export-RegistryBackup -BackupDirectory $backupDirectory
 }
 
-$changedCount = 0
-$skippedCount = 0
-$runStatuses = @{}
-foreach ($item in $plan) {
-    if ($item.Action -in @('NoChange', 'Missing')) {
-        $skippedCount++
-        $runStatuses[$item.Target] = $item.Action
-        continue
-    }
-
-    $changed = switch ($item.ItemType) {
-        'Registry' { Set-PlannedRegistryValue -Item $item -WhatIf:$WhatIfPreference }
-        'ScheduledTask' { Set-PlannedScheduledTaskState -Item $item -WhatIf:$WhatIfPreference }
-        'Service' { Set-PlannedServiceState -Item $item -WhatIf:$WhatIfPreference }
-        default { $false }
-    }
-
-    if ($changed) {
-        $changedCount++
-        $runStatuses[$item.Target] = 'Changed'
-    } elseif ($WhatIfPreference) {
-        $runStatuses[$item.Target] = 'Previewed'
-    } else {
-        $skippedCount++
-        $runStatuses[$item.Target] = 'Skipped'
-    }
-}
+$runResult = Invoke-HardeningPlan -Plan $plan -Preview ([bool]$WhatIfPreference)
+$changedCount = $runResult.ChangedCount
+$skippedCount = $runResult.SkippedCount
+$failedCount = $runResult.FailedCount
+$runStatuses = $runResult.Statuses
 
 $stateList = @(Get-RunStateList -Plan $plan -Statuses $runStatuses)
 $stateList | Export-Csv -Path $stateCsvPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
@@ -728,6 +767,7 @@ Write-Information "Windows 11 privacy $operationName state list JSON written to 
     PlannedChangeCount = @($plan | Where-Object { $_.Action -notin @('NoChange', 'Missing') }).Count
     ChangedCount = $changedCount
     SkippedCount = $skippedCount
+    FailedCount = $failedCount
     RestartRequired = $true
     DisabledAfterRun = if ($Rollback) { @() } else { @($stateList) }
     EnabledOrDefaultAfterRollback = if ($Rollback) { @($stateList) } else { @() }

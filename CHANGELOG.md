@@ -7,6 +7,16 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-11-01
 
+### Changed: Store app background access and device sync are opt-in in the privacy hardening
+
+`Set-Windows11PrivacyHardening.ps1` no longer force-denies `LetAppsRunInBackground` and
+`LetAppsSyncWithDevices` under `HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy` by
+default. Denying every Store app background access and device sync can stop syncing Store apps,
+such as iCloud for Windows, from finishing setup. Pass `-DenyStoreAppBackgroundAccess` to plan
+both as before. `-Rollback` still plans the removal of both, with or without the switch, so a
+machine hardened by an earlier version gets them back to not configured.
+`tests\Set-Windows11PrivacyHardening.Tests.ps1` covers the default, the switch and the rollback.
+
 ### Removed: workstation setup scripts
 
 `scripts\it-operations\workstation-setup\` (`Install-WorkstationBootstrap.ps1`,

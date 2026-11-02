@@ -9,6 +9,9 @@ Instructions:
 - Run from an elevated shell before applying live HKLM, service, or task changes.
 - Backups are written before live registry changes unless -SkipRegistryBackup is used.
 - Use -Rollback to restore policy values to default/not-configured or re-enable user settings.
+- Store app background access and device sync are left alone unless
+  -DenyStoreAppBackgroundAccess is passed, because denying them breaks syncing Store
+  apps such as iCloud for Windows. -Rollback always removes both values.
 - This script is scoped to Windows 11. It exits on older Windows builds unless -SkipWindows11Check is used.
 
 Purpose:
@@ -59,6 +62,9 @@ param(
     [switch]$SkipCurrentUserSettings,
 
     [Parameter()]
+    [switch]$DenyStoreAppBackgroundAccess,
+
+    [Parameter()]
     [switch]$SkipRegistryBackup,
 
     [Parameter()]
@@ -88,6 +94,10 @@ Options:
   -IncludeServices        Disable or roll back selected telemetry services.
   -SkipCurrentUserSettings
                            Do not change HKCU privacy/content-delivery settings.
+  -DenyStoreAppBackgroundAccess
+                           Also force-deny Store app background access and device sync
+                           (LetAppsRunInBackground, LetAppsSyncWithDevices). Off by default
+                           because it breaks syncing Store apps such as iCloud for Windows.
   -SkipRegistryBackup     Do not export registry backup files before live registry changes.
   -SkipWindows11Check     Allow execution on non-Windows 11 builds.
   -Rollback               Restore values to Windows default/not-configured or enabled settings.
@@ -300,6 +310,9 @@ function Get-Windows11PrivacyHardeningPlan {
         [switch]$SkipCurrentUserSettings,
 
         [Parameter()]
+        [switch]$DenyStoreAppBackgroundAccess,
+
+        [Parameter()]
         [switch]$Rollback
     )
 
@@ -330,11 +343,16 @@ function Get-Windows11PrivacyHardeningPlan {
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsGetDiagnosticInfo -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app access to diagnostic information.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsAccessLocation -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app access to location.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsAccessMotion -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app access to motion data.' -Rollback:$Rollback
-    Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsSyncWithDevices -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app sync with unpaired devices.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsAccessTasks -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app access to tasks.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsActivateWithVoice -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app voice activation.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsActivateWithVoiceAboveLock -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app voice activation above lock.' -Rollback:$Rollback
-    Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsRunInBackground -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny Store apps running in the background by policy.' -Rollback:$Rollback
+    # Denying every Store app background access and device sync breaks Store apps that
+    # sync, such as iCloud for Windows, so these two are opt-in. Rollback always plans
+    # them, so a machine hardened before they became opt-in still gets them removed.
+    if ($DenyStoreAppBackgroundAccess -or $Rollback) {
+        Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsSyncWithDevices -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny app sync with unpaired devices.' -Rollback:$Rollback
+        Add-DWordPlanItem -Plan $plan -Category 'AppPrivacy' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name LetAppsRunInBackground -HardenedValue 2 -RollbackDeletesValue -HardenedState 'ForceDenied' -RollbackState 'NotConfigured' -Reason 'Deny Store apps running in the background by policy.' -Rollback:$Rollback
+    }
     Add-DWordPlanItem -Plan $plan -Category 'DeliveryOptimization' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Name DODownloadMode -HardenedValue 0 -RollbackDeletesValue -HardenedState 'HTTPOnly' -RollbackState 'NotConfigured' -Reason 'Disable peer-to-peer Delivery Optimization downloads.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'Feeds' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' -Name EnableFeeds -HardenedValue 0 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable Windows feeds/news and interests policy surface.' -Rollback:$Rollback
     Add-DWordPlanItem -Plan $plan -Category 'CloudClipboard' -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -Name AllowCrossDeviceClipboard -HardenedValue 0 -RollbackDeletesValue -HardenedState 'Disabled' -RollbackState 'NotConfigured' -Reason 'Disable cloud clipboard sync across devices.' -Rollback:$Rollback
@@ -636,7 +654,7 @@ if (-not $SkipWindows11Check -and $buildNumber -lt 22000) {
 }
 
 $operationName = if ($Rollback) { 'rollback' } else { 'hardening' }
-$plan = Get-Windows11PrivacyHardeningPlan -DiagnosticDataLevel $DiagnosticDataLevel -IncludeScheduledTasks:$IncludeScheduledTasks -IncludeServices:$IncludeServices -SkipCurrentUserSettings:$SkipCurrentUserSettings -Rollback:$Rollback
+$plan = Get-Windows11PrivacyHardeningPlan -DiagnosticDataLevel $DiagnosticDataLevel -IncludeScheduledTasks:$IncludeScheduledTasks -IncludeServices:$IncludeServices -SkipCurrentUserSettings:$SkipCurrentUserSettings -DenyStoreAppBackgroundAccess:$DenyStoreAppBackgroundAccess -Rollback:$Rollback
 $planCsvPath = Join-Path $resolvedReportDirectory "windows11-privacy-$operationName-plan-$timestamp.csv"
 $planJsonPath = Join-Path $resolvedReportDirectory "windows11-privacy-$operationName-plan-$timestamp.json"
 $stateCsvPath = Join-Path $resolvedReportDirectory "windows11-privacy-$operationName-state-$timestamp.csv"

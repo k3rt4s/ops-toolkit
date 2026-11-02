@@ -40,6 +40,20 @@ Opt-in, because each can break something:
   -Rollback, does NOT remove it. Undoing a UEFI lock needs Microsoft's opt-out procedure and tool
   (the Device Guard and Credential Guard readiness or opt-out tooling, which asks for physical
   presence at the next boot). Use it only after the default has run cleanly for a while.
+- Credential Guard needs an Enterprise or Education edition. -EnableCredentialGuard reads EditionID
+  from HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion and applies the Credential Guard items
+  (LsaCfgFlags, and the virtualization-based security rows when only Credential Guard needs them)
+  only for Enterprise, EnterpriseN, EnterpriseS, EnterpriseSN, Education or EducationN. On any other
+  edition (Windows 11 Pro is not licensed for it: Credential Guard then fails to start after the
+  restart, LsaSrv event 6147) those rows end "Skipped" with a reason naming the edition and the
+  licensing requirement, and the summary lists the reason. An EditionID that cannot be read ends
+  "Failed", never as a pass. A row whose value is already in place stays "No change".
+- Secure Boot guard: -EnableCredentialGuard and -EnableMemoryIntegrity write
+  RequirePlatformSecurityFeatures (1 or 3), which tells Windows to refuse to start virtualization-
+  based security without Secure Boot. On a machine where Secure Boot is off that would likely stop
+  VBS and memory integrity at the next boot. Secure Boot is read with Confirm-SecureBootUEFI; unless
+  it reads True (unsupported, legacy BIOS, unelevated or throwing all count as not confirmed) that one
+  row ends "Skipped" with the reason. The other VBS and memory integrity rows still plan as before.
 - -RequireDmaProtection: sets the VBS platform requirement to Secure Boot plus DMA protection (3)
   instead of Secure Boot only (1). Machines without an IOMMU will then not start VBS. The VBS rows
   are planned only under -EnableCredentialGuard or -EnableMemoryIntegrity, so -RequireDmaProtection
@@ -166,6 +180,32 @@ function Test-MeetsTarget {
     $false
 }
 
+# Editions licensed for Credential Guard (Microsoft Learn: Enterprise and Education, with N and
+# LTSC variants). Anything else, Windows 11 Pro included, is not.
+$script:CredentialGuardEditions = @('Enterprise', 'EnterpriseN', 'EnterpriseS', 'EnterpriseSN', 'Education', 'EducationN')
+
+# Returns $null when Credential Guard may be applied, otherwise the result text for the item
+# ('Failed: ...' for an unreadable edition, 'Skipped: ...' for an unlicensed one).
+function Get-CredentialGuardEditionBlock {
+    $edition = Get-RegistryState -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'EditionID'
+    if ($edition -isnot [string] -or $edition -in @('absent', 'unknown') -or [string]::IsNullOrWhiteSpace($edition)) {
+        return 'Failed: Windows edition could not be read (EditionID), so Credential Guard licensing cannot be confirmed; it requires an Enterprise or Education edition.'
+    }
+    if ($edition -notin $script:CredentialGuardEditions) {
+        return "Skipped: Windows edition '$edition' is not licensed for Credential Guard, which requires an Enterprise or Education edition."
+    }
+    $null
+}
+
+# Returns 'True', 'False' or 'unknown'. A throw or a non-boolean answer is unknown, never True.
+function Get-SecureBootState {
+    try {
+        $sb = Confirm-SecureBootUEFI -ErrorAction Stop
+        if ($sb -is [bool]) { return "$sb" }
+        'unknown'
+    } catch { 'unknown' }
+}
+
 function Get-RegistryControl {
     param([Parameter(Mandatory = $true)][string]$Id)
     $hit = @($script:RegistryControls | Where-Object { $_.Id -eq $Id })
@@ -179,18 +219,22 @@ function Add-RegistryItem {
         [Parameter(Mandatory = $true)]$Control,
         [Parameter(Mandatory = $true)][int]$Desired,
         [Parameter(Mandatory = $true)][string]$Label,
-        [switch]$LockedSatisfiesUnlocked
+        [switch]$LockedSatisfiesUnlocked,
+        [string]$Precondition = ''
     )
     $Category = $Control.Category
     $Path = $Control.Path
     $Name = $Control.Name
     $current = Get-RegistryState -Path $Path -Name $Name
     $meets = Test-MeetsTarget -Current $current -Desired $Desired -LockedSatisfiesUnlocked:$LockedSatisfiesUnlocked
+    # A precondition only matters for a row that would write; a value already in place stays No change.
+    $blocked = (-not $meets) -and $Precondition
     $Items.Add([pscustomobject]@{
             Category = $Category; Setting = $Name; RegistryPath = $Path
             RequiresAdmin = $true; RequiresReboot = $true
             CurrentValue = $current; DesiredValue = $Desired
-            Action = if ($meets) { "No change ($Name already $current)" } else { "Set $Name = $Desired. $Label" }
+            Action = if ($meets) { "No change ($Name already $current)" } elseif ($blocked) { "Not applied ($Name = $Desired): $($Precondition -replace '^(Skipped|Failed): ', '')" } else { "Set $Name = $Desired. $Label" }
+            Precondition = if ($blocked) { $Precondition } else { '' }
         })
 }
 
@@ -230,11 +274,7 @@ function Get-ReportOnlyItem {
     $rows.Add([pscustomobject]@{ Category = 'Report'; Setting = 'CredentialGuardRunning'; CurrentValue = $cgText })
     $rows.Add([pscustomobject]@{ Category = 'Report'; Setting = 'MemoryIntegrityRunning'; CurrentValue = $hvciText })
 
-    $secureBoot = 'unknown'
-    try {
-        $sb = Confirm-SecureBootUEFI -ErrorAction Stop
-        $secureBoot = if ($sb) { 'enabled' } else { 'disabled' }
-    } catch { $secureBoot = 'unknown' }
+    $secureBoot = switch (Get-SecureBootState) { 'True' { 'enabled' } 'False' { 'disabled' } default { 'unknown' } }
     $rows.Add([pscustomobject]@{ Category = 'Report'; Setting = 'SecureBoot'; CurrentValue = $secureBoot })
 
     $tpmText = 'unknown'
@@ -274,12 +314,27 @@ function Get-ForwardPlan {
     Add-RegistryItem -Items $items -Control (Get-RegistryControl 'NoLMHash') -Desired 1 `
         -Label 'Do not store LM password hashes.'
 
-    if ($script:WantCredentialGuard -or $script:WantMemoryIntegrity) {
+    # Credential Guard needs a licensed edition. An unlicensed or unreadable edition blocks its rows
+    # and stops it counting as a reason to plan the VBS prerequisites.
+    $cgBlock = $null
+    $cgActive = $script:WantCredentialGuard
+    if ($script:WantCredentialGuard) {
+        $cgBlock = Get-CredentialGuardEditionBlock
+        if ($cgBlock) { $cgActive = $false }
+    }
+
+    if ($cgActive -or $script:WantMemoryIntegrity) {
         $platform = if ($script:WantDmaProtection) { 3 } else { 1 }
         Add-RegistryItem -Items $items -Control (Get-RegistryControl 'EnableVirtualizationBasedSecurity') -Desired 1 `
             -Label 'Turn on virtualization-based security.'
+        # RequirePlatformSecurityFeatures makes Windows refuse to start VBS without Secure Boot, so it
+        # is written only when Secure Boot is confirmed on.
+        $sbPrecondition = ''
+        if ((Get-SecureBootState) -ne 'True') {
+            $sbPrecondition = 'Skipped: Secure Boot is not confirmed on (off, unsupported or unreadable); requiring it would likely stop virtualization-based security and memory integrity at the next boot.'
+        }
         Add-RegistryItem -Items $items -Control (Get-RegistryControl 'RequirePlatformSecurityFeatures') -Desired $platform `
-            -Label 'Platform requirement (1 Secure Boot, 3 Secure Boot and DMA protection).'
+            -Label 'Platform requirement (1 Secure Boot, 3 Secure Boot and DMA protection).' -Precondition $sbPrecondition
     }
     if ($script:WantMemoryIntegrity) {
         Add-RegistryItem -Items $items -Control (Get-RegistryControl 'MemoryIntegrity') -Desired 1 `
@@ -289,7 +344,8 @@ function Get-ForwardPlan {
         $cgValue = if ($UefiLock) { 1 } else { 2 }
         $cgNote = if ($UefiLock) { 'WITH UEFI lock: registry rollback cannot remove it.' } else { 'Without UEFI lock. Blocks NTLMv1 and MS-CHAPv2.' }
         Add-RegistryItem -Items $items -Control (Get-RegistryControl 'LsaCfgFlags') -Desired $cgValue `
-            -Label "Turn on Credential Guard. $cgNote" -LockedSatisfiesUnlocked:(-not $UefiLock)
+            -Label "Turn on Credential Guard. $cgNote" -LockedSatisfiesUnlocked:(-not $UefiLock) `
+            -Precondition ([string]$cgBlock)
     }
 
     foreach ($row in @(Get-ReportOnlyItem)) { $items.Add($row) }
@@ -402,6 +458,7 @@ function Invoke-PlanItem {
 
     if ($Item.Category -eq 'Report') { return 'ReportOnly' }
     if ($Item.Action -like 'No change*') { return 'NoChange' }
+    if ($Item.PSObject.Properties['Precondition'] -and -not [string]::IsNullOrEmpty([string]$Item.Precondition)) { return [string]$Item.Precondition }
     if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
     if (-not $PSCmdlet.ShouldProcess("$($Item.RegistryPath)\$($Item.Setting)", $Item.Action)) { return 'Previewed' }
 
@@ -508,6 +565,8 @@ $changedRequiringReboot = @($script:ChangedSettings | Where-Object { $_.Requires
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count
     SkippedCount = @($state | Where-Object { $_.Result -like 'Skipped:*' }).Count
     FailedCount = @($state | Where-Object { $_.Result -like 'Failed:*' }).Count
+    PreconditionNotes = @($state | Where-Object { $_.PSObject.Properties['Precondition'] -and $_.Precondition } |
+            ForEach-Object { "$($_.Setting): $($_.Precondition)" })
     ReportOnlyCount = @($state | Where-Object Result -eq 'ReportOnly').Count
     Items = @($state)
 }

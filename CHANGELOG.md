@@ -5,6 +5,19 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-02
+
+### Fixed: WDAC audit policy apply failed with "The property 'CipPath' cannot be found"
+
+`Set-WdacAuditPolicy.ps1` built the `.cip` but never deployed it. The real
+`Set-CIPolicyIdInfo -ResetPolicyID` writes `PolicyID = {guid}` to the pipeline, and
+`Initialize-AuditPolicyArtifact` returned that string along with the artifact, so the artifact
+became an array and every `.CipPath` read failed under strict mode. The script now discards the
+output of `Set-CIPolicyIdInfo` and both `Set-RuleOption` calls. The test fake for
+`Set-CIPolicyIdInfo` now emits the same string as the real cmdlet, and
+`tests\Integration.StateChanging.HardeningBitLockerWdac.Tests.ps1` checks that both the preview
+and the executing run return one policy artifact.
+
 ## 2026-11-01
 
 ### Changed: Store app background access and device sync are opt-in in the privacy hardening

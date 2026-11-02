@@ -179,9 +179,12 @@ function Initialize-AuditPolicyArtifact {
     $copy = Get-Item -LiteralPath $xmlPath
     if ($copy.IsReadOnly) { $copy.IsReadOnly = $false }
 
-    Set-CIPolicyIdInfo -FilePath $xmlPath -PolicyName $script:PolicyName -ResetPolicyID
-    Set-RuleOption -FilePath $xmlPath -Option 3
-    Set-RuleOption -FilePath $xmlPath -Option 6
+    # Discard what the cmdlets write: Set-CIPolicyIdInfo -ResetPolicyID emits 'PolicyID = {guid}', and
+    # anything left in this function's output turns the artifact into an array whose .CipPath fails
+    # under strict mode. The ID is read back from the XML below.
+    $null = Set-CIPolicyIdInfo -FilePath $xmlPath -PolicyName $script:PolicyName -ResetPolicyID
+    $null = Set-RuleOption -FilePath $xmlPath -Option 3
+    $null = Set-RuleOption -FilePath $xmlPath -Option 6
 
     $doc = New-Object System.Xml.XmlDocument
     $doc.Load($xmlPath)

@@ -11,9 +11,13 @@ Instructions:
 - Reboot after applying changes so Schannel consumers reacquire TLS settings.
 
 Purpose:
-Use this to apply a TLS 1.2-only Windows Schannel baseline that disables legacy
-SSL/TLS protocol versions, sets a hardened cipher suite order, and enables
-strong .NET and WinHTTP TLS defaults.
+Use this to apply the "TLS 1.2 minimum" Windows Schannel baseline: it disables
+legacy SSL/TLS protocol versions (SSL 2.0/3.0, TLS 1.0/1.1), keeps TLS 1.2 and
+TLS 1.3 available, sets a hardened cipher suite order that puts the two TLS 1.3
+suites (TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256) first, and enables
+strong .NET and WinHTTP TLS defaults. WinHTTP DefaultSecureProtocols is set to
+0x2800 (TLS 1.2 plus TLS 1.3). No protocol key is written that disables TLS 1.3,
+and a TLS 1.3 key that already disables it is planned back to enabled.
 
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1 -WhatIf
@@ -32,8 +36,8 @@ Active script kept in the reorganized ops-toolkit repo.
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [Parameter()]
-    [ValidateSet('Tls12Only')]
-    [string]$Baseline = 'Tls12Only',
+    [ValidateSet('Tls12Minimum', 'Tls12Only')]
+    [string]$Baseline = 'Tls12Minimum',
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -67,7 +71,7 @@ Usage:
   pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1
 
 Options:
-  -Baseline                           Baseline to apply. Currently: Tls12Only.
+  -Baseline                           Baseline to apply. Currently: Tls12Minimum ("TLS 1.2 minimum", TLS 1.3 stays on). Tls12Only is the old name for it.
   -ReportDirectory                    Plan and backup output directory.
   -SkipRegistryBackup                 Do not export registry backup files before live changes.
   -SkipCipherSuiteOrder               Do not set the cipher suite order policy registry value.
@@ -192,6 +196,9 @@ function Add-StringPlanItem {
     $Plan.Add((Get-RegistryPlanItem -Category $Category -Path $Path -Name $Name -PropertyType String -DesiredValue $Value -Reason $Reason))
 }
 
+# WinHTTP and Internet Settings protocol mask for TLS 1.2 (0x0800) plus TLS 1.3 (0x2000).
+$script:SecureProtocolsTls12And13 = 0x2800
+
 function Get-CipherSuiteOrder {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     if ([System.Version]$os.Version -lt [System.Version]'10.0') {
@@ -233,7 +240,10 @@ function Get-CipherSuiteOrder {
         )
     }
 
+    # The two TLS 1.3 suites lead the order. Builds without TLS 1.3 ignore suite names they do not know.
     @(
+        'TLS_AES_256_GCM_SHA384',
+        'TLS_AES_128_GCM_SHA256',
         'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
         'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
         'TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384',
@@ -290,9 +300,21 @@ function Get-TlsHardeningPlan {
         Add-DWordPlanItem -Plan $plan -Category 'Protocol' -Path $path -Name DisabledByDefault -Value 0 -Reason "Allow TLS 1.2 by default for $role."
     }
 
+    # TLS 1.3 is part of the baseline. No key is created for it (builds without TLS 1.3 would gain
+    # meaningless keys), but a TLS 1.3 key that already switches it off is planned back on.
+    foreach ($role in @('Client', 'Server')) {
+        $path = Join-Path $protocolRoot "TLS 1.3\$role"
+        if ((Get-RegistryValue -Path $path -Name Enabled) -eq 0) {
+            Add-DWordPlanItem -Plan $plan -Category 'Protocol' -Path $path -Name Enabled -Value 1 -Reason "Re-enable TLS 1.3 for $role, which the TLS 1.2 minimum baseline keeps on."
+        }
+        if ((Get-RegistryValue -Path $path -Name DisabledByDefault) -eq 1) {
+            Add-DWordPlanItem -Plan $plan -Category 'Protocol' -Path $path -Name DisabledByDefault -Value 0 -Reason "Allow TLS 1.3 by default for $role, which the TLS 1.2 minimum baseline keeps on."
+        }
+    }
+
     if (-not $SkipCipherSuiteOrder) {
         $cipherSuitePath = 'HKLM:\SOFTWARE\Policies\Microsoft\Cryptography\Configuration\SSL\00010002'
-        Add-StringPlanItem -Plan $plan -Category 'CipherSuiteOrder' -Path $cipherSuitePath -Name Functions -Value ([string]::Join(',', (Get-CipherSuiteOrder))) -Reason 'Set hardened TLS cipher suite order.'
+        Add-StringPlanItem -Plan $plan -Category 'CipherSuiteOrder' -Path $cipherSuitePath -Name Functions -Value ([string]::Join(',', (Get-CipherSuiteOrder))) -Reason 'Set hardened TLS cipher suite order (TLS 1.3 suites first).'
     }
 
     if (-not $SkipDotNetStrongCrypto) {
@@ -313,12 +335,12 @@ function Get-TlsHardeningPlan {
                 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp',
                 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
             )) {
-            Add-DWordPlanItem -Plan $plan -Category 'WinHttp' -Path $path -Name DefaultSecureProtocols -Value 2048 -Reason 'Set WinHTTP default secure protocol to TLS 1.2.'
+            Add-DWordPlanItem -Plan $plan -Category 'WinHttp' -Path $path -Name DefaultSecureProtocols -Value $script:SecureProtocolsTls12And13 -Reason 'Set WinHTTP default secure protocols to TLS 1.2 and TLS 1.3 (0x2800).'
         }
     }
 
     if ($IncludeCurrentUserInternetSettings) {
-        Add-DWordPlanItem -Plan $plan -Category 'CurrentUserInternetSettings' -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name SecureProtocols -Value 2048 -Reason 'Set current-user Internet Settings secure protocol value to TLS 1.2.'
+        Add-DWordPlanItem -Plan $plan -Category 'CurrentUserInternetSettings' -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name SecureProtocols -Value $script:SecureProtocolsTls12And13 -Reason 'Set current-user Internet Settings secure protocols to TLS 1.2 and TLS 1.3 (0x2800).'
     }
 
     @($plan)
@@ -447,7 +469,9 @@ foreach ($item in $plan) {
 }
 
 [pscustomobject]@{
-    Baseline = $Baseline
+    Baseline = 'Tls12Minimum'
+    BaselineName = 'TLS 1.2 minimum'
+    BaselineRequested = $Baseline
     PlanCsvPath = (Resolve-Path -LiteralPath $planCsvPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     RegistryBackupDirectory = if ($backupDirectory) { (Resolve-Path -LiteralPath $backupDirectory).Path } else { $null }

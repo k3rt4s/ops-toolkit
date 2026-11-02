@@ -48,7 +48,9 @@ Instructions:
   listed in SecurityServicesConfigured but not in SecurityServicesRunning is Drifted (the
   setting is in place and the protection is not, for instance on an edition that is not
   licensed for it, or before the restart), never Compliant. -DeviceGuardSnapshotPath reads
-  those two lists from a JSON file instead of CIM, for tests and offline review.
+  those two lists from a JSON file instead of CIM, for tests and offline review. Credential
+  Guard running is Compliant. Neither configured nor running is ReportOnly (it is opt-in and
+  not required by the baseline), so it is not counted as drift.
 - Generated reports are written under reports\windows-hardening by default.
 - What a run leaves in its run folder: one plan-<Target> folder per target holding the
   child process log (plan-run.log, plan-run.log.err) and the plan and state CSV/JSON of
@@ -338,7 +340,9 @@ function Get-CredentialGuardState {
     if ($isConfigured) {
         return [pscustomobject]@{ State = 'Drifted'; CurrentValue = $current; Reason = 'Credential Guard is configured but not running (the edition may not be licensed for it, or a restart or a hardware prerequisite is missing).' }
     }
-    [pscustomobject]@{ State = 'NotConfigured'; CurrentValue = $current; Reason = 'Credential Guard is neither configured nor running.' }
+    # Opt-in and not required by the baseline (the credential script refuses it on editions that cannot
+    # run it), so a machine without it is reported, not counted as drift.
+    [pscustomobject]@{ State = 'ReportOnly'; CurrentValue = $current; Reason = 'Credential Guard is not configured; it is opt-in and not required by the baseline.' }
 }
 
 function ConvertTo-HardeningComplianceRecord {

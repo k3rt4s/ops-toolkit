@@ -577,8 +577,8 @@ Describe 'Test-WindowsHardeningState Credential Guard' {
         function Get-GuardRecord { param($Run) @($Run.Records | Where-Object Category -eq 'CredentialGuard') }
 
         $script:cgConfiguredNotRunning = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1],"SecurityServicesRunning":[]}' -FailOnDrift
-        $script:cgRunning = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1,2],"SecurityServicesRunning":[1,2]}'
-        $script:cgNone = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[],"SecurityServicesRunning":[]}'
+        $script:cgRunning = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1,2],"SecurityServicesRunning":[1,2]}' -FailOnDrift
+        $script:cgNone = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[],"SecurityServicesRunning":[]}' -FailOnDrift
         $script:cgOnlyHvci = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1,2],"SecurityServicesRunning":[2]}'
         $script:cgNoProps = Invoke-CredentialGuardChecker -SnapshotJson '{"Other":1}'
         $script:cgUnreadable = Invoke-CredentialGuardChecker -SnapshotJson ''
@@ -590,7 +590,10 @@ Describe 'Test-WindowsHardeningState Credential Guard' {
         $record[0].State | Should -Be 'Drifted'
         $record[0].Reason | Should -Match 'configured but not running'
         $record[0].CurrentValue | Should -Be 'SecurityServicesConfigured=1;SecurityServicesRunning='
-        $script:cgConfiguredNotRunning.ExitCode | Should -Be 1
+        # Drift attributable to this record, not to whatever else the machine's LSA settings show.
+        @($script:cgConfiguredNotRunning.Records | Where-Object { $_.Category -eq 'CredentialGuard' -and $_.State -eq 'Drifted' }).Count | Should -Be 1
+        $script:cgConfiguredNotRunning.Summary.TotalDrift | Should -Be ($script:cgRunning.Summary.TotalDrift + 1)
+        $script:cgConfiguredNotRunning.Summary.Passed | Should -BeFalse
     }
 
     It 'treats configured with only memory integrity running as drifted too' {
@@ -603,8 +606,18 @@ Describe 'Test-WindowsHardeningState Credential Guard' {
         $record[0].State | Should -Be 'Compliant'
     }
 
-    It 'is not configured when it is neither configured nor running' {
-        (Get-GuardRecord -Run $script:cgNone)[0].State | Should -Be 'NotConfigured'
+    It 'reports neither configured nor running as ReportOnly and counts no drift for it' {
+        $record = Get-GuardRecord -Run $script:cgNone
+        $record.Count | Should -Be 1
+        $record[0].State | Should -Be 'ReportOnly'
+        $record[0].Reason | Should -Match 'opt-in'
+        # Same drift, same verdict and same exit as the run where Credential Guard is running, whatever
+        # else this machine's own settings contribute: the record adds nothing to the drift total.
+        $script:cgNone.Summary.TotalDrift | Should -Be $script:cgRunning.Summary.TotalDrift
+        $script:cgNone.Summary.NotConfiguredCount | Should -Be $script:cgRunning.Summary.NotConfiguredCount
+        $script:cgNone.Summary.Passed | Should -Be $script:cgRunning.Summary.Passed
+        $script:cgNone.ExitCode | Should -Be $script:cgRunning.ExitCode
+        $script:cgNone.Summary.ReportOnlyCount | Should -Be ($script:cgRunning.Summary.ReportOnlyCount + 1)
     }
 
     It 'is unread, not compliant, when the lists are missing or the source cannot be read' {

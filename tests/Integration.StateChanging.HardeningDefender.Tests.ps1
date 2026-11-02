@@ -147,11 +147,13 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
             param([string]$Tag, [hashtable]$State = @{})
             $report = Join-Path $script:workRoot $Tag
             $log = Join-Path $script:workRoot "$Tag.log"
-            $names = @('OPSTOOLKIT_TEST_MP_EXCLUSIONPATH', 'OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS', 'PSModulePath') + @($State.Keys | ForEach-Object { "OPSTOOLKIT_TEST_MP_$_" })
+            $mutationLog = Join-Path $script:workRoot "$Tag.mutations.log"
+            $names = @('OPSTOOLKIT_TEST_MUTATION_LOG', 'OPSTOOLKIT_TEST_MP_EXCLUSIONPATH', 'OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS', 'PSModulePath') + @($State.Keys | ForEach-Object { "OPSTOOLKIT_TEST_MP_$_" })
             $saved = @{}
             foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
             try {
                 [Environment]::SetEnvironmentVariable('PSModulePath', "$script:systemModulePath;$($saved['PSModulePath'])")
+                [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MUTATION_LOG', $mutationLog)
                 [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MP_EXCLUSIONPATH', '')
                 [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS', '')
                 foreach ($key in $State.Keys) { [Environment]::SetEnvironmentVariable("OPSTOOLKIT_TEST_MP_$key", [string]$State[$key]) }
@@ -162,9 +164,12 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
                 foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
             }
             $planFile = Get-ChildItem -LiteralPath $report -Filter 'defender-hardening-apply-plan-*.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            $stateFile = Get-ChildItem -LiteralPath $report -Filter 'defender-hardening-apply-state-*.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
             [pscustomobject]@{
                 ExitCode = $process.ExitCode
                 Log = $log
+                MutationLog = $mutationLog
+                State = $(if ($stateFile) { @(Get-Content -LiteralPath $stateFile.FullName -Raw | ConvertFrom-Json) } else { @() })
                 Items = $(if ($planFile) { @(Get-Content -LiteralPath $planFile.FullName -Raw | ConvertFrom-Json) } else { @() })
             }
         }
@@ -193,6 +198,17 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
         ($script:wi.Items | Where-Object Setting -eq 'MAPSReporting').DesiredValue | Should -Be 2
         ($script:wi.Items | Where-Object Setting -eq 'PUAProtection').Action | Should -Match 'No change|already'
         ($script:wi.Items | Where-Object Setting -eq 'EnableControlledFolderAccess').Action | Should -Match '^Set'
+    }
+
+    It 'stays a preview: the state records Previewed and the Defender commands attempted nothing' {
+        $script:wi.State.Count | Should -BeGreaterThan 14
+        # Elevated, a setting that would change is Previewed; unelevated it is skipped before the preview
+        # is reached. Either way nothing is Applied, Reverted or Failed.
+        $changing = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        @($script:wi.State | Where-Object { "$($_.Result)" -eq $changing }).Count | Should -BeGreaterThan 0
+        @($script:wi.State | Where-Object { "$($_.Result)" -notin @($changing, 'NoChange', 'ReportOnly') }).Count | Should -Be 0
+        # Assert-OpsNoChangeUnderWhatIf takes the pair shape the runner returns; this run has the same two fields.
+        Assert-OpsNoChangeUnderWhatIf -Pair ([pscustomobject]@{ WhatIf = [pscustomobject]@{ ExitCode = $script:wi.ExitCode; Output = '' }; WhatIfLog = $script:wi.MutationLog })
     }
 
     It 'leaves no unknown current value among the Defender settings it plans' {

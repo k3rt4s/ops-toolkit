@@ -580,6 +580,18 @@ function CiTool.exe {
         $script:wdac.Execute.ExitCode | Should -Be 0 -Because "the executing run failed: $($script:wdac.Execute.Output)"
     }
 
+    It 'builds one policy artifact although Set-CIPolicyIdInfo writes the new policy ID to the pipeline' {
+        # The real cmdlet emits 'PolicyID = {guid}'. Left in the output, it made the artifact an array
+        # and every .CipPath read failed under strict mode ("The property 'CipPath' cannot be found").
+        foreach ($run in $script:wdac.WhatIf, $script:wdac.Execute) {
+            $run.Output | Should -Not -Match "property 'CipPath' cannot be found"
+            @($run.Summary.PolicyBinaryPath).Count | Should -Be 1
+            $run.Summary.PolicyBinaryPath | Should -BeOfType [string]
+            $run.Summary.PolicyBinaryPath | Should -Match '\.cip$'
+            @($run.Summary.PolicyId).Count | Should -Be 1
+        }
+    }
+
     It 'deploys nothing under -WhatIf (authoring the policy files is plan work and is allowed)' {
         Assert-OpsNoChangeUnderWhatIf -Pair $script:wdac -IgnoreCommand 'Set-CIPolicyIdInfo', 'Set-RuleOption', 'ConvertFrom-CIPolicy'
         @(Get-OpsMutationRecord -Path $script:wdac.WhatIfLog | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0

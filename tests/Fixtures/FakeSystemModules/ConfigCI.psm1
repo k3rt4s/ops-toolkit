@@ -51,6 +51,9 @@ function Set-CIPolicyIdInfo {
     }
     $xml.Save($FilePath)
     Write-FakeCiMutation -Command 'Set-CIPolicyIdInfo' -Target $FilePath -Detail "name=$PolicyName;reset=$([bool]$ResetPolicyID)"
+    # The real cmdlet writes the new ID to the pipeline as one string (checked on Windows PowerShell
+    # 5.1, 2026-11-02), so a caller that does not discard it returns that string as well.
+    if ($ResetPolicyID) { "PolicyID = $newId" }
 }
 
 function Set-RuleOption {

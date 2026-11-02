@@ -649,6 +649,18 @@ function Get-RunStateList {
     }
 }
 
+# The state rows that took effect: a refused item stays in the state list as Failed but is not
+# reported as disabled or restored.
+function Get-SucceededStateList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$StateList
+    )
+
+    @($StateList | Where-Object { "$($_.Result)" -notlike 'Failed:*' })
+}
+
 # Runs every planned item in its own try/catch so one refused write (a protected policy key, a driver
 # that blocks the value) is recorded as Failed with its message and the run goes on to the next item.
 function Invoke-HardeningPlan {
@@ -769,7 +781,8 @@ Write-Information "Windows 11 privacy $operationName state list JSON written to 
     SkippedCount = $skippedCount
     FailedCount = $failedCount
     RestartRequired = $true
-    DisabledAfterRun = if ($Rollback) { @() } else { @($stateList) }
-    EnabledOrDefaultAfterRollback = if ($Rollback) { @($stateList) } else { @() }
+    DisabledAfterRun = if ($Rollback) { @() } else { @(Get-SucceededStateList -StateList $stateList) }
+    EnabledOrDefaultAfterRollback = if ($Rollback) { @(Get-SucceededStateList -StateList $stateList) } else { @() }
+    FailedItems = @($stateList | Where-Object { "$($_.Result)" -like 'Failed:*' })
     Notes = if ($Rollback) { 'Review reports before rollback. Sign out/in or reboot after applying live rollback changes.' } else { 'Review reports before live runs. Sign out/in or reboot after applying live privacy hardening changes.' }
 }

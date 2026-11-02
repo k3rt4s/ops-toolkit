@@ -97,6 +97,16 @@ Describe 'Invoke-HardeningPlan per-item failure handling' {
         $rows[1].Reason | Should -Be 'test'
     }
 
+    It 'leaves a failed item out of the list of items reported as disabled or restored' {
+        $result = Invoke-HardeningPlan -Plan $script:plan -Preview $false 3>$null
+        $rows = @(Get-RunStateList -Plan $script:plan -Statuses $result.Statuses)
+        $ok = @(Get-SucceededStateList -StateList $rows)
+
+        $ok.Count | Should -Be 3
+        @($ok | Where-Object { $_.Target -eq $script:plan[1].Target }).Count | Should -Be 0
+        @($ok | Where-Object { $_.Result -like 'Failed:*' }).Count | Should -Be 0
+    }
+
     It 'reports no failure and writes nothing on a preview' {
         $result = Invoke-HardeningPlan -Plan $script:plan -Preview $true
         Should -Invoke -ModuleName $script:moduleName New-ItemProperty -Exactly -Times 0

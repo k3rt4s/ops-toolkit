@@ -140,6 +140,79 @@ Describe 'Set-WindowsSchannelTlsHardening' {
         $schannel.Count | Should -BeGreaterThan 0
         ($schannel | ForEach-Object { $_.Target }) -join ' ' | Should -Match 'TLS 1\.2'
     }
+
+    Context 'TLS 1.2 minimum baseline keeps TLS 1.3' {
+        BeforeAll {
+            # No -Baseline argument: the default baseline is the one that must keep TLS 1.3.
+            $script:tlsDefault = Invoke-WindowsScriptPair -Tag 'tls13' `
+                -RelativePath 'scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1' `
+                -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'tls13'); IncludeCurrentUserInternetSettings = $true }
+            $script:tlsPlan = @(Get-Content -LiteralPath $script:tlsDefault.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        }
+
+        It 'is named "TLS 1.2 minimum" in the output, and still accepts the old Tls12Only name' {
+            $script:tlsDefault.WhatIf.ExitCode | Should -Be 0 -Because $script:tlsDefault.WhatIf.Output
+            $script:tlsDefault.WhatIf.Summary.Baseline | Should -Be 'Tls12Minimum'
+            $script:tlsDefault.WhatIf.Summary.BaselineName | Should -Be 'TLS 1.2 minimum'
+            $script:tls.WhatIf.ExitCode | Should -Be 0 -Because 'the old -Baseline Tls12Only must still be accepted'
+            $script:tls.WhatIf.Summary.Baseline | Should -Be 'Tls12Minimum'
+            $script:tls.WhatIf.Summary.BaselineRequested | Should -Be 'Tls12Only'
+        }
+
+        It 'puts the two TLS 1.3 cipher suites first, ahead of the TLS 1.2 ECDHE suites' {
+            $order = @($script:tlsPlan | Where-Object { $_.Category -eq 'CipherSuiteOrder' -and $_.ValueName -eq 'Functions' })
+            $order.Count | Should -Be 1
+            $suites = @("$($order[0].DesiredValue)" -split ',')
+            $suites[0] | Should -Be 'TLS_AES_256_GCM_SHA384'
+            $suites[1] | Should -Be 'TLS_AES_128_GCM_SHA256'
+            $suites[2] | Should -Be 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384'
+        }
+
+        It 'sets WinHTTP DefaultSecureProtocols and the Internet Settings value to 0x2800, never 2048' {
+            $winHttp = @($script:tlsPlan | Where-Object { $_.Category -eq 'WinHttp' })
+            $winHttp.Count | Should -BeGreaterThan 0
+            foreach ($item in $winHttp) { [int]$item.DesiredValue | Should -Be 0x2800 -Because $item.RegistryPath }
+            $user = @($script:tlsPlan | Where-Object { $_.Category -eq 'CurrentUserInternetSettings' })
+            $user.Count | Should -Be 1
+            [int]$user[0].DesiredValue | Should -Be 0x2800
+            @($script:tlsPlan | Where-Object { $_.ValueName -in @('DefaultSecureProtocols', 'SecureProtocols') -and [int]$_.DesiredValue -eq 2048 }).Count | Should -Be 0
+        }
+
+        It 'plans no protocol key that disables TLS 1.3' {
+            $tls13 = @($script:tlsPlan | Where-Object { $_.RegistryPath -like '*Protocols\TLS 1.3*' })
+            foreach ($item in $tls13) {
+                $disables = ($item.ValueName -eq 'Enabled' -and [int]$item.DesiredValue -eq 0) -or ($item.ValueName -eq 'DisabledByDefault' -and [int]$item.DesiredValue -eq 1)
+                $disables | Should -BeFalse -Because "$($item.RegistryPath)\$($item.ValueName)"
+            }
+            # The legacy protocols are still disabled.
+            @($script:tlsPlan | Where-Object { $_.RegistryPath -like '*Protocols\TLS 1.0\*' -and $_.ValueName -eq 'Enabled' -and [int]$_.DesiredValue -eq 0 }).Count | Should -Be 2
+        }
+
+        It 'plans a TLS 1.3 key that already disables TLS 1.3 back to enabled' {
+            # A copy of the script that sees TLS 1.3 switched off in the registry, so the
+            # re-enable path runs without touching the real registry.
+            $source = Join-Path (Get-RepositoryRoot) 'scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1'
+            $text = Get-Content -LiteralPath $source -Raw
+            $anchor = "    if (-not (Test-Path -LiteralPath `$Path)) {`r`n        return `$null`r`n    }"
+            if (-not $text.Contains($anchor)) { $anchor = $anchor.Replace("`r`n", "`n") }
+            $text.Contains($anchor) | Should -BeTrue -Because 'the registry read this copy overrides must still exist'
+            $fake = "    if (`$Path -like '*Protocols\TLS 1.3*') { if (`$Name -eq 'Enabled') { return 0 } else { return 1 } }`n"
+            $copy = Join-Path $script:workRoot 'tls-13-off-copy.ps1'
+            Set-Content -LiteralPath $copy -Value $text.Replace($anchor, $fake + $anchor) -Encoding utf8
+            $pair = Invoke-WindowsScriptPair -Tag 'tls13off' -RelativePath ([System.IO.Path]::GetRelativePath((Get-RepositoryRoot), $copy)) `
+                -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'tls13off') }
+            $run = $pair.WhatIf
+            $run.ExitCode | Should -Be 0 -Because $run.Output
+            $plan = @(Get-Content -LiteralPath $run.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+            $fixes = @($plan | Where-Object { $_.RegistryPath -like '*Protocols\TLS 1.3\*' })
+            $fixes.Count | Should -Be 4
+            foreach ($item in $fixes) {
+                $want = if ($item.ValueName -eq 'Enabled') { 1 } else { 0 }
+                [int]$item.DesiredValue | Should -Be $want -Because "$($item.RegistryPath)\$($item.ValueName)"
+                $item.Action | Should -Be 'SetValue'
+            }
+        }
+    }
 }
 
 Describe 'Set-Windows11PrivacyHardening' {
@@ -345,6 +418,141 @@ Describe 'Remove-WindowsProvisionedBloatwareApps' {
         foreach ($name in $protected) {
             $removed | Should -Not -Contain $name -Because "$name is on the protected list"
         }
+    }
+}
+
+Describe 'Remove-WindowsProvisionedBloatwareApps provisioned packages through dism.exe' {
+    BeforeAll {
+        # The provisioned inventory and removals go through a stand-in dism.exe (Dism.psm1,
+        # Write-FakeDismExecutable); -DismPath defaults to it for the script a run launches, so the
+        # real dism.exe is never started.
+        Import-Module (Join-Path $PSScriptRoot 'Fixtures\FakeSystemModules\Dism.psm1') -Function Write-FakeDismExecutable
+        $script:fakeDism = Write-FakeDismExecutable -Directory (Join-Path $script:workRoot 'fake-dism-appx')
+        $script:appxList = 'Microsoft.BingNews|Microsoft.BingNews_4.0.0.0_neutral_~_8wekyb3d8bbwe|4.0.0.0;Microsoft.MicrosoftSolitaireCollection|Microsoft.MicrosoftSolitaireCollection_4.1.0.0_neutral_~_8wekyb3d8bbwe|4.1.0.0;Clipchamp.Clipchamp|Clipchamp.Clipchamp_2.0.0.0_neutral_~_yxz26nhyzhsrt|2.0.0.0'
+        $script:appxSetup = @"
+
+`$env:OPSTOOLKIT_TEST_APPX = '$($script:appxList)'
+`$PSDefaultParameterValues['*:DismPath'] = '$($script:fakeDism)'
+"@
+        $script:appxBase = @{ ReportDirectory = (Join-Path $script:workRoot 'appx-dism'); SkipWindows11Check = $true; RemoveProvisionedPackages = $true; InstalledPackageScope = 'None' }
+        $script:plain = Invoke-WindowsScriptPair -Tag 'appx-dism' -ExtraSetup $script:appxSetup `
+            -RelativePath 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
+            -Argument $script:appxBase
+        $excluded = $script:appxBase.Clone()
+        $excluded.ReportDirectory = Join-Path $script:workRoot 'appx-excl'
+        $excluded.ExcludePackage = @('Microsoft.BingNews', '*Solitaire*')
+        $script:excl = Invoke-WindowsScriptPair -Tag 'appx-excl' -ExtraSetup $script:appxSetup `
+            -RelativePath 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
+            -Argument $excluded
+    }
+
+    It 'reads the provisioned inventory from dism and plans each listed package for removal' {
+        $script:plain.WhatIf.ExitCode | Should -Be 0 -Because $script:plain.WhatIf.Output
+        $s = $script:plain.WhatIf.Summary
+        $s.InventoryCount | Should -Be 3
+        $s.PlannedRemovalCount | Should -Be 3
+        $s.ExcludedCount | Should -Be 0
+    }
+
+    It 'removes nothing under -WhatIf' {
+        Assert-NoChangeUnderWhatIf -Pair $script:plain
+        Assert-NoChangeUnderWhatIf -Pair $script:excl
+    }
+
+    It 'reports an excluded package as Skipped with the reason "excluded by operator", never dropping it' {
+        $script:excl.WhatIf.ExitCode | Should -Be 0 -Because $script:excl.WhatIf.Output
+        $s = $script:excl.WhatIf.Summary
+        $s.InventoryCount | Should -Be 3
+        $s.ExcludedCount | Should -Be 2
+        $s.PlannedRemovalCount | Should -Be 1
+        $state = @(Import-Csv -LiteralPath $s.StateCsvPath)
+        $state.Count | Should -Be 3 -Because 'every inventory item stays in the state report'
+        foreach ($name in 'Microsoft.BingNews', 'Microsoft.MicrosoftSolitaireCollection') {
+            $row = @($state | Where-Object DisplayName -eq $name)
+            $row.Count | Should -Be 1 -Because $name
+            $row[0].Action | Should -Be 'Excluded'
+            $row[0].Reason | Should -Be 'excluded by operator'
+            $row[0].Result | Should -Be 'Skipped'
+        }
+        $keep = @($state | Where-Object DisplayName -eq 'Clipchamp.Clipchamp')
+        $keep[0].Action | Should -Be 'RemoveProvisionedPackage'
+        $keep[0].Result | Should -Be 'Previewed'
+    }
+
+    It 'matches an exclusion against the package name as well as the display name' {
+        $run = Invoke-WindowsScriptPair -Tag 'appx-excl-pkg' -ExtraSetup $script:appxSetup `
+            -RelativePath 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
+            -Argument @{
+            ReportDirectory = (Join-Path $script:workRoot 'appx-excl-pkg'); SkipWindows11Check = $true
+            RemoveProvisionedPackages = $true; InstalledPackageScope = 'None'
+            ExcludePackage = @('Clipchamp.Clipchamp_2.0.0.0_neutral_*')
+        }
+        $run.WhatIf.ExitCode | Should -Be 0 -Because $run.WhatIf.Output
+        $run.WhatIf.Summary.ExcludedCount | Should -Be 1
+        @($run.WhatIf.Summary.ExcludedItems)[0].DisplayName | Should -Be 'Clipchamp.Clipchamp'
+    }
+
+    It 'does not remove an excluded package when executing elevated' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'requires an elevated session'; return }
+        $removed = @(Get-MutationRecord -Path $script:excl.ExecuteLog | Where-Object { $_.Command -eq 'Dism.exe' } | ForEach-Object { $_.Target })
+        $removed | Should -Contain 'Clipchamp.Clipchamp_2.0.0.0_neutral_~_yxz26nhyzhsrt'
+        @($removed | Where-Object { $_ -like '*BingNews*' -or $_ -like '*Solitaire*' }).Count | Should -Be 0
+    }
+
+    It 'stops a dism inventory that outlives -DismTimeoutSeconds, by its own PID, and fails the run' {
+        $log = Join-Path $script:workRoot 'appx-hang-calls.jsonl'
+        $setup = $script:appxSetup + "`n`$env:OPSTOOLKIT_TEST_DISM_HANG = 'Get-ProvisionedAppxPackages'`n`$env:OPSTOOLKIT_TEST_DISM_LOG = '$log'`n"
+        $run = Invoke-WindowsScriptPair -Tag 'appx-hang' -ExtraSetup $setup `
+            -RelativePath 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1' `
+            -Argument @{
+            ReportDirectory = (Join-Path $script:workRoot 'appx-hang'); SkipWindows11Check = $true
+            RemoveProvisionedPackages = $true; InstalledPackageScope = 'None'; DismTimeoutSeconds = 3
+        }
+        $run.WhatIf.ExitCode | Should -Not -Be 0
+        $run.WhatIf.Output | Should -Match 'did not finish within 3 seconds'
+        $call = @(Get-Content -LiteralPath $log | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object Verb -eq 'Get-ProvisionedAppxPackages')
+        $call.Count | Should -BeGreaterThan 0
+        Get-Process -Id $call[0].ProcessId -ErrorAction SilentlyContinue | Should -BeNullOrEmpty -Because 'the timed-out dism process must be killed'
+    }
+
+    It 'removes only the unexcluded package through dism /Remove-ProvisionedAppxPackage in an elevated-looking copy, and records a failed removal as Failed' {
+        # A copy of the script that reports itself elevated so the executing half runs in an
+        # unelevated session. Every removal goes to the stand-in dism, so nothing real is changed.
+        $source = Join-Path (Get-RepositoryRoot) 'scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1'
+        $text = Get-Content -LiteralPath $source -Raw
+        $check = '$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+        $text.Contains($check) | Should -BeTrue -Because 'the elevation check this copy replaces must still exist'
+        $copy = Join-Path $script:workRoot 'appx-elevated-copy.ps1'
+        Set-Content -LiteralPath $copy -Value $text.Replace($check, '$true') -Encoding utf8
+        $relative = [System.IO.Path]::GetRelativePath((Get-RepositoryRoot), $copy)
+        $data = Join-Path (Get-RepositoryRoot) 'data\windows-hardening'
+        $arguments = {
+            param($Report, $Extra)
+            $h = @{
+                ReportDirectory = (Join-Path $script:workRoot $Report); SkipWindows11Check = $true
+                RemoveProvisionedPackages = $true; InstalledPackageScope = 'None'
+                RemoveListPath = (Join-Path $data 'windows11-appx-remove.txt')
+                ProtectedListPath = (Join-Path $data 'windows11-appx-protected.txt')
+                ExcludePackage = @('Microsoft.BingNews', '*Solitaire*')
+            }
+            foreach ($k in $Extra.Keys) { $h[$k] = $Extra[$k] }
+            $h
+        }
+
+        $run = Invoke-WindowsScriptPair -Tag 'appx-elevated' -ExtraSetup $script:appxSetup -RelativePath $relative -Argument (& $arguments 'appx-elevated' @{})
+        $run.Execute.ExitCode | Should -Be 0 -Because $run.Execute.Output
+        $removed = @(Get-MutationRecord -Path $run.ExecuteLog | Where-Object { $_.Command -eq 'Dism.exe' } | ForEach-Object { $_.Target })
+        $removed | Should -Be @('Clipchamp.Clipchamp_2.0.0.0_neutral_~_yxz26nhyzhsrt')
+        $row = @(Import-Csv -LiteralPath $run.Execute.Summary.StateCsvPath | Where-Object DisplayName -eq 'Clipchamp.Clipchamp')
+        $row[0].Result | Should -Be 'Removed'
+        $run.Execute.Summary.ExcludedCount | Should -Be 2
+        Assert-NoChangeUnderWhatIf -Pair $run
+
+        $failSetup = $script:appxSetup + "`n`$env:OPSTOOLKIT_TEST_DISM_FAIL = 'Clipchamp'`n"
+        $failed = Invoke-WindowsScriptPair -Tag 'appx-elevated-fail' -ExtraSetup $failSetup -RelativePath $relative -Argument (& $arguments 'appx-elevated-fail' @{})
+        $failed.Execute.ExitCode | Should -Be 0 -Because $failed.Execute.Output
+        $failed.Execute.Summary.FailedCount | Should -Be 1
+        $failed.Execute.Summary.RemovedCount | Should -Be 0
     }
 }
 

@@ -19,11 +19,18 @@ BeforeAll {
     $script:systemModulePath = Use-FakeSystemModule
     $script:relativePath = 'scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1'
 
+    # Under pwsh 7 the script reads and changes optional features through dism.exe, so every run
+    # below is pointed at a stand-in executable (Dism.psm1, Write-FakeDismExecutable). The real
+    # dism.exe is never started: Get-FixtureEnvironment makes -DismPath default to the stand-in for
+    # any script a run launches, and the 'stand-in' test proves that default is the one in force.
+    Import-Module (Join-Path $PSScriptRoot 'Fixtures\FakeSystemModules\Dism.psm1') -Function Write-FakeDismExecutable
+    $script:fakeDism = Write-FakeDismExecutable -Directory (Join-Path $script:workRoot 'fake-dism')
+
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
     function Get-FixtureEnvironment {
-        param([string]$Smb1 = 'false', [string]$Features = '', [string]$Unreadable = 'false')
+        param([string]$Smb1 = 'false', [string]$Features = '', [string]$Unreadable = 'false', [string]$Extra = '')
         @"
 
 `$env:OPSTOOLKIT_TEST_TASKS = ''
@@ -34,7 +41,14 @@ BeforeAll {
 `$env:OPSTOOLKIT_TEST_SMB_UNREADABLE = '$Unreadable'
 `$env:OPSTOOLKIT_TEST_OPTFEATURES = '$Features'
 `$env:OPSTOOLKIT_TEST_OPTFEATURES_UNREADABLE = '$Unreadable'
+`$PSDefaultParameterValues['*:DismPath'] = '$($script:fakeDism)'
+$Extra
 "@
+    }
+
+    function Get-DismChange {
+        param($Record, [string]$Verb)
+        @($Record | Where-Object { $_.Command -eq 'Dism.exe' -and $_.Detail -eq "/$Verb" })
     }
 
     function Get-PlanItem {
@@ -111,7 +125,7 @@ Describe 'Set-WindowsNetworkProtocolHardening with SMB1 and features enabled' {
         $smb = @($m | Where-Object Command -eq 'Set-SmbServerConfiguration')
         $smb.Count | Should -Be 1
         $smb[0].Detail | Should -Be 'EnableSMB1Protocol=False'
-        $feat = @($m | Where-Object Command -eq 'Disable-WindowsOptionalFeature' | ForEach-Object { $_.Target })
+        $feat = @(Get-DismChange -Record $m -Verb 'Disable-Feature' | ForEach-Object { $_.Target })
         $feat | Should -Contain 'SMB1Protocol'
         $feat | Should -Contain 'MicrosoftWindowsPowerShellV2Root'
         @($m | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like '*EnableMulticast' }).Count | Should -Be 1
@@ -150,7 +164,7 @@ Describe 'Set-WindowsNetworkProtocolHardening when already hardened or absent' {
         }
         @($items | Where-Object Setting -eq 'MicrosoftWindowsPowerShellV2Root')[0].CurrentValue | Should -Be 'absent'
         $m = @(Get-OpsMutationRecord -Path $script:off.ExecuteLog)
-        @($m | Where-Object { $_.Command -in @('Set-SmbServerConfiguration', 'Disable-WindowsOptionalFeature') }).Count | Should -Be 0
+        @($m | Where-Object { $_.Command -in @('Set-SmbServerConfiguration', 'Dism.exe') }).Count | Should -Be 0
     }
 
     It 'leaves out the SMB signing items under -SkipSmbSigning and out of the opt-in mDNS item by default' {
@@ -186,7 +200,7 @@ Describe 'Set-WindowsNetworkProtocolHardening when state cannot be read' {
         $smb[0].Action | Should -BeLike 'Unreadable*'
         @($plan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.CurrentValue -ne 'unknown' }).Count | Should -Be 0
         @($script:unk.Execute.Summary.Items | Where-Object { $_.Category -in @('Smb1Server', 'Smb1Feature') -and $_.Result -eq 'NoChange' }).Count | Should -Be 0
-        @(Get-OpsMutationRecord -Path $script:unk.ExecuteLog | Where-Object { $_.Command -in @('Set-SmbServerConfiguration', 'Disable-WindowsOptionalFeature') }).Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $script:unk.ExecuteLog | Where-Object { $_.Command -in @('Set-SmbServerConfiguration', 'Dism.exe') }).Count | Should -Be 0
     }
 }
 
@@ -231,7 +245,7 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback' {
         if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'session is not elevated; the plan assertions above still ran'; return }
         $m = @(Get-OpsMutationRecord -Path $script:rb.ExecuteLog)
         @($m | Where-Object Command -eq 'Set-SmbServerConfiguration')[0].Detail | Should -Be 'EnableSMB1Protocol=True'
-        @($m | Where-Object Command -eq 'Enable-WindowsOptionalFeature')[0].Target | Should -Be 'SMB1Protocol'
+        @(Get-DismChange -Record $m -Verb 'Enable-Feature')[0].Target | Should -Be 'SMB1Protocol'
         @($m | Where-Object { $_.Command -eq 'Remove-ItemProperty' -and $_.Target -like '*EnableMulticast' }).Count | Should -Be 1
         $nb = @($m | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like '*Tcpip_{test-rollback}*NetbiosOptions' })
         $nb[0].Detail | Should -Be '1'
@@ -506,7 +520,7 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
         @($r.Run.Summary.Items | ForEach-Object { $_.Result }) | Should -Be @('Reverted', 'Reverted', 'Reverted')
         $m = @(Get-OpsMutationRecord -Path $r.Log)
         @($m | Where-Object Command -eq 'Set-SmbServerConfiguration').Count | Should -Be 1
-        @($m | Where-Object Command -eq 'Enable-WindowsOptionalFeature').Count | Should -Be 1
+        @(Get-DismChange -Record $m -Verb 'Enable-Feature').Count | Should -Be 1
         @($m | Where-Object Command -eq 'Remove-ItemProperty').Count | Should -Be 1
         Test-Path -LiteralPath $file | Should -BeFalse -Because 'the used file is renamed'
         $r.Run.Summary.RollbackConsumedPath | Should -Match 'network-protocol-hardening-rollback-20260101_000000\.consumed-\d{8}_\d{6}\.json$'
@@ -635,19 +649,145 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
         Test-Path -LiteralPath $rb1.Run.Summary.RollbackConsumedPath | Should -BeTrue
         Test-Path -LiteralPath $apply2.Summary.RollbackJsonPath | Should -BeFalse -Because 'the used file is renamed'
         $rb1.Run.Summary.RollbackConsumedPath | Should -Match 'rollback-\d{8}_\d{6}\.consumed-\d{8}_\d{6}\.json$'
-        @(Get-OpsMutationRecord -Path $rb1.Log | Where-Object { $_.Command -eq 'Enable-WindowsOptionalFeature' } | ForEach-Object { $_.Target }) |
+        @(Get-DismChange -Record (Get-OpsMutationRecord -Path $rb1.Log) -Verb 'Enable-Feature' | ForEach-Object { $_.Target }) |
             Should -Contain 'MicrosoftWindowsPowerShellV2Root'
 
         $rb2 = Invoke-NpRollback -Dir $dir -Tag 'npLifoRollback2' -Execute -Relative $elevated
         $rb2.Run.ExitCode | Should -Be 0 -Because $rb2.Run.Output
         (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
         Test-Path -LiteralPath $apply1.Summary.RollbackJsonPath | Should -BeFalse
-        @(Get-OpsMutationRecord -Path $rb2.Log | Where-Object { $_.Command -eq 'Enable-WindowsOptionalFeature' } | ForEach-Object { $_.Target }) |
+        @(Get-DismChange -Record (Get-OpsMutationRecord -Path $rb2.Log) -Verb 'Enable-Feature' | ForEach-Object { $_.Target }) |
             Should -Not -Contain 'MicrosoftWindowsPowerShellV2Root'
 
         $rb3 = Invoke-NpRollback -Dir $dir -Tag 'npLifoRollback3' -Execute -Relative $elevated
         $rb3.Run.ExitCode | Should -Not -Be 0
         $rb3.Run.Output | Should -Match 'Nothing to roll back'
         @(Get-ChildItem -LiteralPath $dir -Filter '*.consumed-*').Count | Should -Be 2
+    }
+}
+
+Describe 'Set-WindowsNetworkProtocolHardening reads features through dism.exe under PowerShell 7' {
+    BeforeAll {
+        $script:dismLog = Join-Path $script:workRoot 'dism-calls.jsonl'
+        $features = 'SMB1Protocol=Enabled;SMB1Protocol-Client=Disabled with Payload Removed;MicrosoftWindowsPowerShellV2Root=Disabled'
+        $extra = "`$env:OPSTOOLKIT_TEST_DISM_LOG = '$($script:dismLog)'"
+        $script:sw = [Diagnostics.Stopwatch]::StartNew()
+        $script:dz = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-dism' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Smb1 'false' -Features $features -Extra $extra) `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'dz'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $script:sw.Stop()
+        $script:dzPlan = Get-PlanItem -Pair $script:dz
+    }
+
+    It 'runs both modes and reads the features in seconds, not minutes' {
+        $script:dz.WhatIf.ExitCode | Should -Be 0 -Because $script:dz.WhatIf.Output
+        $script:dz.Execute.ExitCode | Should -Be 0 -Because $script:dz.Execute.Output
+        $script:sw.Elapsed.TotalSeconds | Should -BeLessThan 120
+    }
+
+    It 'reads the SMB1 and PowerShell 2.0 items from dism /Get-FeatureInfo, not from the cmdlets' {
+        $smb = @($script:dzPlan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol' })
+        $smb[0].CurrentValue | Should -Be 'Enabled'
+        $client = @($script:dzPlan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol-Client' })
+        $client[0].CurrentValue | Should -Be 'DisabledWithPayloadRemoved'
+        $client[0].Action | Should -BeLike 'No change*'
+        $ps2 = @($script:dzPlan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'MicrosoftWindowsPowerShellV2Root' })
+        $ps2[0].CurrentValue | Should -Be 'Disabled'
+        $calls = @(Get-Content -LiteralPath $script:dismLog | ForEach-Object { $_ | ConvertFrom-Json })
+        $read = @($calls | Where-Object Verb -eq 'Get-FeatureInfo' | ForEach-Object { $_.Feature })
+        $read | Should -Contain 'SMB1Protocol'
+        $read | Should -Contain 'MicrosoftWindowsPowerShellV2Root'
+        $calls[0].Arguments | Should -Match '/English'
+        $calls[0].Arguments | Should -Match '/Online'
+    }
+
+    It 'counts a feature dism reports unknown as compliant and the reason says absent' {
+        $dep = @($script:dzPlan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol-Deprecation' })
+        $dep[0].CurrentValue | Should -Be 'absent'
+        $dep[0].Action | Should -BeLike 'No change*absent*'
+        $item = @($script:dz.Execute.Summary.Items | Where-Object Setting -eq 'SMB1Protocol-Deprecation')
+        $item[0].Result | Should -Be 'NoChange'
+    }
+
+    It 'changes nothing under -WhatIf, including through dism.exe' {
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:dz
+    }
+
+    It 'uses the stand-in dism, because -DismPath defaults to it in every launched script' {
+        $calls = @(Get-Content -LiteralPath $script:dismLog | ForEach-Object { $_ | ConvertFrom-Json })
+        $calls.Count | Should -BeGreaterThan 0
+        $script:fakeDism | Should -BeLike '*fake-dism.cmd'
+    }
+
+    It 'disables an enabled feature with dism /Disable-Feature /NoRestart when executing elevated' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'session is not elevated'; return }
+        $m = @(Get-OpsMutationRecord -Path $script:dz.ExecuteLog)
+        @(Get-DismChange -Record $m -Verb 'Disable-Feature' | ForEach-Object { $_.Target }) | Should -Be @('SMB1Protocol')
+        $calls = @(Get-Content -LiteralPath $script:dismLog | ForEach-Object { $_ | ConvertFrom-Json })
+        @($calls | Where-Object Verb -eq 'Disable-Feature')[0].Arguments | Should -Match '/NoRestart'
+    }
+}
+
+Describe 'Set-WindowsNetworkProtocolHardening dism.exe failure handling' {
+    It 'leaves a feature unread when dism hangs, stops only that process, and still reads the others' {
+        $log = Join-Path $script:workRoot 'hang-calls.jsonl'
+        $extra = "`$env:OPSTOOLKIT_TEST_DISM_LOG = '$log'`n`$env:OPSTOOLKIT_TEST_DISM_HANG = 'SMB1Protocol'"
+        $r = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-hang' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Features 'SMB1Protocol=Enabled;MicrosoftWindowsPowerShellV2Root=Enabled' -Extra $extra) `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'hang'); SkipSmbSigning = $true; DismTimeoutSeconds = 3; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+        $plan = Get-PlanItem -Pair $r
+        $hung = @($plan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol' })
+        $hung[0].CurrentValue | Should -Be 'unknown'
+        $hung[0].Action | Should -BeLike 'Unreadable*'
+        $other = @($plan | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'MicrosoftWindowsPowerShellV2Root' })
+        $other[0].CurrentValue | Should -Be 'Enabled'
+        $calls = @(Get-Content -LiteralPath $log | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.Verb -eq 'Get-FeatureInfo' -and $_.Feature -eq 'SMB1Protocol' })
+        $killedPid = $calls[0].ProcessId
+        $killedPid | Should -Not -BeNullOrEmpty
+        Get-Process -Id $killedPid -ErrorAction SilentlyContinue | Should -BeNullOrEmpty -Because 'the timed-out dism process must be killed'
+        Assert-OpsNoChangeUnderWhatIf -Pair $r
+    }
+
+    It 'leaves a feature unread when dism exits 0 with no State line' {
+        $r = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-garbage' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Features 'SMB1Protocol=Enabled' -Extra "`$env:OPSTOOLKIT_TEST_DISM_GARBAGE = 'true'") `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'garbage'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+        $features = @(Get-PlanItem -Pair $r | Where-Object Kind -eq 'OptionalFeature')
+        $features.Count | Should -BeGreaterThan 0
+        @($features | Where-Object CurrentValue -ne 'unknown').Count | Should -Be 0
+        Assert-OpsNoChangeUnderWhatIf -Pair $r
+    }
+
+    It 'leaves a feature unread when dism needs elevation (error 740) instead of calling it absent' {
+        $r = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-740' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Features 'SMB1Protocol=Enabled' -Unreadable 'true') `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot '740'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        @(Get-PlanItem -Pair $r | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.CurrentValue -ne 'unknown' }).Count | Should -Be 0
+    }
+
+    It 'reports a failed dism change as Failed, not as applied, when executing elevated' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'session is not elevated'; return }
+        $r = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-failchange' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Features 'SMB1Protocol=Enabled' -Extra "`$env:OPSTOOLKIT_TEST_DISM_FAIL = 'SMB1Protocol'") `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'failchange'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $item = @($r.Execute.Summary.Items | Where-Object Setting -eq 'SMB1Protocol')
+        $item[0].Result | Should -BeLike 'Failed*'
+    }
+
+    It 'keeps the cmdlet route when forced with -FeatureProvider Cmdlet' {
+        $r = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-cmdlet' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Features 'SMB1Protocol=Enabled') `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'cmdlet'); SkipSmbSigning = $true; FeatureProvider = 'Cmdlet'; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+        $smb = @(Get-PlanItem -Pair $r | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol' })
+        $smb[0].CurrentValue | Should -Be 'Enabled'
     }
 }

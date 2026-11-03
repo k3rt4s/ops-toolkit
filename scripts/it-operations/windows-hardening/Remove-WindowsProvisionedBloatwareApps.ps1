@@ -9,6 +9,8 @@ Instructions:
 - Run with -WhatIf first and review the generated inventory, plan, and state CSV/JSON files.
 - Run from an elevated shell before applying live removal or rollback changes.
 - Keep the protected list conservative. Do not remove Store, App Installer, Winget, WebView, UI runtimes, codecs, security UI, shell packages, or common dependencies.
+- Use -ExcludePackage to keep named packages (wildcards allowed) that the removal list would otherwise remove. Each is listed in the plan and state as Skipped with the reason "excluded by operator"; none is dropped silently.
+- Provisioned packages are read and removed through dism.exe (-DismPath), started as its own process with a per-call timeout (-DismTimeoutSeconds for the inventory, -DismChangeTimeoutSeconds for a removal). A call that outlives its timeout is stopped by its own PID: a timed-out inventory stops the run, a timed-out removal is recorded Failed. This avoids the AppX provisioning cmdlets, which fail under PowerShell 7.
 - Use -Rollback with a prior state CSV to re-register packages that still have a local AppxManifest.xml and to generate restore guidance for packages that must be restored from Store/winget/media.
 
 Purpose:
@@ -20,6 +22,7 @@ Windows 11 debloat tooling, and infosec/admin community guidance.
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
+pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -ExcludePackage 'Microsoft.BingNews*','*Solitaire*' -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 
 .OUTPUTS
@@ -60,11 +63,39 @@ param(
     [string]$ReportDirectory = (Join-Path $PSScriptRoot '..\..\..\reports\windows-hardening'),
 
     [Parameter()]
-    [switch]$SkipWindows11Check
+    [switch]$SkipWindows11Check,
+
+    # Packages to keep even though they match the removal list. Wildcards are matched against the
+    # package name, the full package name and the display name; each match is reported Skipped.
+    [Parameter()]
+    [string[]]$ExcludePackage = @(),
+
+    # The dism.exe that reads and removes provisioned packages.
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$DismPath = (Join-Path $env:SystemRoot 'System32\Dism.exe'),
+
+    # Seconds one dism.exe inventory read may run before it is stopped.
+    [Parameter()]
+    [ValidateRange(1, 3600)]
+    [int]$DismTimeoutSeconds = 120,
+
+    # Seconds one dism.exe package removal may run before it is stopped and the item recorded Failed.
+    [Parameter()]
+    [ValidateRange(1, 7200)]
+    [int]$DismChangeTimeoutSeconds = 600
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+# dism.exe settings the helper functions read, gathered once here so they do not depend on the
+# script's parameter variables.
+$script:Dism = [pscustomobject]@{
+    Path = $DismPath
+    ReadTimeoutSeconds = $DismTimeoutSeconds
+    ChangeTimeoutSeconds = $DismChangeTimeoutSeconds
+}
 
 function Show-Usage {
     Write-Output @'
@@ -73,6 +104,7 @@ Windows 11 AppX bloatware removal.
 Usage:
   pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -WhatIf
   pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -InstalledPackageScope AllUsers -WhatIf
+  pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -RemoveProvisionedPackages -ExcludePackage 'Microsoft.BingNews*','*Solitaire*' -WhatIf
   pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 
 Options:
@@ -84,7 +116,11 @@ Options:
   -RollbackStatePath          Prior state CSV. If omitted with -Rollback, the newest removal state CSV is used.
   -ReportDirectory            Report output directory.
   -SkipWindows11Check         Allow execution on non-Windows 11 builds.
-  -WhatIf                     Write reports and preview removals or rollback actions.
+  -ExcludePackage             Package names to keep (wildcards allowed, matched against package and display names). Reported Skipped: excluded by operator.
+  -DismPath                   dism.exe to use. Default: $env:SystemRoot\System32\Dism.exe.
+  -DismTimeoutSeconds         Seconds one dism.exe inventory read may run before it is stopped. Default: 120.
+  -DismChangeTimeoutSeconds   Seconds one dism.exe removal may run before it is stopped and recorded Failed. Default: 600.
+  -WhatIf                    Write reports and preview removals or rollback actions.
 '@
 }
 
@@ -194,11 +230,42 @@ function Initialize-AppxModule {
     Import-Module Appx -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 }
 
-function Get-ProvisionedAppxInventory {
-    $dismOutput = & dism.exe /Online /Get-ProvisionedAppxPackages /English 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "DISM provisioned AppX inventory failed with exit code $LASTEXITCODE. Output: $($dismOutput -join ' ')"
+# Runs -DismPath as its own process with the output redirected to a temp file and stops that one
+# process tree by its own PID when it outlives the timeout. Start-Process would otherwise honour
+# the caller's -WhatIf and skip even a read, so it passes -WhatIf:$false; a removal is gated by the
+# ShouldProcess in Remove-PlannedAppxItem before it gets here. Returns TimedOut, ExitCode and
+# Output; ExitCode is $null when the process did not start or was stopped.
+function Invoke-DismProcess {
+    param([Parameter(Mandatory = $true)][string[]]$Argument, [Parameter(Mandatory = $true)][int]$TimeoutSeconds)
+    $outFile = Join-Path ([System.IO.Path]::GetTempPath()) "dism-out-$([guid]::NewGuid().ToString('N')).txt"
+    try {
+        $quoted = @($Argument | ForEach-Object { if ("$_" -match '\s') { '"' + $_ + '"' } else { "$_" } })
+        $process = Start-Process -FilePath $script:Dism.Path -ArgumentList $quoted -NoNewWindow -PassThru -RedirectStandardOutput $outFile -WhatIf:$false -ErrorAction Stop
+        $null = $process.Handle   # cache the handle so ExitCode reads back after exit
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { $null = $_ }   # only the process started above, by its handle
+            [void]$process.WaitForExit(5000)
+            return [pscustomobject]@{ TimedOut = $true; ExitCode = $null; Output = '' }
+        }
+        $process.WaitForExit()
+        $text = if (Test-Path -LiteralPath $outFile) { "$(Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue)" } else { '' }
+        [pscustomobject]@{ TimedOut = $false; ExitCode = [int]$process.ExitCode; Output = $text }
+    } catch {
+        [pscustomobject]@{ TimedOut = $false; ExitCode = $null; Output = "$($_.Exception.Message)" }
+    } finally {
+        try { [System.IO.File]::Delete($outFile) } catch { $null = $_ }
     }
+}
+
+function Get-ProvisionedAppxInventory {
+    $run = Invoke-DismProcess -Argument @('/Online', '/Get-ProvisionedAppxPackages', '/English') -TimeoutSeconds $script:Dism.ReadTimeoutSeconds
+    if ($run.TimedOut) {
+        throw "DISM provisioned AppX inventory did not finish within $($script:Dism.ReadTimeoutSeconds) seconds and was stopped."
+    }
+    if ($null -eq $run.ExitCode -or $run.ExitCode -ne 0) {
+        throw "DISM provisioned AppX inventory failed with exit code $($run.ExitCode). Output: $(($run.Output -split '\r?\n' | Where-Object { $_ }) -join ' ')"
+    }
+    $dismOutput = @($run.Output -split '\r?\n')
 
     $packages = [System.Collections.Generic.List[object]]::new()
     $current = @{}
@@ -251,7 +318,11 @@ function Get-AppxRemovalPlan {
         [string[]]$RemovePattern,
 
         [Parameter(Mandatory = $true)]
-        [string[]]$ProtectedPattern
+        [string[]]$ProtectedPattern,
+
+        [Parameter()]
+        [AllowEmptyCollection()]
+        [string[]]$ExcludePattern = @()
     )
 
     foreach ($item in $Inventory) {
@@ -265,12 +336,26 @@ function Get-AppxRemovalPlan {
             $protectedMatch = Get-MatchingPattern -Value $item.PackageName -Pattern $ProtectedPattern
         }
 
+        # An operator exclusion is an exact wildcard match (not wrapped in *) on the display name, the
+        # package name or the full package name, so 'Microsoft.BingNews' keeps one app, not every
+        # package whose name contains the text.
+        $excludeMatch = ''
+        foreach ($candidate in $ExcludePattern) {
+            if (-not $candidate) { continue }
+            if (($item.DisplayName -like $candidate) -or ($item.PackageName -like $candidate) -or ($item.PackageFullName -like $candidate)) {
+                $excludeMatch = $candidate
+                break
+            }
+        }
+
         $isDependency = [bool]$item.IsFramework -or [bool]$item.IsResourcePackage
         $isProtected = [bool]$protectedMatch -or [bool]$item.NonRemovable -or $isDependency
         $action = if (-not $removeMatch) {
             'NoMatch'
         } elseif ($isProtected) {
             'Protected'
+        } elseif ($excludeMatch) {
+            'Excluded'
         } elseif ($item.SourceKind -eq 'Provisioned') {
             'RemoveProvisionedPackage'
         } else {
@@ -292,10 +377,12 @@ function Get-AppxRemovalPlan {
             NonRemovable = $item.NonRemovable
             RemovePattern = $removeMatch
             ProtectedPattern = $protectedMatch
+            ExcludePattern = $(if ($action -eq 'Excluded') { $excludeMatch } else { '' })
             Action = $action
             Reason = switch ($action) {
                 'NoMatch' { 'Package does not match the Windows 11 removal list.' }
                 'Protected' { 'Package matched the protected list, is non-removable, or is a framework/resource package.' }
+                'Excluded' { 'excluded by operator' }
                 'RemoveProvisionedPackage' { 'Provisioned package matches the Windows 11 removal list.' }
                 'RemoveInstalledPackage' { 'Installed package matches the Windows 11 removal list.' }
             }
@@ -312,9 +399,12 @@ function Remove-PlannedAppxItem {
 
     if ($Item.Action -eq 'RemoveProvisionedPackage') {
         if ($PSCmdlet.ShouldProcess($Item.PackageName, 'Remove provisioned AppX package from the online Windows 11 image')) {
-            $dismOutput = & dism.exe /Online /Remove-ProvisionedAppxPackage /PackageName:$($Item.PackageName) /English 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "DISM failed to remove provisioned package $($Item.PackageName). Exit code $LASTEXITCODE. Output: $($dismOutput -join ' ')"
+            $run = Invoke-DismProcess -Argument @('/Online', '/Remove-ProvisionedAppxPackage', "/PackageName:$($Item.PackageName)", '/English') -TimeoutSeconds $script:Dism.ChangeTimeoutSeconds
+            if ($run.TimedOut) {
+                throw "DISM did not finish removing provisioned package $($Item.PackageName) within $($script:Dism.ChangeTimeoutSeconds) seconds and was stopped."
+            }
+            if ($null -eq $run.ExitCode -or $run.ExitCode -ne 0) {
+                throw "DISM failed to remove provisioned package $($Item.PackageName). Exit code $($run.ExitCode). Output: $(($run.Output -split '\r?\n' | Where-Object { $_ }) -join ' ')"
             }
             return 'Removed'
         }
@@ -460,7 +550,7 @@ $protectedPatterns = Import-PatternList -Path $ProtectedListPath
 $installedInventory = @(Get-InstalledAppxInventory -Scope $InstalledPackageScope)
 $provisionedInventory = if ($RemoveProvisionedPackages) { @(Get-ProvisionedAppxInventory) } else { @() }
 $inventory = @($installedInventory + $provisionedInventory)
-$plan = @(Get-AppxRemovalPlan -Inventory $inventory -RemovePattern $removePatterns -ProtectedPattern $protectedPatterns)
+$plan = @(Get-AppxRemovalPlan -Inventory $inventory -RemovePattern $removePatterns -ProtectedPattern $protectedPatterns -ExcludePattern @($ExcludePackage))
 
 $inventoryPath = Join-Path $resolvedReportDirectory "windows11-appx-inventory-$timestamp.csv"
 $inventoryJsonPath = Join-Path $resolvedReportDirectory "windows11-appx-inventory-$timestamp.json"
@@ -520,6 +610,8 @@ Write-Information "Windows 11 AppX removal state written to $statePath" -Informa
     PreviewedCount = @($state | Where-Object Result -eq 'Previewed').Count
     ProtectedCount = @($plan | Where-Object Action -eq 'Protected').Count
     SkippedCount = @($state | Where-Object Result -eq 'Skipped').Count
+    ExcludedCount = @($plan | Where-Object Action -eq 'Excluded').Count
+    ExcludedItems = @($plan | Where-Object Action -eq 'Excluded')
     FailedCount = @($state | Where-Object { $_.Result -like 'Failed:*' }).Count
     RemovedOrPreviewedItems = @($state | Where-Object Result -in @('Removed', 'Previewed'))
     ProtectedItems = @($plan | Where-Object Action -eq 'Protected')

@@ -35,6 +35,15 @@ machine. Default controls:
 Opt-in: -DisableMulticastDns turns off the Windows mDNS responder. This breaks casting,
 AirPlay, Bonjour printer discovery and other .local discovery.
 
+Optional features under PowerShell 7: Get-WindowsOptionalFeature and the other DISM cmdlets fail
+there with 'Class not registered' after a long hang, so under PSEdition Core the features are read
+and changed through dism.exe (/Get-FeatureInfo, /Disable-Feature /NoRestart, /Enable-Feature
+/NoRestart). Each call has a timeout (-DismTimeoutSeconds for reads, -DismChangeTimeoutSeconds for
+changes); a read that times out or prints something unrecognised leaves the item 'unknown' and
+unchanged. A feature dism reports as unknown (0x800f080c) is absent from the image and a no-change.
+Windows PowerShell 5.1 keeps the cmdlet route. -FeatureProvider Dism or Cmdlet forces either route;
+-DismPath names the executable (default the Dism.exe in the Windows System32 directory).
+
 Not covered, on purpose: NTLM / LmCompatibilityLevel belongs to another script. WPAD is left
 out because no supported local setting for a standalone machine could be verified; the
 WinHttpAutoProxySvc service is never disabled by this script. SMB1 on the client side is
@@ -96,11 +105,42 @@ param(
     [switch]$DisableMulticastDns,
 
     [Parameter()]
-    [switch]$Rollback
+    [switch]$Rollback,
+
+    # How optional features are read and changed. Auto uses dism.exe under PowerShell 7 (PSEdition
+    # Core), where Get-WindowsOptionalFeature fails with 'Class not registered' after a long hang,
+    # and the DISM cmdlets under Windows PowerShell 5.1. Dism and Cmdlet force one route.
+    [Parameter()]
+    [ValidateSet('Auto', 'Dism', 'Cmdlet')]
+    [string]$FeatureProvider = 'Auto',
+
+    # The DISM executable used on the dism.exe route. Tests supply a stand-in; never the real one.
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$DismPath = (Join-Path $env:SystemRoot 'System32\Dism.exe'),
+
+    # Seconds one dism.exe state read may run before it is stopped and the item recorded unread.
+    [Parameter()]
+    [ValidateRange(1, 3600)]
+    [int]$DismTimeoutSeconds = 60,
+
+    # Seconds one dism.exe feature change may run before it is stopped and the item recorded failed.
+    [Parameter()]
+    [ValidateRange(1, 7200)]
+    [int]$DismChangeTimeoutSeconds = 600
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+# dism.exe settings the helper functions read, gathered once here so they do not depend on the
+# script's parameter variables.
+$script:Dism = [pscustomobject]@{
+    Path = $DismPath
+    ReadTimeoutSeconds = $DismTimeoutSeconds
+    ChangeTimeoutSeconds = $DismChangeTimeoutSeconds
+    Provider = $FeatureProvider
+}
 
 $script:ReportPrefix = 'network-protocol-hardening'
 $script:NetbtRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
@@ -160,9 +200,65 @@ function Get-RegistryState {
     if ($null -eq $value) { 'absent' } else { $value }
 }
 
+# True when features go through dism.exe: always under -FeatureProvider Dism, never under Cmdlet,
+# and under Auto exactly when the host is PowerShell 7 (PSEdition Core).
+function Test-UseDismExecutable {
+    switch ($script:Dism.Provider) {
+        'Dism' { $true }
+        'Cmdlet' { $false }
+        default { $PSVersionTable.PSEdition -eq 'Core' }
+    }
+}
+
+# Start-Process would otherwise honour the caller's -WhatIf and silently skip even a read, so it
+# passes -WhatIf:$false; every change is gated by the ShouldProcess in Invoke-PlanItem before it
+# gets here. Runs -DismPath with the arguments, output redirected to a temp file, and stops that one process
+# tree by its own PID when it outlives the timeout. Returns TimedOut, ExitCode and Output; ExitCode
+# is $null when the process did not start or was stopped.
+function Invoke-DismProcess {
+    param([Parameter(Mandatory = $true)][string[]]$Argument, [Parameter(Mandatory = $true)][int]$TimeoutSeconds)
+    $outFile = Join-Path ([System.IO.Path]::GetTempPath()) "dism-out-$([guid]::NewGuid().ToString('N')).txt"
+    try {
+        $quoted = @($Argument | ForEach-Object { if ("$_" -match '\s') { '"' + $_ + '"' } else { "$_" } })
+        $process = Start-Process -FilePath $script:Dism.Path -ArgumentList $quoted -NoNewWindow -PassThru -RedirectStandardOutput $outFile -WhatIf:$false -ErrorAction Stop
+        $null = $process.Handle   # cache the handle so ExitCode reads back after exit
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { $null = $_ }   # only the process started above, by its handle
+            [void]$process.WaitForExit(5000)
+            return [pscustomobject]@{ TimedOut = $true; ExitCode = $null; Output = '' }
+        }
+        $process.WaitForExit()
+        $text = if (Test-Path -LiteralPath $outFile) { "$(Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue)" } else { '' }
+        [pscustomobject]@{ TimedOut = $false; ExitCode = [int]$process.ExitCode; Output = $text }
+    } catch {
+        [pscustomobject]@{ TimedOut = $false; ExitCode = $null; Output = "$($_.Exception.Message)" }
+    } finally {
+        try { [System.IO.File]::Delete($outFile) } catch { $null = $_ }
+    }
+}
+
+# dism.exe /Get-FeatureInfo. Returns the State mapped to the cmdlet's names, 'absent' when dism says
+# the feature name is unknown (0x800f080c, not in this image), otherwise 'unknown' (timeout, no
+# elevation, anything the parser does not recognise).
+function Get-DismFeatureState {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $run = Invoke-DismProcess -Argument @('/English', '/Online', '/Get-FeatureInfo', "/FeatureName:$Name") -TimeoutSeconds $script:Dism.ReadTimeoutSeconds
+    if ($run.TimedOut -or $null -eq $run.ExitCode) { return 'unknown' }
+    if ($run.ExitCode -eq 0) {
+        if ($run.Output -match '(?m)^\s*State\s*:\s*(?<state>[^\r\n]+?)\s*$') {
+            $state = $Matches['state'] -replace '\s', ''
+            if ($state -in @('Enabled', 'Disabled', 'EnablePending', 'DisablePending', 'DisabledWithPayloadRemoved', 'PartiallyInstalled', 'Superseded')) { return $state }
+        }
+        return 'unknown'
+    }
+    if ($run.ExitCode -eq -2146498548 -or $run.Output -match 'Feature name .+ is unknown|0x800f080c') { return 'absent' }
+    'unknown'
+}
+
 # Returns Enabled, Disabled, ..., 'absent' (feature not on this build) or 'unknown'.
 function Get-OptionalFeatureState {
     param([Parameter(Mandatory = $true)][string]$Name)
+    if (Test-UseDismExecutable) { return (Get-DismFeatureState -Name $Name) }
     try {
         $feature = Get-WindowsOptionalFeature -Online -FeatureName $Name -ErrorAction Stop
     } catch {
@@ -192,7 +288,7 @@ function Get-PlanRecord {
     $action = if ($current -eq 'unknown') {
         "Unreadable: $Describe (current state could not be read, left unchanged)"
     } elseif ($Kind -eq 'OptionalFeature' -and $current -eq 'absent') {
-        "No change ($Setting is not present on this Windows build)"
+        "No change ($Setting is absent from this Windows build, so it cannot be enabled)"
     } elseif ($Kind -eq 'OptionalFeature' -and $current -in @('Disabled', 'DisabledWithPayloadRemoved', 'DisablePending')) {
         "No change ($Setting already disabled)"
     } elseif ($current -eq $desired) {
@@ -468,7 +564,17 @@ function Invoke-PlanItem {
                 Set-SmbServerConfiguration -EnableSMB1Protocol $enable -Force -Confirm:$false -ErrorAction Stop
             }
             'OptionalFeature' {
-                if ($desired -in @('Enabled', 'EnablePending')) {
+                $enableFeature = ($desired -in @('Enabled', 'EnablePending'))
+                if (Test-UseDismExecutable) {
+                    $verb = if ($enableFeature) { '/Enable-Feature' } else { '/Disable-Feature' }
+                    $run = Invoke-DismProcess -Argument @('/English', '/Online', $verb, "/FeatureName:$($Item.Setting)", '/NoRestart') -TimeoutSeconds $script:Dism.ChangeTimeoutSeconds
+                    if ($run.TimedOut) { throw "dism.exe $verb for $($Item.Setting) did not finish in $($script:Dism.ChangeTimeoutSeconds) seconds and was stopped; check the feature state before running again" }
+                    if ($null -eq $run.ExitCode) { throw "dism.exe could not be started: $($run.Output)" }
+                    if ($run.ExitCode -notin @(0, 3010)) {
+                        $firstLine = (@($run.Output -split '\r?\n' | Where-Object { $_.Trim() }) | Select-Object -Last 1)
+                        throw "dism.exe $verb for $($Item.Setting) exited with code $($run.ExitCode): $firstLine"
+                    }
+                } elseif ($enableFeature) {
                     Enable-WindowsOptionalFeature -Online -FeatureName $Item.Setting -NoRestart -ErrorAction Stop | Out-Null
                 } else {
                     Disable-WindowsOptionalFeature -Online -FeatureName $Item.Setting -NoRestart -ErrorAction Stop | Out-Null

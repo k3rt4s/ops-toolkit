@@ -30,8 +30,14 @@ Instructions:
   finding; use a separate standard account for daily work.
 - UAC changes take effect for new sessions; a change to EnableLUA requires a reboot and is
   flagged RequiresReboot. Anything that cannot be read is reported as 'unknown', never as compliant.
-- The 24H2 Administrator Protection setting is deliberately not covered: its registry value name and
-  data were not verified against Microsoft documentation, so it is left out rather than guessed.
+- Administrator Protection is deliberately not covered and this script never writes a registry value
+  for it. Microsoft documents it only through the Policy CSP setting
+  LocalPoliciesSecurityOptions/UserAccountControl_TypeOfAdminApprovalMode (1 = legacy Admin
+  Approval Mode, 2 = Administrator protection; restart required) and the Group Policy setting
+  "User Account Control: Configure type of Admin Approval Mode"; the registry value behind them is
+  not documented. Use the Group Policy or CSP route. Microsoft says not to enable it on Azure
+  Virtual Desktop session hosts, Windows 365 Cloud PCs, LAPS-managed devices or devices that
+  require Hyper-V, and the October 2026 Windows security baselines turn it on.
 - Windows Hello enrollment, LAPS, and domain policy are out of scope for a standalone machine.
 - Use -Rollback to restore the exact values this script changed from the newest unconsumed rollback
   file in the report directory. Each executing -Rollback that restores everything marks its file

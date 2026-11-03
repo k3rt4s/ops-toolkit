@@ -48,8 +48,12 @@ BeforeAll {
         'be9ba2d9-53ea-4cdc-84e5-9b1eeee46550', '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2',
         'd1e49aac-8f56-4280-b9ba-993a6d77406c', 'b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4',
         'e6db77e5-3df2-4cf1-b95a-636979351e5b', '56a863a9-875e-4185-98a7-b882c64b5ce5',
-        'c1db55ab-c21a-4637-bb3f-a12568109d35', '01443614-cd74-433a-b99e-2ecdc07bfc25'
+        'c1db55ab-c21a-4637-bb3f-a12568109d35', '01443614-cd74-433a-b99e-2ecdc07bfc25',
+        '7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c', '92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b',
+        '33ddedf1-c6e0-47cb-833e-de6133960387', 'c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb'
     )
+    $script:copiedToolsRule = 'c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb'
+    $script:webshellRule = 'a8f5898e-1dc8-49a9-9878-85004b8a61e6'
 }
 
 AfterAll {
@@ -73,12 +77,17 @@ Describe 'Set-WindowsDefenderHardening on a machine with nothing configured' {
         Assert-OpsNoChangeUnderWhatIf -Pair $script:clean
     }
 
-    It 'plans all 14 ASR rules in Audit mode (action 2) by default' {
+    It 'plans all 18 ASR rules in Audit mode (action 2) by default' {
         $asr = @($script:cleanItems | Where-Object Category -eq 'AsrRule')
-        $asr.Count | Should -Be 14
+        $asr.Count | Should -Be 18
         @($asr | Where-Object { $_.DesiredValue -ne 2 }).Count | Should -Be 0
         @($asr | Where-Object { $_.Action -notlike 'Set ASR rule*' }).Count | Should -Be 0
         foreach ($id in $script:allAsrIds) { @($asr | Where-Object Setting -eq $id).Count | Should -Be 1 }
+    }
+
+    It 'never plans the Exchange-only Webshell ASR rule' {
+        @($script:cleanItems | Where-Object Category -eq 'AsrRule').Count | Should -Be 18
+        @($script:cleanItems | Where-Object { $_.Setting -eq $script:webshellRule }).Count | Should -Be 0
     }
 
     It 'plans audit-only Controlled Folder Access and network protection, and the cloud settings' {
@@ -110,7 +119,7 @@ Describe 'Set-WindowsDefenderHardening on a machine with nothing configured' {
         }
         $records = @(Get-OpsMutationRecord -Path $script:clean.ExecuteLog)
         $adds = @($records | Where-Object { $_.Command -eq 'Add-MpPreference' })
-        $adds.Count | Should -Be 14
+        $adds.Count | Should -Be 18
         foreach ($id in $script:allAsrIds) {
             $match = @($adds | Where-Object Target -eq $id)
             $match.Count | Should -Be 1
@@ -179,12 +188,12 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
 
     It 'runs to completion and writes a plan' {
         $script:wi.ExitCode | Should -Be 0 -Because (Get-Content -LiteralPath "$($script:wi.Log).err" -Raw -ErrorAction SilentlyContinue)
-        $script:wi.Items.Count | Should -BeGreaterThan 14
+        $script:wi.Items.Count | Should -BeGreaterThan 18
     }
 
     It 'does not fall back to the unreadable-settings row' {
         @($script:wi.Items | Where-Object Category -eq 'DefenderPreference').Count | Should -Be 0
-        @($script:wi.Items | Where-Object Category -eq 'AsrRule').Count | Should -Be 14
+        @($script:wi.Items | Where-Object Category -eq 'AsrRule').Count | Should -Be 18
     }
 
     It 'reads the current values the fixture planted' {
@@ -201,7 +210,7 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
     }
 
     It 'stays a preview: the state records Previewed and the Defender commands attempted nothing' {
-        $script:wi.State.Count | Should -BeGreaterThan 14
+        $script:wi.State.Count | Should -BeGreaterThan 18
         # Elevated, a setting that would change is Previewed; unelevated it is skipped before the preview
         # is reached. Either way nothing is Applied, Reverted or Failed.
         $changing = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
@@ -291,6 +300,59 @@ Describe 'Set-WindowsDefenderHardening opt-in switches' {
     }
 }
 
+Describe 'Set-WindowsDefenderHardening explicit-block-only ASR rule' {
+    BeforeAll {
+        $script:blockAll = Invoke-DefenderPair -Tag 'blockAll' -Argument @{ AsrMode = 'Block' }
+        $script:blockAllItems = Get-PlanItem -Run $script:blockAll.WhatIf
+        $script:blockNamed = Invoke-DefenderPair -Tag 'blockNamed' -Argument @{ AsrMode = 'Block'; AsrRuleId = @($script:copiedToolsRule.ToUpperInvariant()) }
+        $script:blockNamedItems = Get-PlanItem -Run $script:blockNamed.WhatIf
+        # c0033c00 already in Block, everything else absent: a Block run without -AsrRuleId must not lower it.
+        $script:blockHeld = Invoke-DefenderPair -Tag 'blockHeld' -Argument @{ AsrMode = 'Block' } -State @{ ASR = "$($script:copiedToolsRule)=1" }
+        $script:blockHeldItems = Get-PlanItem -Run $script:blockHeld.WhatIf
+    }
+
+    It 'runs to completion' {
+        $script:blockAll.WhatIf.ExitCode | Should -Be 0 -Because $script:blockAll.WhatIf.Output
+        $script:blockNamed.WhatIf.ExitCode | Should -Be 0 -Because $script:blockNamed.WhatIf.Output
+        $script:blockHeld.WhatIf.ExitCode | Should -Be 0 -Because $script:blockHeld.WhatIf.Output
+    }
+
+    It 'keeps the copied-or-impersonated-tools rule at Audit when -AsrMode Block names no rule' {
+        $asr = @($script:blockAllItems | Where-Object Category -eq 'AsrRule')
+        $asr.Count | Should -Be 18
+        $tools = @($asr | Where-Object Setting -eq $script:copiedToolsRule)
+        $tools.Count | Should -Be 1
+        $tools[0].DesiredValue | Should -Be 2
+        $tools[0].Action | Should -BeLike "Set ASR rule*Audit (2)"
+        $others = @($asr | Where-Object Setting -ne $script:copiedToolsRule)
+        $others.Count | Should -Be 17
+        @($others | Where-Object { $_.DesiredValue -ne 1 }).Count | Should -Be 0
+    }
+
+    It 'puts the rule in Block only when -AsrRuleId names it' {
+        $asr = @($script:blockNamedItems | Where-Object Category -eq 'AsrRule')
+        $asr.Count | Should -Be 1
+        $asr[0].Setting | Should -Be $script:copiedToolsRule
+        $asr[0].DesiredValue | Should -Be 1
+        $asr[0].Action | Should -BeLike "Set ASR rule*Block (1)"
+    }
+
+    It 'never lowers the rule from Block when the run does not name it' {
+        $tools = @($script:blockHeldItems | Where-Object Setting -eq $script:copiedToolsRule)
+        $tools.Count | Should -Be 1
+        $tools[0].CurrentValue | Should -Be 1
+        $tools[0].Action | Should -BeLike 'No change*'
+    }
+
+    It 'never plans the Webshell rule in any mode' {
+        @($script:blockAllItems | Where-Object Setting -eq $script:webshellRule).Count | Should -Be 0
+        @($script:blockNamedItems | Where-Object Setting -eq $script:webshellRule).Count | Should -Be 0
+        $webshell = Invoke-DefenderPair -Tag 'webshell' -Argument @{ AsrRuleId = @($script:webshellRule) }
+        $webshell.WhatIf.ExitCode | Should -Not -Be 0
+        @(Get-OpsMutationRecord -Path $webshell.ExecuteLog).Count | Should -Be 0
+    }
+}
+
 Describe 'Set-WindowsDefenderHardening when Defender already meets the target' {
     BeforeAll {
         $asrState = (($script:allAsrIds | ForEach-Object { "$_=2" }) -join ';')
@@ -309,9 +371,9 @@ Describe 'Set-WindowsDefenderHardening when Defender already meets the target' {
 
     It 'plans no change and records no mutation' {
         $script:met.Execute.ExitCode | Should -Be 0 -Because $script:met.Execute.Output
-        @($script:metItems | Where-Object { $_.Action -like 'No change*' }).Count | Should -Be 21
+        @($script:metItems | Where-Object { $_.Action -like 'No change*' }).Count | Should -Be 25
         @($script:metItems | Where-Object { $_.Action -like 'Set*' }).Count | Should -Be 0
-        $script:met.Execute.Summary.NoChangeCount | Should -Be 21
+        $script:met.Execute.Summary.NoChangeCount | Should -Be 25
         $script:met.Execute.Summary.AppliedCount | Should -Be 0
         @(Get-OpsMutationRecord -Path $script:met.ExecuteLog).Count | Should -Be 0
         $script:met.Execute.Summary.RollbackJsonPath | Should -BeNullOrEmpty
@@ -748,7 +810,7 @@ Describe 'Set-WindowsDefenderHardening rollback safety' {
         (Split-Path -Leaf $rb2.Run.Summary.RollbackSourcePath) | Should -Be (Split-Path -Leaf $apply1.Summary.RollbackJsonPath)
         Test-Path -LiteralPath $apply1.Summary.RollbackJsonPath | Should -BeFalse
         $records2 = @(Get-OpsMutationRecord -Path $rb2.Log)
-        @($records2 | Where-Object { $_.Command -eq 'Remove-MpPreference' }).Count | Should -Be 14
+        @($records2 | Where-Object { $_.Command -eq 'Remove-MpPreference' }).Count | Should -Be 18
         @($records2 | Where-Object { $_.Command -eq 'Set-MpPreference' -and $_.Detail -match 'PUAProtection=0' }).Count | Should -Be 1
 
         $rb3 = Invoke-DefRollback -Dir $dir -Tag 'defLifoRollback3' -Execute -Relative $elevated

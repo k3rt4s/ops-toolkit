@@ -18,6 +18,25 @@ Instructions:
   management and deployment tools, and rule 01443614-CD74-433A-B99E-2ECDC07BFC25 (prevalence,
   age, trusted list) is the most likely to block new or freshly built executables. Keep those
   two in Audit longest by running Block mode with -AsrRuleId set to the other rule IDs.
+- The built-in list holds 18 Microsoft-documented ASR rules (Microsoft Learn, attack surface
+  reduction rules reference, 2026-09-09): the 14 earlier rules plus Block Adobe Reader from
+  creating child processes (7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c), Block Win32 API calls from
+  Office macros (92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b), Block rebooting machine in Safe Mode
+  (33ddedf1-c6e0-47cb-833e-de6133960387) and Block use of copied or impersonated system tools
+  (c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb).
+- Rule c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb (copied or impersonated system tools) is explicit
+  block only: Microsoft documents heuristic false positives on legitimate third-party
+  executables run from custom paths. A default run puts it in Audit like the others, but an
+  -AsrMode Block run without -AsrRuleId raises it to Audit at most (a stronger existing value is
+  never lowered), and only an -AsrRuleId that names it puts it in Block. The list is
+  $script:AsrExplicitBlockOnly in this script.
+- The Webshell rule a8f5898e-1dc8-49a9-9878-85004b8a61e6 is deliberately not in the list: it is
+  for Exchange servers only, does not apply to Windows 11, and Microsoft says to leave it Not
+  Configured when Defender for Endpoint manages it.
+- Group Policy, Intune and other policy-based ASR settings override what this script sets with
+  Set-MpPreference/Add-MpPreference: Microsoft documents local settings as lowest precedence,
+  overwritten by any policy method at startup. On a managed machine the plan can read Applied
+  and a restart can still bring the policy value back.
 - -AsrRuleId restricts the run to the listed rule IDs. Only IDs from this script's built-in
   list of Microsoft-documented rules are accepted. Rules outside the list are never touched,
   and an existing rule is never removed or weakened on a forward run: a rule already in
@@ -149,7 +168,17 @@ $script:AsrRuleCatalog = [ordered]@{
     '56a863a9-875e-4185-98a7-b882c64b5ce5' = 'Block abuse of exploited vulnerable signed drivers'
     'c1db55ab-c21a-4637-bb3f-a12568109d35' = 'Use advanced protection against ransomware'
     '01443614-cd74-433a-b99e-2ecdc07bfc25' = 'Block executable files from running unless they meet prevalence, age, or trusted list criteria'
+    '7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c' = 'Block Adobe Reader from creating child processes'
+    '92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b' = 'Block Win32 API calls from Office macros'
+    '33ddedf1-c6e0-47cb-833e-de6133960387' = 'Block rebooting machine in Safe Mode'
+    'c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb' = 'Block use of copied or impersonated system tools'
 }
+
+# Rules a -AsrMode Block run puts in Block only when -AsrRuleId names them. Without that, the run
+# raises them to Audit at most (never lowering a stronger existing value). Microsoft documents
+# heuristic false positives for the copied-or-impersonated-tools rule on third-party executables
+# run from custom paths.
+$script:AsrExplicitBlockOnly = @('c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb')
 
 # Strength of each setting value, higher is stronger. A forward run only raises a setting;
 # it never lowers one that is already stronger than the target.
@@ -401,8 +430,7 @@ function Get-ForwardPlan {
     }
 
     # --- Attack surface reduction rules ---
-    $asrDesired = [int]$script:AsrModeValues[$AsrMode]
-    $asrLabel = $AsrMode
+    $asrNamed = @($AsrRuleId | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
     $hasAsrProps = ($null -ne $Preference.PSObject.Properties['AttackSurfaceReductionRules_Ids']) -and
     ($null -ne $Preference.PSObject.Properties['AttackSurfaceReductionRules_Actions'])
     $curIds = @(@(Get-OptionalProperty -InputObject $Preference -Name 'AttackSurfaceReductionRules_Ids') | Where-Object { $null -ne $_ -and "$_" -ne '' })
@@ -416,6 +444,10 @@ function Get-ForwardPlan {
     if ($AsrRuleId) { $selected = @($selected | Where-Object { $_ -in @($AsrRuleId | ForEach-Object { $_.ToLowerInvariant() }) }) }
     foreach ($id in $selected) {
         $name = $script:AsrRuleCatalog[$id]
+        $ruleMode = $AsrMode
+        if ($AsrMode -eq 'Block' -and ($id -in $script:AsrExplicitBlockOnly) -and ($id -notin $asrNamed)) { $ruleMode = 'Audit' }
+        $asrDesired = [int]$script:AsrModeValues[$ruleMode]
+        $asrLabel = $ruleMode
         if (-not $hasAsrProps) {
             $items.Add((ConvertTo-PlanItem -Category 'AsrRule' -Setting $id -RequiresAdmin $true -CurrentValue 'unknown' -DesiredValue $asrDesired `
                         -Action "Cannot assess ASR rule '$name' (rule list unreadable); not changed"))

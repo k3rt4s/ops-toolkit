@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back legacy network protocol hardening (SMBv1, PowerShell 2.0, SMB signing, LLMNR, NetBIOS over TCP/IP, optional mDNS) on a standalone Windows 11 machine.
+Plan, apply, and roll back legacy network protocol hardening (SMBv1, PowerShell 2.0, SMB signing, LLMNR, NetBIOS over TCP/IP, optional mDNS and WPAD) on a standalone Windows 11 machine.
 
 .DESCRIPTION
 Instructions:
@@ -44,10 +44,20 @@ unchanged. A feature dism reports as unknown (0x800f080c) is absent from the ima
 Windows PowerShell 5.1 keeps the cmdlet route. -FeatureProvider Dism or Cmdlet forces either route;
 -DismPath names the executable (default the Dism.exe in the Windows System32 directory).
 
-Not covered, on purpose: NTLM / LmCompatibilityLevel belongs to another script. WPAD is left
-out because no supported local setting for a standalone machine could be verified; the
-WinHttpAutoProxySvc service is never disabled by this script. SMB1 on the client side is
-removed by the SMB1Protocol-Client optional feature; there is no client cmdlet switch for it.
+Opt-in: -DisableWpad sets the DWORD DisableWpad = 1 under
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp (Windows 10 1809 and
+later; Microsoft Learn, disable HTTP proxy auth features, 2026-02-12). It stops WPAD
+auto-detection for WinHTTP calls only; applications can still resolve the name WPAD through DNS.
+It is not in the default run because Windows Update, Defender for Endpoint and the Azure Virtual
+Desktop agent can discover their proxy through WPAD. After it is set, proxies must be configured
+manually, so on a proxied network a manual WinHTTP proxy (netsh winhttp set proxy) must exist
+first. Microsoft also says to turn WPAD off in the Settings UI (Network and Internet, Proxy,
+Automatically detect settings) because third-party applications and browsers can rely on it;
+this script does not do that part. The WinHttpAutoProxySvc service is never disabled.
+
+Not covered, on purpose: NTLM / LmCompatibilityLevel belongs to another script. SMB1 on the
+client side is removed by the SMB1Protocol-Client optional feature; there is no client cmdlet
+switch for it.
 
 SMB signing, LLMNR, NetBIOS and mDNS registry values apply when the related service or adapter
 restarts, normally at the next reboot. RebootRequired in the summary is true only when an
@@ -72,6 +82,7 @@ Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir>
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -SkipSmbSigning -DisableMulticastDns
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -DisableWpad
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -NetbiosInterface 'Tcpip_{guid}'
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
@@ -103,6 +114,11 @@ param(
     # Opt-in. Turns off the Windows mDNS responder; breaks casting, AirPlay and Bonjour printers.
     [Parameter()]
     [switch]$DisableMulticastDns,
+
+    # Opt-in. Sets WinHttp DisableWpad = 1, which stops WPAD proxy discovery for WinHTTP callers
+    # (Windows Update, Defender for Endpoint, the Azure Virtual Desktop agent). Not in the default run.
+    [Parameter()]
+    [switch]$DisableWpad,
 
     [Parameter()]
     [switch]$Rollback,
@@ -160,6 +176,7 @@ $script:RollbackControls = @(
     [pscustomobject]@{ Category = 'Llmnr'; Kind = 'Registry'; Settings = @('DNSClient EnableMulticast'); Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient'; Name = 'EnableMulticast'; PathRoot = $null; Pattern = $null; Desired = 0; RequiresReboot = $false }
     [pscustomobject]@{ Category = 'NetBIOS'; Kind = 'Registry'; Settings = $null; Path = $null; Name = 'NetbiosOptions'; PathRoot = $script:NetbtRoot; Pattern = '^Tcpip_[0-9A-Za-z{}-]+$'; Desired = 2; RequiresReboot = $false }
     [pscustomobject]@{ Category = 'Mdns'; Kind = 'Registry'; Settings = @('Dnscache EnableMDNS'); Path = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters'; Name = 'EnableMDNS'; PathRoot = $null; Pattern = $null; Desired = 0; RequiresReboot = $false }
+    [pscustomobject]@{ Category = 'Wpad'; Kind = 'Registry'; Settings = @('WinHttp DisableWpad'); Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp'; Name = 'DisableWpad'; PathRoot = $null; Pattern = $null; Desired = 1; RequiresReboot = $false }
 )
 
 function Get-NetworkControl {
@@ -330,7 +347,8 @@ function Get-ForwardPlan {
     param(
         [switch]$SkipSmbSigning,
         [string[]]$NetbiosInterface,
-        [switch]$DisableMulticastDns
+        [switch]$DisableMulticastDns,
+        [switch]$DisableWpad
     )
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
@@ -401,6 +419,12 @@ function Get-ForwardPlan {
         $mdns = Get-NetworkControl 'Mdns'
         Add-RegistryDwordItem -Items $items -Control $mdns -Setting $mdns.Settings[0] `
             -Describe 'Turn off the mDNS responder (breaks casting, AirPlay, Bonjour printers)'
+    }
+
+    if ($DisableWpad) {
+        $wpad = Get-NetworkControl 'Wpad'
+        Add-RegistryDwordItem -Items $items -Control $wpad -Setting $wpad.Settings[0] `
+            -Describe 'Stop WinHTTP WPAD proxy discovery (DisableWpad = 1; a manual WinHTTP proxy must already exist on a proxied network)'
     }
 
     $items
@@ -617,7 +641,7 @@ $mode = if ($Rollback) { 'rollback' } else { 'apply' }
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
-        Get-ForwardPlan -SkipSmbSigning:$SkipSmbSigning -NetbiosInterface $NetbiosInterface -DisableMulticastDns:$DisableMulticastDns
+        Get-ForwardPlan -SkipSmbSigning:$SkipSmbSigning -NetbiosInterface $NetbiosInterface -DisableMulticastDns:$DisableMulticastDns -DisableWpad:$DisableWpad
     })
 
 $planPath = Join-Path $resolvedReportDirectory "$($script:ReportPrefix)-$mode-plan-$timestamp.csv"

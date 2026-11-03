@@ -18,8 +18,8 @@ Instructions:
   workstation must never be applied to someone else's machine. Generated reports belong under a
   data root outside the repo.
 - Windows automatic device encryption may already have encrypted the volume on its own, with a TPM
-  protector and a recovery password. When the volume is EncryptionInProgress or FullyEncrypted and
-  already carries a RecoveryPassword protector, this script adds no second one and does not enable
+  protector and a recovery password. When the volume is EncryptionInProgress, EncryptionPaused or
+  FullyEncrypted and already carries a RecoveryPassword protector, this script adds no second one and does not enable
   anything. It plans one BackupRecoveryProtector row per existing recovery password protector,
   and a live run writes each to the same kind of key file under -RecoveryKeyDirectory (same off-the-
   OS-volume rules and write probe, behind ShouldProcess; a key file that already holds that
@@ -27,6 +27,9 @@ Instructions:
   volume's VolumeStatus and ProtectionStatus. The backup file holds the password in clear text, like
   the one written on an enable. The backup is not recorded in a rollback file: -Rollback never
   deletes it or decrypts a volume this script did not enable.
+- An already-protected volume that has no RecoveryPassword protector (for example a TPM-only
+  protector) gets no backup row and no new protector. The plan carries a report-only row saying
+  there is no recovery password to back up, so a no-change run is not mistaken for a backed-up one.
 - Secure Boot: firmware that shows Secure Boot as on can still make Confirm-SecureBootUEFI read
   False while it is in Setup Mode with no Platform Key (PK), until the factory keys are restored in
   firmware setup. The Secure Boot precondition then stops the run, correctly: it is reading the
@@ -290,6 +293,7 @@ function Get-ForwardPlan {
     $volStatus = 'unknown'
     $protStatus = 'unknown'
     $existingRecovery = @()
+    $noRecoveryToBackUp = $false
     if ($os.Readable) {
         $volStatus = [string](Get-OpsPropertyValue -InputObject $os.Volume -Name 'VolumeStatus')
         $protStatus = [string](Get-OpsPropertyValue -InputObject $os.Volume -Name 'ProtectionStatus')
@@ -298,15 +302,17 @@ function Get-ForwardPlan {
         $tpmProtector = @(@(Get-OpsPropertyValue -InputObject $os.Volume -Name 'KeyProtector') |
                 Where-Object { $_ -and [string]$_.KeyProtectorType -like 'Tpm*' })
         if ($tpmProtector.Count -gt 0 -and $volStatus -eq 'FullyDecrypted') { $volStatus = 'FullyDecrypted (enable pending restart)' }
-        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'FullyEncryptedWipeInProgress', 'EncryptionSuspended') -or $protStatus -eq 'On' -or $tpmProtector.Count -gt 0) {
+        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'EncryptionPaused', 'FullyEncryptedWipeInProgress', 'EncryptionSuspended') -or $protStatus -eq 'On' -or $tpmProtector.Count -gt 0) {
             $script:AlreadyProtected = $true
         }
         # Automatic device encryption leaves an encrypted volume whose recovery password exists only on
         # the machine. Back each one up; a decrypted volume with a pending enable is not this case.
-        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress')) {
-            $existingRecovery = @(@(Get-OpsPropertyValue -InputObject $os.Volume -Name 'KeyProtector') |
-                    Where-Object { $_ -and [string]$_.KeyProtectorType -eq 'RecoveryPassword' })
+        $allRecovery = @(@(Get-OpsPropertyValue -InputObject $os.Volume -Name 'KeyProtector') |
+                Where-Object { $_ -and [string]$_.KeyProtectorType -eq 'RecoveryPassword' })
+        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'EncryptionPaused')) {
+            $existingRecovery = $allRecovery
         }
+        $noRecoveryToBackUp = [bool]($script:AlreadyProtected -and $allRecovery.Count -eq 0)
     }
     $script:OsVolumeStatus = $volStatus
     $script:OsProtectionStatus = $protStatus
@@ -335,6 +341,11 @@ function Get-ForwardPlan {
     $items.Add((Get-PlanItem -Category $script:EnableCategory -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
                 -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue "TPM protector plus recovery password, $($script:EncryptionMethod)" `
                 -Action $action))
+    if ($noRecoveryToBackUp) {
+        $items.Add((Get-PlanItem -Category 'Report' -Setting 'RecoveryPassword' -RequiresAdmin $false `
+                    -CurrentValue "VolumeStatus=$volStatus;no RecoveryPassword protector" -DesiredValue 'report only' `
+                    -Action "No change (report only: $mount is already protected but has no recovery password protector, so there is no recovery password to back up; this script adds none to a volume it did not enable)"))
+    }
     foreach ($protector in $existingRecovery) {
         $id = [string]$protector.KeyProtectorId
         $script:BackupPlanned = $true

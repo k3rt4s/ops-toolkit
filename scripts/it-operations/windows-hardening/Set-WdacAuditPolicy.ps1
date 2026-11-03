@@ -24,6 +24,10 @@ Instructions:
   gets a new policy ID, the name 'ops-toolkit WDAC audit', and two rule options forced on
   before it is converted to a binary policy: Audit Mode (Set-RuleOption -Option 3) and Unsigned
   System Integrity Policy (Set-RuleOption -Option 6, because the policy is deployed unsigned).
+- -CiToolPath names the CiTool program the script runs (default CiTool.exe, resolved from the
+  path as before). Point it at another executable or script to run the plan against a stand-in
+  that never touches the machine's policies; the script still reads and changes policy only
+  through that program.
 - The single change is: CiTool.exe --update-policy <policy.cip> --json. Before it, the script
   lists active policies (CiTool.exe --list-policies --json) and refuses if a policy with the
   same name from a previous run is already active; roll that one back first. A policy list that
@@ -83,6 +87,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$ExamplePolicyDirectory = (Join-Path $env:windir 'schemas\CodeIntegrity\ExamplePolicies'),
 
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$CiToolPath = 'CiTool.exe',
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ReportDirectory,
@@ -97,6 +105,8 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 $script:Prefix = 'wdac-audit'
+# The CiTool program every policy read and change goes through (-CiToolPath; default CiTool.exe).
+$script:CiToolCommand = $CiToolPath
 $script:PolicyName = 'ops-toolkit WDAC audit'
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:StopReason = $null
@@ -135,12 +145,12 @@ function ConvertTo-BarePolicyId {
 # Reads the active policy list. Unreadable is reported as such and never treated as empty.
 function Get-ActivePolicyList {
     $result = [pscustomobject]@{ Readable = $false; Reason = ''; Policies = @() }
-    if (-not (Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue)) {
         $result.Reason = 'CiTool.exe was not found (it ships with Windows 11 and Windows Server 2025)'
         return $result
     }
     try {
-        $text = (& CiTool.exe --list-policies --json 2>&1 | Out-String)
+        $text = (& $script:CiToolCommand --list-policies --json 2>&1 | Out-String)
         $json = $text | ConvertFrom-Json -ErrorAction Stop
     } catch {
         $result.Reason = "CiTool --list-policies output could not be parsed: $($_.Exception.Message)"
@@ -238,7 +248,7 @@ function Get-ForwardPlan {
     $ciCmdlets = [bool]((Get-Command -Name 'Set-CIPolicyIdInfo' -ErrorAction SilentlyContinue) -and
         (Get-Command -Name 'Set-RuleOption' -ErrorAction SilentlyContinue) -and
         (Get-Command -Name 'ConvertFrom-CIPolicy' -ErrorAction SilentlyContinue))
-    $ciTool = [bool](Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue)
+    $ciTool = [bool](Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue)
     $list = Get-ActivePolicyList
 
     $script:PreconditionResult['Elevated'] = if ($admin) { 'Met' } else { 'Skipped: requires elevation' }
@@ -390,7 +400,7 @@ function Get-RollbackPlan {
     $admin = Test-IsAdministrator
     $list = Get-ActivePolicyList
     $script:PreconditionResult['Elevated'] = if ($admin) { 'Met' } else { 'Skipped: requires elevation' }
-    $script:PreconditionResult['CiTool'] = if (Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue) { 'Met' } else { 'Failed: CiTool.exe was not found' }
+    $script:PreconditionResult['CiTool'] = if (Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue) { 'Met' } else { 'Failed: CiTool.exe was not found' }
 
     $active = 'unknown'
     $action = "Remove audit-mode policy $policyId with CiTool.exe --remove-policy (a restart may be needed to finish)"
@@ -427,7 +437,7 @@ function Get-RollbackPlan {
 
 function Invoke-CiToolJson {
     param([string[]]$Argument)
-    $text = (& CiTool.exe @Argument --json 2>&1 | Out-String)
+    $text = (& $script:CiToolCommand @Argument --json 2>&1 | Out-String)
     try {
         $json = $text | ConvertFrom-Json -ErrorAction Stop
     } catch {

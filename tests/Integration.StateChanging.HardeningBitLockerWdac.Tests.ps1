@@ -487,6 +487,7 @@ Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
     It 'adds no second recovery protector and enables nothing, planning a backup of the existing one (<Status>)' -ForEach @(
         @{ Status = 'FullyEncrypted'; Protection = 'On' }
         @{ Status = 'EncryptionInProgress'; Protection = 'Off' }
+        @{ Status = 'EncryptionPaused'; Protection = 'Off' }
     ) {
         $keys = New-WorkDirectory "bl-enc-keys-$Status"
         $reports = New-WorkDirectory "bl-enc-reports-$Status"
@@ -543,6 +544,12 @@ Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
         $pair.Execute.Output | Should -Not -Match ([regex]::Escape($script:encPassword))
     }
 
+    It 'documents that paused encryption is backed up and that a volume with no recovery password gets a note' {
+        $help = Get-Content -LiteralPath $script:encFullPath -Raw
+        $help | Should -Match 'EncryptionPaused'
+        $help | Should -Match 'no recovery password'
+    }
+
     It 'plans no backup for a decrypted volume or an encrypted one with no recovery password protector' {
         $keys = New-WorkDirectory 'bl-enc-none-keys'
         $reports = New-WorkDirectory 'bl-enc-none-reports'
@@ -551,8 +558,25 @@ Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
         $pair = Invoke-Pair -Tag 'bl-enc-none' -RelativePath $script:blScript `
             -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $env
         $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
-        @(Get-Content -LiteralPath $pair.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object Category -eq 'BackupRecoveryProtector').Count | Should -Be 0
+        $plan = @(Get-Content -LiteralPath $pair.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        @($plan | Where-Object Category -eq 'BackupRecoveryProtector').Count | Should -Be 0
         $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+        # The operator is told there is nothing to back up, rather than left to assume a backup was made.
+        $note = @($plan | Where-Object { $_.Category -eq 'Report' -and $_.Setting -eq 'RecoveryPassword' })
+        $note.Count | Should -Be 1
+        $note[0].Action | Should -Match '^No change \(report only: .*no recovery password'
+        foreach ($run in $pair.WhatIf, $pair.Execute) {
+            (@($run.Summary.Items) | Where-Object { $_.Category -eq 'Report' -and $_.Setting -eq 'RecoveryPassword' }).Result | Should -Be 'NoChange'
+        }
+    }
+
+    It 'plans no recovery note for a decrypted volume with nothing protected yet' {
+        $keys = New-WorkDirectory 'bl-enc-decrypted-keys'
+        $reports = New-WorkDirectory 'bl-enc-decrypted-reports'
+        $pair = Invoke-Pair -Tag 'bl-enc-decrypted' -RelativePath $script:blScript `
+            -Argument @{ ReportDirectory = $reports; RecoveryKeyDirectory = $keys } -FixtureEnvironment $script:blGoodEnv
+        $plan = @(Get-Content -LiteralPath $pair.WhatIf.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
+        @($plan | Where-Object { $_.Category -eq 'Report' -and $_.Setting -eq 'RecoveryPassword' }).Count | Should -Be 0
     }
 
     It 'writes the existing recovery password to the key directory and reads it back' {
@@ -772,19 +796,39 @@ function CiTool.exe {
         # `pwsh -File script -WhatIf` entry point, so this starts pwsh directly instead of using the pair.
         $reports = Join-Path $script:workRoot 'wdac-direct-reports'
         $log = Join-Path $script:workRoot 'wdac-direct.log'
-        $names = 'PSModulePath', 'OPSTOOLKIT_TEST_CITOOL_POLICIES'
+        # A stand-in CiTool, so the run never reaches the real CiTool.exe (elevated, that would read, and on
+        # a regression change, the machine's code integrity policies). It answers --list-policies from
+        # OPSTOOLKIT_TEST_CITOOL_POLICIES and logs every call to the file named by OPSTOOLKIT_TEST_CITOOL_LOG.
+        $fakeCiTool = Join-Path $script:workRoot 'wdac-direct-citool.cmd'
+        $ciLog = Join-Path $script:workRoot 'wdac-direct-citool.log'
+        @(
+            '@echo off'
+            '>> "%OPSTOOLKIT_TEST_CITOOL_LOG%" echo %*'
+            'if "%1"=="--list-policies" goto list'
+            'echo {"OperationResult":0}'
+            'exit /b 0'
+            ':list'
+            'echo %OPSTOOLKIT_TEST_CITOOL_POLICIES%'
+            'exit /b 0'
+        ) | Set-Content -LiteralPath $fakeCiTool -Encoding ascii
+        $names = 'PSModulePath', 'OPSTOOLKIT_TEST_CITOOL_POLICIES', 'OPSTOOLKIT_TEST_CITOOL_LOG'
         $saved = @{}
         foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
         try {
             [Environment]::SetEnvironmentVariable('PSModulePath', "$script:systemModulePath$([IO.Path]::PathSeparator)$($saved['PSModulePath'])")
             [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_CITOOL_POLICIES', ('{"Policies":[' + $script:systemPolicy + '],"OperationResult":0}'))
+            [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_CITOOL_LOG', $ciLog)
             $process = Start-Process -FilePath (Get-Process -Id $PID).Path -NoNewWindow -Wait -PassThru `
-                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$(Get-RepositoryScriptPath -RelativePath $script:wdacScript)`"", '-ReportDirectory', "`"$reports`"", '-ExamplePolicyDirectory', "`"$($script:exampleDir)`"", '-WhatIf') `
+                -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$(Get-RepositoryScriptPath -RelativePath $script:wdacScript)`"", '-ReportDirectory', "`"$reports`"", '-ExamplePolicyDirectory', "`"$($script:exampleDir)`"", '-CiToolPath', "`"$fakeCiTool`"", '-WhatIf') `
                 -RedirectStandardOutput $log -RedirectStandardError "$log.err"
         } finally {
             foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
         }
         $process.ExitCode | Should -Be 0 -Because ((Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue))
+        # The fake was the CiTool that ran, and the preview changed no policy.
+        $calls = @(Get-Content -LiteralPath $ciLog -ErrorAction SilentlyContinue)
+        @($calls | Where-Object { $_ -match '--list-policies' }).Count | Should -BeGreaterThan 0 -Because 'the script must have used the stand-in CiTool'
+        @($calls | Where-Object { $_ -match '--update-policy|--remove-policy' }).Count | Should -Be 0 -Because '-WhatIf deploys and removes nothing'
         $planFile = Get-ChildItem -LiteralPath $reports -Filter '*-apply-plan-*.json' -File | Select-Object -First 1
         $plan = @(Get-Content -LiteralPath $planFile.FullName -Raw | ConvertFrom-Json)
         $stateFile = Get-ChildItem -LiteralPath $reports -Filter '*-apply-state-*.json' -File | Select-Object -First 1

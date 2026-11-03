@@ -17,12 +17,23 @@ machine before that was noticed. An antivirus exclusion is a security control, s
 module exists to make it impossible for a test to create one: the real Defender module
 is never loaded, because this one is found first.
 
+Import behaviour:
+The real Defender module (ConfigDefender) runs Set-Alias calls when it loads. Under
+-WhatIf those calls are suppressed, so a script that lets the module auto-load while
+$WhatIfPreference is true gets a module whose commands fail. This fixture does the same
+at import: Read-FakeMpValue is created by a top-level Set-Alias, so importing the module
+with $WhatIfPreference true leaves Get-MpPreference and Get-MpComputerStatus throwing, and
+a script that does not clear the preference for the import reads every value as unknown.
+
 .NOTES
 Status:
 Active test fixture kept in the reorganized ops-toolkit repo.
 #>
 
 Set-StrictMode -Version 3.0
+
+# Created at import, as the real module creates its aliases. Suppressed under -WhatIf.
+Set-Alias -Name Read-FakeMpValue -Value Get-FakeMpEnvValue
 
 function Write-FakeMpMutation {
     param([string]$Command, [string]$Target, [string]$Detail = '')
@@ -87,7 +98,7 @@ function Get-MpPreference {
         ExclusionProcess = @(($env:OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS -split ';') | Where-Object { $_ })
         AttackSurfaceReductionRules_Ids = $asrIds
         AttackSurfaceReductionRules_Actions = $asrActions
-        EnableControlledFolderAccess = [byte](Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_CFA' 0)
+        EnableControlledFolderAccess = [byte](Read-FakeMpValue 'OPSTOOLKIT_TEST_MP_CFA' 0)
         ControlledFolderAccessAllowedApplications = $(if ($apps.Count) { $apps } else { $null })
         EnableNetworkProtection = [byte](Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_NETPROT' 0)
         PUAProtection = [byte](Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_PUA' 0)
@@ -107,7 +118,7 @@ function Get-MpComputerStatus {
     if ($env:OPSTOOLKIT_TEST_MP_UNREADABLE -eq '1') { throw 'Fake Get-MpComputerStatus: Defender is not running.' }
 
     [pscustomobject]@{
-        AMRunningMode = [string](Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_RUNMODE' 'Normal')
+        AMRunningMode = [string](Read-FakeMpValue 'OPSTOOLKIT_TEST_MP_RUNMODE' 'Normal')
         IsTamperProtected = ((Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_TAMPER' '1') -eq '1')
         AntivirusSignatureAge = [uint32](Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_SIGAGE' 1)
         RealTimeProtectionEnabled = ((Get-FakeMpEnvValue 'OPSTOOLKIT_TEST_MP_REALTIME' '1') -eq '1')

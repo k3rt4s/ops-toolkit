@@ -352,6 +352,28 @@ function Get-AvProviderItem {
         -Action "Report only: Defender running mode is $modeText (registered products: $productText)"
 }
 
+# Loads the module that carries Get-MpPreference with the -WhatIf preference cleared for the load only.
+# The Defender module creates its aliases with Set-Alias when it loads, and Set-Alias honours
+# $WhatIfPreference, so a module first auto-loaded by a -WhatIf run comes up without them and every
+# read after it fails, which planned nothing. The preference is cleared at script scope, which is
+# where the -WhatIf switch put it (clearing it in this function's own scope does not reach the load),
+# and restored afterwards, so the run stays a preview. Import-Module has no -WhatIf parameter of its
+# own. Returns an empty string on success and the reason on failure.
+function Import-DefenderModule {
+    # Read through normal scope lookup: a run without -WhatIf has no script-scope copy to read.
+    $savedWhatIf = $WhatIfPreference
+    $script:WhatIfPreference = $false
+    try {
+        $command = Get-Command -Name 'Get-MpPreference' -ErrorAction Stop | Select-Object -First 1
+        if ($command.ModuleName) { Import-Module -Name $command.ModuleName -ErrorAction Stop }
+        return ''
+    } catch {
+        return "the Defender module could not be imported: $($_.Exception.Message)"
+    } finally {
+        $script:WhatIfPreference = $savedWhatIf
+    }
+}
+
 function Get-ForwardPlan {
     param(
         $Preference,
@@ -374,7 +396,7 @@ function Get-ForwardPlan {
     if ($null -eq $Preference) {
         $items.Add((ConvertTo-PlanItem -Category 'DefenderPreference' -Setting 'Get-MpPreference' -RequiresAdmin $false `
                     -CurrentValue 'unknown' -DesiredValue 'n/a' `
-                    -Action 'Report only: Defender settings could not be read (Defender is not running or its cmdlets are unavailable); nothing is planned'))
+                    -Action "Report only: Defender settings could not be read ($(if ($script:DefenderImportError) { $script:DefenderImportError } else { 'Defender is not running or its cmdlets are unavailable' })); nothing is planned"))
         return $items
     }
 
@@ -640,6 +662,8 @@ $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
 $thirdPartyAv = $false
+# Before the first Defender read, so a -WhatIf run reads the same values a live run does.
+$script:DefenderImportError = Import-DefenderModule
 $plan = @()
 if ($Rollback) {
     $plan = @(Get-RollbackPlan)

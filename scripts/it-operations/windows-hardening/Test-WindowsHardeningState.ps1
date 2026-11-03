@@ -44,6 +44,13 @@ Instructions:
   Non-registry plan items, services and scheduled tasks, every item of the newer
   targets, and BitLocker, are reported as not checked remotely rather than assumed
   compliant.
+- The CredentialProtection target also reads Win32_DeviceGuard directly: Credential Guard
+  listed in SecurityServicesConfigured but not in SecurityServicesRunning is Drifted (the
+  setting is in place and the protection is not, for instance on an edition that is not
+  licensed for it, or before the restart), never Compliant. -DeviceGuardSnapshotPath reads
+  those two lists from a JSON file instead of CIM, for tests and offline review. Credential
+  Guard running is Compliant. Neither configured nor running is ReportOnly (it is opt-in and
+  not required by the baseline), so it is not counted as drift.
 - Generated reports are written under reports\windows-hardening by default.
 - What a run leaves in its run folder: one plan-<Target> folder per target holding the
   child process log (plan-run.log, plan-run.log.err) and the plan and state CSV/JSON of
@@ -125,7 +132,13 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$OutputPrefix = 'windows-hardening-verification'
+    [string]$OutputPrefix = 'windows-hardening-verification',
+
+    # JSON file holding a Win32_DeviceGuard object (SecurityServicesConfigured and
+    # SecurityServicesRunning) to judge Credential Guard from, instead of reading CIM.
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$DeviceGuardSnapshotPath
 )
 
 Set-StrictMode -Version 3.0
@@ -268,14 +281,68 @@ function Get-BitLockerOsVolumeState {
     $method = [string](Get-OpsPropertyValue -InputObject $volume -Name 'EncryptionMethod')
     $current = "VolumeStatus=$volumeStatus;ProtectionStatus=$protection;EncryptionMethod=$method"
 
-    if ($protection -eq 'On' -or $volumeStatus -in @('FullyEncrypted', 'EncryptionInProgress')) {
-        $note = if ($protection -ne 'On') { 'Volume is encrypted but protection is not On (suspended?).' } else { 'OS volume is encrypted and protected.' }
-        return [pscustomobject]@{ State = 'Compliant'; CurrentValue = $current; Reason = $note }
+    # Compliant needs both halves: the volume fully encrypted AND protection On. Encrypted data with
+    # protection Off (suspended) is readable without the key protectors, and a volume part-way through
+    # encrypting is not yet protected, so neither is a met control.
+    if ([string]::IsNullOrWhiteSpace($volumeStatus) -or $protection -notin @('On', 'Off')) {
+        return [pscustomobject]@{ State = 'Unread'; CurrentValue = $current; Reason = 'BitLocker status was not one this check can judge (volume or protection status missing or unrecognised).' }
+    }
+    if ($volumeStatus -eq 'FullyEncrypted' -and $protection -eq 'On') {
+        return [pscustomobject]@{ State = 'Compliant'; CurrentValue = $current; Reason = 'OS volume is fully encrypted and protection is On.' }
+    }
+    if ($volumeStatus -eq 'FullyEncrypted') {
+        return [pscustomobject]@{ State = 'Drifted'; CurrentValue = $current; Reason = 'OS volume is fully encrypted but protection is Off (BitLocker is suspended or its key protectors are not active); the data is readable without them.' }
+    }
+    if ($volumeStatus -in @('EncryptionInProgress', 'EncryptionPaused', 'DecryptionInProgress', 'DecryptionPaused')) {
+        $missing = if ($protection -eq 'Off') { ' and protection is Off' } else { '' }
+        return [pscustomobject]@{ State = 'Drifted'; CurrentValue = $current; Reason = "OS volume is not fully encrypted (VolumeStatus $volumeStatus)$missing; it is not yet protected." }
     }
     if ($volumeStatus -eq 'FullyDecrypted' -and $protection -eq 'Off') {
         return [pscustomobject]@{ State = 'NotConfigured'; CurrentValue = $current; Reason = 'OS volume is not encrypted.' }
     }
     [pscustomobject]@{ State = 'Unread'; CurrentValue = $current; Reason = 'BitLocker status was not one this check can judge.' }
+}
+
+# Reads Win32_DeviceGuard (or the snapshot file) and judges Credential Guard (service id 1) by whether
+# it is running, not only configured. Read-only. A machine can list it as configured and still not run
+# it, for instance on an edition not licensed for it or before the restart that starts it.
+function Get-CredentialGuardState {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([string]$SnapshotPath)
+
+    try {
+        $deviceGuard = if ($SnapshotPath) {
+            @(Get-Content -LiteralPath $SnapshotPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop) | Select-Object -First 1
+        } else {
+            @(Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -ErrorAction Stop) | Select-Object -First 1
+        }
+    } catch {
+        return [pscustomobject]@{ State = 'Unread'; CurrentValue = ''; Reason = "Win32_DeviceGuard could not be read: $($_.Exception.Message)" }
+    }
+    if ($null -eq $deviceGuard) {
+        return [pscustomobject]@{ State = 'Unread'; CurrentValue = ''; Reason = 'Win32_DeviceGuard returned nothing.' }
+    }
+    $configuredProperty = $deviceGuard.PSObject.Properties['SecurityServicesConfigured']
+    $runningProperty = $deviceGuard.PSObject.Properties['SecurityServicesRunning']
+    if ($null -eq $configuredProperty -or $null -eq $runningProperty -or ($null -eq $configuredProperty.Value -and $null -eq $runningProperty.Value)) {
+        return [pscustomobject]@{ State = 'Unread'; CurrentValue = ''; Reason = 'Win32_DeviceGuard did not report SecurityServicesConfigured and SecurityServicesRunning.' }
+    }
+    $configured = @($configuredProperty.Value | Where-Object { $null -ne $_ })
+    $running = @($runningProperty.Value | Where-Object { $null -ne $_ })
+    $current = "SecurityServicesConfigured=$($configured -join ',');SecurityServicesRunning=$($running -join ',')"
+    $isConfigured = $configured -contains 1
+    $isRunning = $running -contains 1
+
+    if ($isRunning) {
+        return [pscustomobject]@{ State = 'Compliant'; CurrentValue = $current; Reason = 'Credential Guard is running.' }
+    }
+    if ($isConfigured) {
+        return [pscustomobject]@{ State = 'Drifted'; CurrentValue = $current; Reason = 'Credential Guard is configured but not running (the edition may not be licensed for it, or a restart or a hardware prerequisite is missing).' }
+    }
+    # Opt-in and not required by the baseline (the credential script refuses it on editions that cannot
+    # run it), so a machine without it is reported, not counted as drift.
+    [pscustomobject]@{ State = 'ReportOnly'; CurrentValue = $current; Reason = 'Credential Guard is not configured; it is opt-in and not required by the baseline.' }
 }
 
 function ConvertTo-HardeningComplianceRecord {
@@ -563,6 +630,18 @@ foreach ($name in $Target) {
                         -DesiredState ([string](Get-OpsPropertyValue -InputObject $item -Name 'DesiredState')) `
                         -PlannedAction $action `
                         -Reason ([string](Get-OpsPropertyValue -InputObject $item -Name 'Reason'))))
+        }
+
+        if ($name -eq 'CredentialProtection') {
+            if ($machine -eq $env:COMPUTERNAME) {
+                $guardState = Get-CredentialGuardState -SnapshotPath $DeviceGuardSnapshotPath
+            } else {
+                $guardState = [pscustomobject]@{ State = 'NotCheckedRemotely'; CurrentValue = ''; Reason = 'Credential Guard is read from the local machine only.' }
+            }
+            $complianceRecords.Add((ConvertTo-HardeningComplianceRecord -Target $name -ComputerName $machine -State $guardState.State `
+                        -Category 'CredentialGuard' -ItemType 'DeviceGuardService' -Item 'CredentialGuardRunning' `
+                        -CurrentValue $guardState.CurrentValue -DesiredValue 'SecurityServicesRunning contains 1' `
+                        -DesiredState 'Credential Guard running' -PlannedAction '' -Reason $guardState.Reason))
         }
 
         $forTarget = @($complianceRecords | Where-Object { $_.Target -eq $name -and $_.ComputerName -eq $machine })

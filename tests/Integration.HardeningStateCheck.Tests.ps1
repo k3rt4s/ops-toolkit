@@ -91,7 +91,7 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     function Invoke-Checker {
         param(
             [string]$Script = $script:fakeChecker, [string[]]$Target, [hashtable]$Environment = @{},
-            [string[]]$ComputerName, [switch]$FailOnDrift
+            [string[]]$ComputerName, [switch]$FailOnDrift, [string[]]$ExtraArgument = @()
         )
         $script:runCounter++
         $out = Join-Path $script:workRoot "out-$script:runCounter"
@@ -99,6 +99,7 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
         $arguments = @('-NoProfile', '-NonInteractive', '-File', "`"$Script`"", '-Target', ($Target -join ','), '-OutputDirectory', "`"$out`"")
         if ($ComputerName) { $arguments += @('-ComputerName', ($ComputerName -join ',')) }
         if ($FailOnDrift) { $arguments += '-FailOnDrift' }
+        if ($ExtraArgument.Count) { $arguments += $ExtraArgument }
 
         $saved = @{}
         foreach ($key in $Environment.Keys) {
@@ -432,6 +433,10 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         $decrypted = '[{"MountPoint":"Q:","VolumeType":"OperatingSystem","VolumeStatus":"FullyDecrypted","ProtectionStatus":"Off","EncryptionMethod":"None","KeyProtector":[]}]'
         $inProgress = '[{"MountPoint":"Q:","VolumeType":"OperatingSystem","VolumeStatus":"EncryptionInProgress","ProtectionStatus":"Off","EncryptionMethod":"XtsAes256","KeyProtector":[]}]'
 
+        function New-VolumeJson {
+            param([string]$Status, [string]$Protection)
+            '[{"MountPoint":"Q:","VolumeType":"OperatingSystem","VolumeStatus":"' + $Status + '","ProtectionStatus":"' + $Protection + '","EncryptionMethod":"XtsAes256","KeyProtector":[]}]'
+        }
         $script:blProtected = Invoke-BitLockerChecker -VolumeJson $protected
         $script:blDecrypted = Invoke-BitLockerChecker -VolumeJson $decrypted
         $script:blDecryptedGate = Invoke-BitLockerChecker -VolumeJson $decrypted -FailOnDrift
@@ -448,8 +453,35 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         $script:blProtected.Summary.CompliantCount | Should -Be 1
     }
 
-    It 'is compliant while encryption is in progress' {
-        @($script:blInProgress.Records)[0].State | Should -Be 'Compliant'
+    It 'is drifted, with the missing half named, for <Status> with protection <Protection>' -ForEach @(
+        @{ Status = 'FullyEncrypted'; Protection = 'Off'; Reason = 'protection is Off' }
+        @{ Status = 'EncryptionInProgress'; Protection = 'On'; Reason = 'not fully encrypted' }
+        @{ Status = 'EncryptionInProgress'; Protection = 'Off'; Reason = 'protection is Off' }
+        @{ Status = 'DecryptionInProgress'; Protection = 'On'; Reason = 'not fully encrypted' }
+    ) {
+        $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status $Status -Protection $Protection) -FailOnDrift
+        @($run.Records).Count | Should -Be 1
+        @($run.Records)[0].State | Should -Be 'Drifted'
+        @($run.Records)[0].Reason | Should -Match $Reason
+        $run.Summary.CompliantCount | Should -Be 0
+        $run.Summary.TotalDrift | Should -Be 1
+        $run.ExitCode | Should -Be 1
+    }
+
+    It 'is unread, never compliant, when the protection status is not On or Off' -ForEach @('Unknown', '') {
+        $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status 'FullyEncrypted' -Protection $_)
+        @($run.Records).Count | Should -Be 1
+        @($run.Records)[0].State | Should -Be 'Unread'
+        $run.Summary.CompliantCount | Should -Be 0
+    }
+
+    It 'is only compliant for FullyEncrypted with protection On' {
+        @($script:blProtected.Records)[0].State | Should -Be 'Compliant'
+        $script:blProtected.Summary.CompliantCount | Should -Be 1
+    }
+
+    It 'is drifted, not compliant, while encryption is in progress with protection off' {
+        @($script:blInProgress.Records)[0].State | Should -Be 'Drifted'
     }
 
     It 'is not configured for a decrypted OS volume, and that fails -FailOnDrift' {
@@ -482,6 +514,118 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         $text | Should -Not -Match ([regex]::Escape('FEEDFACE-9999-4888-8777-0123456789AB'))
         $text | Should -Not -Match 'RecoveryPassword'
         $text | Should -Match 'FullyEncrypted' -Because 'the report must still carry the status it was built from'
+    }
+}
+
+Describe 'Test-WindowsHardeningState Defender target against the real script' {
+    # The checker runs Set-WindowsDefenderHardening.ps1 -WhatIf in a child pwsh. Under -WhatIf the
+    # Defender module's own Set-Alias calls were suppressed, every value read unknown, and the target
+    # came back with no verdict. The fake Defender module fails at import the same way.
+    BeforeAll {
+        $script:realChecker = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
+        $script:defRun = Invoke-Checker -Script $script:realChecker -Target 'Defender' -Environment @{
+            PSModulePath = "$script:systemModulePath;$env:PSModulePath"
+            OPSTOOLKIT_TEST_MP_EXCLUSIONPATH = ''
+            OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS = ''
+            OPSTOOLKIT_TEST_MP_PUA = '1'
+            OPSTOOLKIT_TEST_MP_MAPS = '0'
+        }
+    }
+
+    It 'checks the target and reads Defender settings' {
+        $script:defRun.ExitCode | Should -Be 0 -Because (Get-Content -LiteralPath "$($script:defRun.Log).err" -Raw -ErrorAction SilentlyContinue)
+        @($script:defRun.Results).Count | Should -Be 1
+        @($script:defRun.Results)[0].Status | Should -Be 'Checked'
+        @($script:defRun.Records).Count | Should -BeGreaterThan 14
+        @($script:defRun.Records | Where-Object Category -eq 'DefenderPreference').Count | Should -Be 0
+    }
+
+    It 'carries the current values the fixture planted, not unknown' {
+        $pua = @($script:defRun.Records | Where-Object Item -eq 'PUAProtection')
+        $pua.Count | Should -Be 1
+        $pua[0].CurrentValue | Should -Be '1'
+        $pua[0].State | Should -Be 'Compliant'
+        $maps = @($script:defRun.Records | Where-Object Item -eq 'MAPSReporting')
+        $maps.Count | Should -Be 1
+        $maps[0].CurrentValue | Should -Be '0'
+        $maps[0].State | Should -Be 'Drifted'
+    }
+
+    It 'plans all 14 ASR rules as drifted on a machine with none configured' {
+        $asr = @($script:defRun.Records | Where-Object Category -eq 'AsrRule')
+        $asr.Count | Should -Be 14
+        @($asr | Where-Object State -ne 'Drifted').Count | Should -Be 0
+    }
+}
+
+Describe 'Test-WindowsHardeningState Credential Guard' {
+    BeforeAll {
+        $script:realChecker = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
+        function Invoke-CredentialGuardChecker {
+            param([string]$SnapshotJson, [switch]$FailOnDrift)
+            $snapshot = ''
+            if ($SnapshotJson) {
+                $snapshot = Join-Path $script:workRoot "dg-$([guid]::NewGuid().ToString('N')).json"
+                Set-Content -LiteralPath $snapshot -Value $SnapshotJson -Encoding utf8
+            } else {
+                $snapshot = Join-Path $script:workRoot 'dg-missing.json'
+            }
+            Invoke-Checker -Script $script:realChecker -Target 'CredentialProtection' -FailOnDrift:$FailOnDrift `
+                -ExtraArgument @('-DeviceGuardSnapshotPath', "`"$snapshot`"") `
+                -Environment @{ PSModulePath = "$script:systemModulePath;$env:PSModulePath" }
+        }
+        function Get-GuardRecord { param($Run) @($Run.Records | Where-Object Category -eq 'CredentialGuard') }
+
+        $script:cgConfiguredNotRunning = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1],"SecurityServicesRunning":[]}' -FailOnDrift
+        $script:cgRunning = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1,2],"SecurityServicesRunning":[1,2]}' -FailOnDrift
+        $script:cgNone = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[],"SecurityServicesRunning":[]}' -FailOnDrift
+        $script:cgOnlyHvci = Invoke-CredentialGuardChecker -SnapshotJson '{"SecurityServicesConfigured":[1,2],"SecurityServicesRunning":[2]}'
+        $script:cgNoProps = Invoke-CredentialGuardChecker -SnapshotJson '{"Other":1}'
+        $script:cgUnreadable = Invoke-CredentialGuardChecker -SnapshotJson ''
+    }
+
+    It 'reports configured but not running as drifted, never compliant, and fails -FailOnDrift' {
+        $record = Get-GuardRecord -Run $script:cgConfiguredNotRunning
+        $record.Count | Should -Be 1
+        $record[0].State | Should -Be 'Drifted'
+        $record[0].Reason | Should -Match 'configured but not running'
+        $record[0].CurrentValue | Should -Be 'SecurityServicesConfigured=1;SecurityServicesRunning='
+        # Drift attributable to this record, not to whatever else the machine's LSA settings show.
+        @($script:cgConfiguredNotRunning.Records | Where-Object { $_.Category -eq 'CredentialGuard' -and $_.State -eq 'Drifted' }).Count | Should -Be 1
+        $script:cgConfiguredNotRunning.Summary.TotalDrift | Should -Be ($script:cgRunning.Summary.TotalDrift + 1)
+        $script:cgConfiguredNotRunning.Summary.Passed | Should -BeFalse
+    }
+
+    It 'treats configured with only memory integrity running as drifted too' {
+        (Get-GuardRecord -Run $script:cgOnlyHvci)[0].State | Should -Be 'Drifted'
+    }
+
+    It 'is compliant only when Credential Guard is running' {
+        $record = Get-GuardRecord -Run $script:cgRunning
+        $record.Count | Should -Be 1
+        $record[0].State | Should -Be 'Compliant'
+    }
+
+    It 'reports neither configured nor running as ReportOnly and counts no drift for it' {
+        $record = Get-GuardRecord -Run $script:cgNone
+        $record.Count | Should -Be 1
+        $record[0].State | Should -Be 'ReportOnly'
+        $record[0].Reason | Should -Match 'opt-in'
+        # Same drift, same verdict and same exit as the run where Credential Guard is running, whatever
+        # else this machine's own settings contribute: the record adds nothing to the drift total.
+        $script:cgNone.Summary.TotalDrift | Should -Be $script:cgRunning.Summary.TotalDrift
+        $script:cgNone.Summary.NotConfiguredCount | Should -Be $script:cgRunning.Summary.NotConfiguredCount
+        $script:cgNone.Summary.Passed | Should -Be $script:cgRunning.Summary.Passed
+        $script:cgNone.ExitCode | Should -Be $script:cgRunning.ExitCode
+        $script:cgNone.Summary.ReportOnlyCount | Should -Be ($script:cgRunning.Summary.ReportOnlyCount + 1)
+    }
+
+    It 'is unread, not compliant, when the lists are missing or the source cannot be read' {
+        foreach ($run in $script:cgNoProps, $script:cgUnreadable) {
+            $record = Get-GuardRecord -Run $run
+            $record.Count | Should -Be 1
+            $record[0].State | Should -Be 'Unread'
+        }
     }
 }
 

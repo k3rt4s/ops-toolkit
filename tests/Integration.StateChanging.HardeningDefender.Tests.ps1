@@ -136,6 +136,101 @@ Describe 'Set-WindowsDefenderHardening on a machine with nothing configured' {
     }
 }
 
+Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
+    # Under -WhatIf the Defender module's own Set-Alias calls are suppressed when it auto-loads, so
+    # every value read as unknown and nothing was planned. The fake Defender module does the same at
+    # import. The failure only shows when the script is the process's own -File entry point, as it is
+    # when an operator or Test-WindowsHardeningState runs it, so these runs start pwsh -File -WhatIf
+    # directly rather than going through the runner script that Invoke-DefenderPair uses.
+    BeforeAll {
+        function Invoke-DefenderWhatIf {
+            param([string]$Tag, [hashtable]$State = @{})
+            $report = Join-Path $script:workRoot $Tag
+            $log = Join-Path $script:workRoot "$Tag.log"
+            $mutationLog = Join-Path $script:workRoot "$Tag.mutations.log"
+            $names = @('OPSTOOLKIT_TEST_MUTATION_LOG', 'OPSTOOLKIT_TEST_MP_EXCLUSIONPATH', 'OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS', 'PSModulePath') + @($State.Keys | ForEach-Object { "OPSTOOLKIT_TEST_MP_$_" })
+            $saved = @{}
+            foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+            try {
+                [Environment]::SetEnvironmentVariable('PSModulePath', "$script:systemModulePath;$($saved['PSModulePath'])")
+                [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MUTATION_LOG', $mutationLog)
+                [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MP_EXCLUSIONPATH', '')
+                [Environment]::SetEnvironmentVariable('OPSTOOLKIT_TEST_MP_EXCLUSIONPROCESS', '')
+                foreach ($key in $State.Keys) { [Environment]::SetEnvironmentVariable("OPSTOOLKIT_TEST_MP_$key", [string]$State[$key]) }
+                $process = Start-Process -FilePath (Get-Process -Id $PID).Path -NoNewWindow -Wait -PassThru `
+                    -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$(Get-RepositoryScriptPath -RelativePath $script:relativePath)`"", '-ReportDirectory', "`"$report`"", '-WhatIf') `
+                    -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            } finally {
+                foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+            }
+            $planFile = Get-ChildItem -LiteralPath $report -Filter 'defender-hardening-apply-plan-*.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            $stateFile = Get-ChildItem -LiteralPath $report -Filter 'defender-hardening-apply-state-*.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            [pscustomobject]@{
+                ExitCode = $process.ExitCode
+                Log = $log
+                MutationLog = $mutationLog
+                State = $(if ($stateFile) { @(Get-Content -LiteralPath $stateFile.FullName -Raw | ConvertFrom-Json) } else { @() })
+                Items = $(if ($planFile) { @(Get-Content -LiteralPath $planFile.FullName -Raw | ConvertFrom-Json) } else { @() })
+            }
+        }
+
+        $script:wi = Invoke-DefenderWhatIf -Tag 'whatifReads' -State @{ PUA = '1'; MAPS = '2'; NETPROT = '0' }
+    }
+
+    It 'runs to completion and writes a plan' {
+        $script:wi.ExitCode | Should -Be 0 -Because (Get-Content -LiteralPath "$($script:wi.Log).err" -Raw -ErrorAction SilentlyContinue)
+        $script:wi.Items.Count | Should -BeGreaterThan 14
+    }
+
+    It 'does not fall back to the unreadable-settings row' {
+        @($script:wi.Items | Where-Object Category -eq 'DefenderPreference').Count | Should -Be 0
+        @($script:wi.Items | Where-Object Category -eq 'AsrRule').Count | Should -Be 14
+    }
+
+    It 'reads the current values the fixture planted' {
+        ($script:wi.Items | Where-Object Setting -eq 'PUAProtection').CurrentValue | Should -Be 1
+        ($script:wi.Items | Where-Object Setting -eq 'MAPSReporting').CurrentValue | Should -Be 2
+        ($script:wi.Items | Where-Object Setting -eq 'EnableNetworkProtection').CurrentValue | Should -Be 0
+        ($script:wi.Items | Where-Object Setting -eq 'AMRunningMode').CurrentValue | Should -Be 'Normal'
+    }
+
+    It 'plans the change a live run would apply for a setting that is not at its target' {
+        ($script:wi.Items | Where-Object Setting -eq 'MAPSReporting').DesiredValue | Should -Be 2
+        ($script:wi.Items | Where-Object Setting -eq 'PUAProtection').Action | Should -Match 'No change|already'
+        ($script:wi.Items | Where-Object Setting -eq 'EnableControlledFolderAccess').Action | Should -Match '^Set'
+    }
+
+    It 'stays a preview: the state records Previewed and the Defender commands attempted nothing' {
+        $script:wi.State.Count | Should -BeGreaterThan 14
+        # Elevated, a setting that would change is Previewed; unelevated it is skipped before the preview
+        # is reached. Either way nothing is Applied, Reverted or Failed.
+        $changing = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        @($script:wi.State | Where-Object { "$($_.Result)" -eq $changing }).Count | Should -BeGreaterThan 0
+        @($script:wi.State | Where-Object { "$($_.Result)" -notin @($changing, 'NoChange', 'ReportOnly') }).Count | Should -Be 0
+        # Assert-OpsNoChangeUnderWhatIf takes the pair shape the runner returns; this run has the same two fields.
+        Assert-OpsNoChangeUnderWhatIf -Pair ([pscustomobject]@{ WhatIf = [pscustomobject]@{ ExitCode = $script:wi.ExitCode; Output = '' }; WhatIfLog = $script:wi.MutationLog })
+    }
+
+    It 'leaves no unknown current value among the Defender settings it plans' {
+        @($script:wi.Items | Where-Object { $_.Category -ne 'SmartAppControl' -and "$($_.CurrentValue)" -eq 'unknown' }).Count | Should -Be 0
+    }
+}
+
+Describe 'Set-WindowsDefenderHardening when Defender cannot be read' {
+    BeforeAll {
+        $script:noMod = Invoke-DefenderPair -Tag 'noModule' -State @{ UNREADABLE = '1' }
+        $script:noModItems = Get-PlanItem -Run $script:noMod.WhatIf
+    }
+
+    It 'plans nothing and says why, instead of planning from guessed values' {
+        $script:noMod.WhatIf.ExitCode | Should -Be 0 -Because $script:noMod.WhatIf.Output
+        $row = @($script:noModItems | Where-Object Category -eq 'DefenderPreference')
+        $row.Count | Should -Be 1
+        $row[0].Action | Should -Match 'could not be read'
+        @($script:noModItems | Where-Object Category -eq 'AsrRule').Count | Should -Be 0
+    }
+}
+
 Describe 'Set-WindowsDefenderHardening opt-in switches' {
     BeforeAll {
         $script:block = Invoke-DefenderPair -Tag 'block' -Argument @{

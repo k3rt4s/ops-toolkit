@@ -9,7 +9,13 @@ Instructions:
 - The functions edit only the policy XML or binary path they are passed, which is the
   behaviour of the real cmdlets, so a script can build its policy artifacts under test. None of
   them changes the machine; applying a policy is CiTool.exe's job and is stubbed by the test.
+- Importing it while the global WhatIfPreference is on throws, the way the real module's
+  compatibility-layer load fails under -WhatIf. A script must clear the preference at script scope
+  (a function-local copy does not reach the module) for the import, then restore it. The fault shows
+  only when the script is the process's own `pwsh -File script -WhatIf` entry point, so a test must
+  start pwsh -File directly; the & runner used by Invoke-OpsWindowsScriptPair never sets it.
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record each call.
+- Set OPSTOOLKIT_TEST_CI_UNAVAILABLE to any value to make the import fail, as on a host without the module.
 - Set OPSTOOLKIT_TEST_CI_IGNORE_OPTION to a rule option number to make Set-RuleOption accept that option
   and write nothing.
 
@@ -25,11 +31,23 @@ Active test fixture kept in the reorganized ops-toolkit repo.
 
 Set-StrictMode -Version 3.0
 
+# The real module loads in PowerShell 7 through the Windows PowerShell compatibility layer, whose proxy
+# module copies a file as it loads. Under -WhatIf that Copy-Item is suppressed and the load fails
+# (seen 2026-11-01), so a script that leaves ConfigCI to auto-load cannot find the cmdlets in a
+# preview. This stand-in fails the same way: it creates an alias at import with a top-level
+# Set-Alias, which -WhatIf suppresses, and refuses to load when the alias is missing. A module scope
+# reads the global preference, so it fails only when the global WhatIfPreference is true at import.
+Set-Alias -Name Read-FakeCiMarker -Value Write-FakeCiMutation
+if ($env:OPSTOOLKIT_TEST_CI_UNAVAILABLE) { throw 'ConfigCI is unavailable (fake, OPSTOOLKIT_TEST_CI_UNAVAILABLE).' }
+if (-not (Get-Alias -Name Read-FakeCiMarker -ErrorAction SilentlyContinue)) {
+    throw 'ConfigCI import-time action suppressed under -WhatIf (fake of the compatibility-layer proxy Copy-Item).'
+}
+
 function Write-FakeCiMutation {
     param([string]$Command, [string]$Target, [string]$Detail = '')
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -92,7 +110,7 @@ function ConvertFrom-CIPolicy {
         [Parameter(Position = 0)][string]$XmlFilePath,
         [Parameter(Position = 1)][string]$BinaryFilePath
     )
-    Set-Content -LiteralPath $BinaryFilePath -Value 'FAKE-CIP-BINARY' -Encoding ascii
+    Set-Content -LiteralPath $BinaryFilePath -Value 'FAKE-CIP-BINARY' -Encoding ascii -WhatIf:$false
     Write-FakeCiMutation -Command 'ConvertFrom-CIPolicy' -Target $BinaryFilePath -Detail $XmlFilePath
     [pscustomobject]@{ BinaryFile = $BinaryFilePath }
 }

@@ -11,9 +11,12 @@ Instructions:
   workstation must never be applied to someone else's machine. Generated reports belong under a
   data root outside the repo.
 - Run elevated to deploy. A non-elevated live run marks the deploy step 'Skipped: requires
-  elevation'. Policy authoring uses the ConfigCI cmdlets, which load in Windows PowerShell 5.1
-  and, through the compatibility layer, in PowerShell 7; if they do not load the plan says so
-  and stops.
+  elevation'. Run it in PowerShell 7.4 or later (the toolkit's reporting module requires it; the
+  script does not start in Windows PowerShell 5.1). Policy authoring uses the ConfigCI cmdlets,
+  which PowerShell 7 loads through the Windows PowerShell compatibility layer. The script imports
+  ConfigCI itself before it checks for the cmdlets, also under -WhatIf, because the compatibility
+  layer's automatic load fails when -WhatIf suppresses the file copy it makes. If the module still
+  does not load the plan says so and stops.
 - The base is a Microsoft example policy copied from
   %windir%\schemas\CodeIntegrity\ExamplePolicies (override the folder with
   -ExamplePolicyDirectory). -BasePolicy DefaultWindows (the default) starts from
@@ -21,6 +24,10 @@ Instructions:
   gets a new policy ID, the name 'ops-toolkit WDAC audit', and two rule options forced on
   before it is converted to a binary policy: Audit Mode (Set-RuleOption -Option 3) and Unsigned
   System Integrity Policy (Set-RuleOption -Option 6, because the policy is deployed unsigned).
+- -CiToolPath names the CiTool program the script runs (default CiTool.exe, resolved from the
+  path as before). Point it at another executable or script to run the plan against a stand-in
+  that never touches the machine's policies; the script still reads and changes policy only
+  through that program.
 - The single change is: CiTool.exe --update-policy <policy.cip> --json. Before it, the script
   lists active policies (CiTool.exe --list-policies --json) and refuses if a policy with the
   same name from a previous run is already active; roll that one back first. A policy list that
@@ -80,6 +87,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$ExamplePolicyDirectory = (Join-Path $env:windir 'schemas\CodeIntegrity\ExamplePolicies'),
 
+    [Parameter()]
+    [ValidateNotNullOrEmpty()]
+    [string]$CiToolPath = 'CiTool.exe',
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ReportDirectory,
@@ -94,6 +105,8 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
 
 $script:Prefix = 'wdac-audit'
+# The CiTool program every policy read and change goes through (-CiToolPath; default CiTool.exe).
+$script:CiToolCommand = $CiToolPath
 $script:PolicyName = 'ops-toolkit WDAC audit'
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:StopReason = $null
@@ -132,12 +145,12 @@ function ConvertTo-BarePolicyId {
 # Reads the active policy list. Unreadable is reported as such and never treated as empty.
 function Get-ActivePolicyList {
     $result = [pscustomobject]@{ Readable = $false; Reason = ''; Policies = @() }
-    if (-not (Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue)) {
         $result.Reason = 'CiTool.exe was not found (it ships with Windows 11 and Windows Server 2025)'
         return $result
     }
     try {
-        $text = (& CiTool.exe --list-policies --json 2>&1 | Out-String)
+        $text = (& $script:CiToolCommand --list-policies --json 2>&1 | Out-String)
         $json = $text | ConvertFrom-Json -ErrorAction Stop
     } catch {
         $result.Reason = "CiTool --list-policies output could not be parsed: $($_.Exception.Message)"
@@ -202,6 +215,27 @@ function Initialize-AuditPolicyArtifact {
     [pscustomobject]@{ XmlPath = $xmlPath; CipPath = $cipPath; PolicyId = $policyId }
 }
 
+# Loads ConfigCI explicitly. Left to auto-load, the Windows PowerShell compatibility layer's proxy
+# module copies a file as it loads, and under -WhatIf that Copy-Item is suppressed and the load
+# fails, so a preview always reported the cmdlets missing. Returns $null on success, otherwise the
+# failure text; the caller still tests for the cmdlets, so a failed import is never read as a pass.
+function Import-ConfigCIModule {
+    # The preference is cleared at script scope, not function scope: the module's own import-time
+    # actions read the global preference, which a function-local copy does not change (checked against
+    # the real module). Read the saved value through normal lookup: a run without -WhatIf has no
+    # script-scope copy to read under strict mode.
+    $savedWhatIf = $WhatIfPreference
+    $script:WhatIfPreference = $false
+    try {
+        Import-Module -Name ConfigCI -Global -ErrorAction Stop
+    } catch {
+        return ($_.Exception.Message -replace '\s+', ' ')
+    } finally {
+        $script:WhatIfPreference = $savedWhatIf
+    }
+    $null
+}
+
 function Get-ForwardPlan {
     param([string]$ExampleDirectory)
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
@@ -210,14 +244,15 @@ function Get-ForwardPlan {
     $exampleName = $script:BaseExampleFiles[$BasePolicy]
     $basePath = Join-Path $ExampleDirectory $exampleName
     $baseExists = Test-Path -LiteralPath $basePath -PathType Leaf
+    $ciImportError = Import-ConfigCIModule
     $ciCmdlets = [bool]((Get-Command -Name 'Set-CIPolicyIdInfo' -ErrorAction SilentlyContinue) -and
         (Get-Command -Name 'Set-RuleOption' -ErrorAction SilentlyContinue) -and
         (Get-Command -Name 'ConvertFrom-CIPolicy' -ErrorAction SilentlyContinue))
-    $ciTool = [bool](Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue)
+    $ciTool = [bool](Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue)
     $list = Get-ActivePolicyList
 
     $script:PreconditionResult['Elevated'] = if ($admin) { 'Met' } else { 'Skipped: requires elevation' }
-    $script:PreconditionResult['ConfigCI'] = if ($ciCmdlets) { 'Met' } else { 'Failed: the ConfigCI cmdlets (Set-CIPolicyIdInfo, Set-RuleOption, ConvertFrom-CIPolicy) are not available; try Windows PowerShell 5.1' }
+    $script:PreconditionResult['ConfigCI'] = if ($ciCmdlets) { 'Met' } else { "Failed: the ConfigCI cmdlets (Set-CIPolicyIdInfo, Set-RuleOption, ConvertFrom-CIPolicy) are not available$(if ($ciImportError) { " (importing ConfigCI said: $ciImportError)" }); run this script in PowerShell 7.4 or later, which loads ConfigCI through the Windows PowerShell compatibility layer" }
     $script:PreconditionResult['CiTool'] = if ($ciTool) { 'Met' } else { 'Failed: CiTool.exe was not found (Windows 11 or Server 2025 required)' }
     $script:PreconditionResult['BasePolicyFile'] = if ($baseExists) { 'Met' } else { "Failed: example policy $basePath was not found" }
 
@@ -365,7 +400,7 @@ function Get-RollbackPlan {
     $admin = Test-IsAdministrator
     $list = Get-ActivePolicyList
     $script:PreconditionResult['Elevated'] = if ($admin) { 'Met' } else { 'Skipped: requires elevation' }
-    $script:PreconditionResult['CiTool'] = if (Get-Command -Name 'CiTool.exe' -ErrorAction SilentlyContinue) { 'Met' } else { 'Failed: CiTool.exe was not found' }
+    $script:PreconditionResult['CiTool'] = if (Get-Command -Name $script:CiToolCommand -ErrorAction SilentlyContinue) { 'Met' } else { 'Failed: CiTool.exe was not found' }
 
     $active = 'unknown'
     $action = "Remove audit-mode policy $policyId with CiTool.exe --remove-policy (a restart may be needed to finish)"
@@ -402,7 +437,7 @@ function Get-RollbackPlan {
 
 function Invoke-CiToolJson {
     param([string[]]$Argument)
-    $text = (& CiTool.exe @Argument --json 2>&1 | Out-String)
+    $text = (& $script:CiToolCommand @Argument --json 2>&1 | Out-String)
     try {
         $json = $text | ConvertFrom-Json -ErrorAction Stop
     } catch {

@@ -142,6 +142,109 @@ Describe 'Set-WindowsNetworkProtocolHardening with SMB1 and features enabled' {
     }
 }
 
+Describe 'Set-WindowsNetworkProtocolHardening opt-in -DisableWpad' {
+    BeforeAll {
+        $script:wpadPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp'
+        $script:wpadDefault = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-wpad-default' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Smb1 'false' -Features 'SMB1Protocol=Disabled') `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'wpad-default'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+        $script:wpadOn = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-wpad-on' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Smb1 'false' -Features 'SMB1Protocol=Disabled') `
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'wpad-on'); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}'); DisableWpad = $true }
+    }
+
+    It 'runs to completion in both modes' {
+        $script:wpadDefault.Execute.ExitCode | Should -Be 0 -Because $script:wpadDefault.Execute.Output
+        $script:wpadOn.WhatIf.ExitCode | Should -Be 0 -Because $script:wpadOn.WhatIf.Output
+        $script:wpadOn.Execute.ExitCode | Should -Be 0 -Because $script:wpadOn.Execute.Output
+    }
+
+    It 'does not plan WPAD in the default run' {
+        $plan = @(Get-PlanItem -Pair $script:wpadDefault)
+        $plan.Count | Should -BeGreaterThan 0
+        @($plan | Where-Object Category -eq 'Wpad').Count | Should -Be 0
+        @($plan | Where-Object { $_.ValueName -eq 'DisableWpad' }).Count | Should -Be 0
+    }
+
+    It 'plans DisableWpad = 1 under the WinHttp key with the switch' {
+        $plan = @(Get-PlanItem -Pair $script:wpadOn)
+        $plan.Count | Should -BeGreaterThan 0
+        $wpad = @($plan | Where-Object Category -eq 'Wpad')
+        $wpad.Count | Should -Be 1
+        $wpad[0].Kind | Should -Be 'Registry'
+        $wpad[0].RegistryPath | Should -Be $script:wpadPath
+        $wpad[0].ValueName | Should -Be 'DisableWpad'
+        "$($wpad[0].DesiredValue)" | Should -Be '1'
+        $wpad[0].RequiresAdmin | Should -BeTrue
+    }
+
+    It 'writes nothing under -WhatIf' {
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:wpadOn
+    }
+
+    It 'writes the value, creating the key only when missing, when executing elevated' {
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'session is not elevated; the plan assertions above still ran'; return }
+        $wpad = @(Get-PlanItem -Pair $script:wpadOn | Where-Object Category -eq 'Wpad')
+        $wpad.Count | Should -Be 1
+        if ($wpad[0].Action -like 'No change*') { Set-ItResult -Skipped -Because 'this machine already has DisableWpad = 1'; return }
+        $m = @(Get-OpsMutationRecord -Path $script:wpadOn.ExecuteLog)
+        @($m | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like '*DisableWpad' }).Count | Should -Be 1
+    }
+
+    It 'applies nothing for WPAD when not elevated' {
+        if ($script:isElevated) { Set-ItResult -Skipped -Because 'session is elevated'; return }
+        @(Get-OpsMutationRecord -Path $script:wpadOn.ExecuteLog | Where-Object { $_.Command -ne 'New-Item' }).Count | Should -Be 0
+        $item = @($script:wpadOn.Execute.Summary.Items | Where-Object Category -eq 'Wpad')
+        $item.Count | Should -Be 1
+        $item[0].Result | Should -BeIn @('Skipped: requires elevation', 'NoChange')
+    }
+
+    It 'restores the prior value, or removes the value the run added, on rollback' {
+        $dir = Join-Path $script:workRoot 'wpad-rb'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $entry = { param($prior) [pscustomobject]@{ Category = 'Wpad'; Setting = 'WinHttp DisableWpad'; Kind = 'Registry'; RegistryPath = $script:wpadPath; ValueName = 'DisableWpad'; PropertyType = 'DWord'; RequiresAdmin = $true; RequiresReboot = $false; PriorValue = $prior; AppliedValue = 1 } }
+        [pscustomobject]@{ Timestamp = '20250101_000000'; ChangedSettings = @(& $entry 'absent') } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dir 'network-protocol-hardening-rollback-20250101_000000.json') -Encoding utf8
+        $rb = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-wpad-rb' `
+            -FixtureEnvironment (Get-FixtureEnvironment) `
+            -Argument @{ ReportDirectory = $dir; Rollback = $true }
+        $rb.Execute.ExitCode | Should -Be 0 -Because $rb.Execute.Output
+        Assert-OpsNoChangeUnderWhatIf -Pair $rb
+        $plan = @(Get-PlanItem -Pair $rb)
+        $plan.Count | Should -Be 1
+        $plan[0].Category | Should -Be 'Wpad'
+        $plan[0].DesiredValue | Should -Be 'absent'
+        if ($script:isElevated) {
+            $m = @(Get-OpsMutationRecord -Path $rb.ExecuteLog)
+            @($m | Where-Object { $_.Command -eq 'Remove-ItemProperty' -and $_.Target -like '*DisableWpad' }).Count | Should -Be 1
+        }
+    }
+
+    It 'restores a recorded numeric prior value on rollback' {
+        $dir = Join-Path $script:workRoot 'wpad-rb0'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        [pscustomobject]@{ Timestamp = '20250101_000000'; ChangedSettings = @([pscustomobject]@{ Category = 'Wpad'; Setting = 'WinHttp DisableWpad'; Kind = 'Registry'; RegistryPath = $script:wpadPath; ValueName = 'DisableWpad'; PropertyType = 'DWord'; RequiresAdmin = $true; RequiresReboot = $false; PriorValue = 0; AppliedValue = 1 }) } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dir 'network-protocol-hardening-rollback-20250101_000000.json') -Encoding utf8
+        $rb = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+            -RelativePath $script:relativePath -Tag 'netproto-wpad-rb0' `
+            -FixtureEnvironment (Get-FixtureEnvironment) `
+            -Argument @{ ReportDirectory = $dir; Rollback = $true }
+        $rb.Execute.ExitCode | Should -Be 0 -Because $rb.Execute.Output
+        $plan = @(Get-PlanItem -Pair $rb)
+        $plan.Count | Should -Be 1
+        "$($plan[0].DesiredValue)" | Should -Be '0'
+        if ($script:isElevated) {
+            $m = @(Get-OpsMutationRecord -Path $rb.ExecuteLog)
+            $set = @($m | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like '*DisableWpad' })
+            $set.Count | Should -Be 1
+            $set[0].Detail | Should -Be '0'
+        }
+    }
+}
+
 Describe 'Set-WindowsNetworkProtocolHardening when already hardened or absent' {
     BeforeAll {
         # SMB1 off, SMB1Protocol disabled, the other SMB1 features and PowerShell 2.0 absent.
@@ -604,10 +707,10 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
         $plan = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
             -RelativePath $script:relativePath -Tag 'npDrift' `
             -FixtureEnvironment (Get-FixtureEnvironment -Smb1 'true' -Features $features) `
-            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'npDrift'); DisableMulticastDns = $true }
+            -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'npDrift'); DisableMulticastDns = $true; DisableWpad = $true }
         $plan.WhatIf.ExitCode | Should -Be 0 -Because $plan.WhatIf.Output
         $forward = @(Get-NpPlan -Run $plan.WhatIf)
-        foreach ($category in 'Smb1Server', 'Smb1Feature', 'PowerShellV2Feature', 'SmbSigningClient', 'SmbSigningServer', 'Llmnr', 'Mdns') {
+        foreach ($category in 'Smb1Server', 'Smb1Feature', 'PowerShellV2Feature', 'SmbSigningClient', 'SmbSigningServer', 'Llmnr', 'Mdns', 'Wpad') {
             @($forward | Where-Object Category -eq $category).Count | Should -BeGreaterThan 0 -Because $category
         }
         # Every planned item becomes a recorded change (whatever the machine's registry holds now).

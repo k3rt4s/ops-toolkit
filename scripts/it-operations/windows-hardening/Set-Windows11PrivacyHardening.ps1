@@ -661,6 +661,26 @@ function Get-SucceededStateList {
     @($StateList | Where-Object { "$($_.Result)" -notlike 'Failed:*' })
 }
 
+# The three state lists the summary reports: rows that took effect (as disabled after a hardening run,
+# or enabled/default-restored after a rollback) and, separately, the rows that failed.
+function Get-SummaryStateList {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$StateList,
+
+        [Parameter()]
+        [bool]$Rollback
+    )
+
+    $succeeded = @(Get-SucceededStateList -StateList $StateList)
+    [pscustomobject]@{
+        DisabledAfterRun = if ($Rollback) { @() } else { $succeeded }
+        EnabledOrDefaultAfterRollback = if ($Rollback) { $succeeded } else { @() }
+        FailedItems = @($StateList | Where-Object { "$($_.Result)" -like 'Failed:*' })
+    }
+}
+
 # Runs every planned item in its own try/catch so one refused write (a protected policy key, a driver
 # that blocks the value) is recorded as Failed with its message and the run goes on to the next item.
 function Invoke-HardeningPlan {
@@ -757,6 +777,7 @@ $failedCount = $runResult.FailedCount
 $runStatuses = $runResult.Statuses
 
 $stateList = @(Get-RunStateList -Plan $plan -Statuses $runStatuses)
+$stateLists = Get-SummaryStateList -StateList $stateList -Rollback ([bool]$Rollback)
 $stateList | Export-Csv -Path $stateCsvPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
 $stateList | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $stateJsonPath -Encoding utf8 -WhatIf:$false
 
@@ -781,8 +802,8 @@ Write-Information "Windows 11 privacy $operationName state list JSON written to 
     SkippedCount = $skippedCount
     FailedCount = $failedCount
     RestartRequired = $true
-    DisabledAfterRun = if ($Rollback) { @() } else { @(Get-SucceededStateList -StateList $stateList) }
-    EnabledOrDefaultAfterRollback = if ($Rollback) { @(Get-SucceededStateList -StateList $stateList) } else { @() }
-    FailedItems = @($stateList | Where-Object { "$($_.Result)" -like 'Failed:*' })
+    DisabledAfterRun = $stateLists.DisabledAfterRun
+    EnabledOrDefaultAfterRollback = $stateLists.EnabledOrDefaultAfterRollback
+    FailedItems = $stateLists.FailedItems
     Notes = if ($Rollback) { 'Review reports before rollback. Sign out/in or reboot after applying live rollback changes.' } else { 'Review reports before live runs. Sign out/in or reboot after applying live privacy hardening changes.' }
 }

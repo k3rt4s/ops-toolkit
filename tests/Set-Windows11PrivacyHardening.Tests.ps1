@@ -107,6 +107,24 @@ Describe 'Invoke-HardeningPlan per-item failure handling' {
         @($ok | Where-Object { $_.Result -like 'Failed:*' }).Count | Should -Be 0
     }
 
+    It 'builds the summary lists with the refused item only in FailedItems, for a run and for a rollback' {
+        $result = Invoke-HardeningPlan -Plan $script:plan -Preview $false 3>$null
+        $rows = @(Get-RunStateList -Plan $script:plan -Statuses $result.Statuses)
+
+        $run = Get-SummaryStateList -StateList $rows -Rollback $false
+        @($run.DisabledAfterRun).Count | Should -Be 3
+        @($run.DisabledAfterRun | Where-Object { $_.Target -eq $script:plan[1].Target }).Count | Should -Be 0
+        @($run.EnabledOrDefaultAfterRollback).Count | Should -Be 0
+        @($run.FailedItems).Count | Should -Be 1
+        $run.FailedItems[0].Target | Should -Be $script:plan[1].Target
+
+        $back = Get-SummaryStateList -StateList $rows -Rollback $true
+        @($back.DisabledAfterRun).Count | Should -Be 0
+        @($back.EnabledOrDefaultAfterRollback).Count | Should -Be 3
+        @($back.EnabledOrDefaultAfterRollback | Where-Object { $_.Target -eq $script:plan[1].Target }).Count | Should -Be 0
+        @($back.FailedItems).Count | Should -Be 1
+    }
+
     It 'reports no failure and writes nothing on a preview' {
         $result = Invoke-HardeningPlan -Plan $script:plan -Preview $true
         Should -Invoke -ModuleName $script:moduleName New-ItemProperty -Exactly -Times 0

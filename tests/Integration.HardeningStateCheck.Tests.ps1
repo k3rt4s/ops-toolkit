@@ -17,7 +17,7 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     Import-ReportingModule
     Import-ScriptFunction -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' `
-        -FunctionName 'Get-HardeningStateVerdict', 'Get-WdacDeployVerdict'
+        -FunctionName 'Get-HardeningStateVerdict', 'Get-WdacDeployVerdict', 'Get-LegacyRowState'
 
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-hstate-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
@@ -67,6 +67,10 @@ param(
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+if ($env:OPSTOOLKIT_TEST_FAKE_LEGACY_CSV) {
+    Copy-Item -LiteralPath $env:OPSTOOLKIT_TEST_FAKE_LEGACY_CSV -Destination (Join-Path $ReportDirectory "fake-privacy-plan-$stamp.csv") -WhatIf:$false
+    return
+}
 @(
     [pscustomobject]@{ Action = 'NoChange'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\One'; CurrentValue = '0'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'already' }
     [pscustomobject]@{ Action = 'SetValue'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\Two'; CurrentValue = '1'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'wrong' }
@@ -298,12 +302,63 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
             $byItem['HKLM\A\One'] | Should -Be 'Compliant'
             $byItem['HKLM\A\Two'] | Should -Be 'Drifted'
             $byItem['HKLM\A\Three'] | Should -Be 'NotConfigured'
-            $byItem['svc'] | Should -Be 'Skipped'
+            $byItem['svc'] | Should -Be 'Unread' -Because 'a Skipped legacy row is undetermined, not a state of its own'
         }
 
         It 'keeps the older drift count: Drifted plus NotConfigured' {
             $script:legacy.Results[0].DriftCount | Should -Be 2
             $script:legacy.Summary.TotalDrift | Should -Be 2
+        }
+
+        It 'counts the unclassified legacy row as unread and not as drift' {
+            $script:legacy.Summary.UnreadCount | Should -Be 1
+            $script:legacy.Summary.TotalDrift | Should -Be 2
+            @($script:legacy.Summary.UnreadTargets) | Should -Contain 'Privacy:1'
+            $script:legacy.Summary.ItemsChecked | Should -Be 3 -Because 'the unread row is outside the items checked'
+        }
+    }
+
+    Context 'an older-schema plan with no drift and one row the checker cannot classify' {
+        BeforeAll {
+            $csv = Join-Path $script:workRoot 'legacy-undetermined.csv'
+            @(
+                [pscustomobject]@{ Action = 'NoChange'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\One'; CurrentValue = '0'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'already' }
+                [pscustomobject]@{ Action = 'DisableService'; Category = 'Service'; ItemType = 'Service'; Target = 'DiagTrack'; CurrentValue = 'Running; startup type evaluated during apply'; DesiredValue = 'Stopped; Disabled'; DesiredState = 'Disabled'; Reason = 'telemetry' }
+                [pscustomobject]@{ Action = 'DisableScheduledTask'; Category = 'ScheduledTask'; ItemType = 'ScheduledTask'; Target = '\T\Off'; CurrentValue = 'Disabled'; DesiredValue = 'Disabled'; DesiredState = 'Disabled'; Reason = 'telemetry' }
+            ) | Export-Csv -LiteralPath $csv -NoTypeInformation -Encoding utf8
+            $script:legacyUndetermined = Invoke-Checker -Target 'Privacy' -Environment @{ OPSTOOLKIT_TEST_FAKE_LEGACY_CSV = $csv } -FailOnDrift
+        }
+
+        It 'never passes: the unclassified row is Unread, so Passed stays false and -FailOnDrift exits 1' {
+            $run = $script:legacyUndetermined
+            $run.Summary.TotalDrift | Should -Be 0
+            $run.Summary.UnreadCount | Should -Be 1
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'classifies the scheduled-task row that carries enough to compare, and counts only the other as unread' {
+            $byItem = @{}
+            foreach ($r in $script:legacyUndetermined.Records) { $byItem[$r.Item] = $r.State }
+            $byItem['DiagTrack'] | Should -Be 'Unread'
+            $byItem['\T\Off'] | Should -Be 'Compliant'
+            $script:legacyUndetermined.Summary.CompliantCount | Should -Be 2
+        }
+    }
+
+    Context '-Target as one comma-joined value, the form the evidence pack sends' {
+        It 'accepts several newer targets in one value and checks each' {
+            $run = Invoke-FakeChecker -Target 'Defender,Firewall' -Item @(New-StateItem -Result 'NoChange')
+            $run.ExitCode | Should -Be 0
+            @($run.Results | ForEach-Object { $_.Target } | Sort-Object -Unique) | Should -Be @('Defender', 'Firewall')
+            $run.Summary.UnreadCount | Should -Be 0
+            $run.Summary.Passed | Should -BeTrue
+        }
+
+        It 'still rejects a name that is not a target' {
+            $run = Invoke-Checker -Target 'Defender,NotATarget'
+            $run.ExitCode | Should -Not -Be 0
+            $run.Summary | Should -BeNullOrEmpty
         }
     }
 
@@ -629,10 +684,46 @@ Describe 'Test-WindowsHardeningState Credential Guard' {
     }
 }
 
+Describe 'Get-LegacyRowState' {
+    # A local row of the older plan the checker cannot classify is Unread: not drift (it is not known to be
+    # wrong) and never a pass. A row that carries enough to compare is classified instead.
+    BeforeAll {
+        function New-LegacyRow { param([string]$Action, [string]$Current = '', [string]$Desired = '')
+            [pscustomobject]@{ Action = $Action; CurrentValue = $Current; DesiredValue = $Desired } }
+    }
+
+    It 'maps the registry actions as before' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'NoChange')).State | Should -Be 'Compliant'
+        (Get-LegacyRowState -Item (New-LegacyRow 'CreateValue')).State | Should -Be 'NotConfigured'
+        (Get-LegacyRowState -Item (New-LegacyRow 'SetValue')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DeleteValue')).State | Should -Be 'Drifted'
+    }
+
+    It 'maps a Skipped row, a service row, a Missing row, an unknown action and no action to Unread' {
+        foreach ($action in 'Skipped', 'DisableService', 'EnableService', 'Missing', 'SomethingNew', '') {
+            $state = (Get-LegacyRowState -Item (New-LegacyRow $action 'Running; startup type evaluated during apply' 'Stopped; Disabled')).State
+            $state | Should -Be 'Unread' -Because "action '$action' cannot be classified"
+        }
+    }
+
+    It 'compares a scheduled-task row against its desired state' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Ready' 'Disabled')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Disabled' 'Disabled')).State | Should -Be 'Compliant'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Disabled' 'Enabled')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Ready' 'Enabled')).State | Should -Be 'Compliant'
+    }
+
+    It 'keeps a scheduled-task row whose state could not be compared Unread' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Unknown' 'Disabled')).State | Should -Be 'Unread'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' '' 'Disabled')).State | Should -Be 'Unread'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Ready' '')).State | Should -Be 'Unread'
+    }
+}
+
 Describe 'Test-WindowsHardeningState default targets' {
-    # The evidence pack runs the checker with no -Target and reads TotalDrift, ItemsChecked and
-    # CompliantCount, not UnreadCount. Widening the default would let unread items in the newer
-    # targets vanish from those counts and read as a met control, so the newer targets stay opt-in.
+    # The checker's own default stays SchannelTls and Privacy so a bare run keeps its old scope. The
+    # evidence pack names every target itself and reads UnreadCount and Passed, so the newer targets are
+    # opt-in here but no longer invisible to CFG-01.
     It 'defaults to SchannelTls and Privacy only' {
         $path = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)

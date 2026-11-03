@@ -12,14 +12,19 @@ Instructions:
   read without elevation; those items are reported as Unread, never as compliant, and
   an elevated run reads them.
 - -Target selects what to verify. SchannelTls and Privacy are read from the older
-  plan CSV (Action: NoChange, CreateValue, SetValue, DeleteValue, Skipped). Defender,
+  plan CSV (Action: NoChange, CreateValue, SetValue, DeleteValue, Skipped). A local row of
+  that plan the checker cannot classify is Unread, not drift and not a pass: a Skipped
+  row, a service row (the plan records no startup type to compare), a Missing row and
+  any action it does not know. A scheduled-task row is compared (task state against
+  desired state). Defender,
   CredentialProtection, NetworkProtocol, ExploitMitigation, AuditLogging, RemoteAccess,
   LocalAccount, Firewall and WdacAudit are read from the apply-state JSON the newer
   scripts write (Result: NoChange, Previewed, ReportOnly, Skipped, Failed). BitLocker
   is read directly from the OS volume with Get-BitLockerVolume, because
   Enable-BitLockerOsVolume.ps1 needs a recovery key directory and is never run here.
   The default is SchannelTls and Privacy, the two targets the evidence pack has always
-  verified; name the newer targets with -Target to verify them.
+  verified; name the newer targets with -Target to verify them. -Target also accepts one
+  comma-joined value (A,B), which is how pwsh -File and the evidence pack pass a list.
 - State per item: Compliant (already in the desired state), Drifted (the plan would
   change it), NotConfigured, Failed, ReportOnly (listed, not counted as compliant or
   drifted), Precondition (a prerequisite row, recorded and excluded from the counts),
@@ -105,10 +110,26 @@ Active script kept in the reorganized ops-toolkit repo.
 [CmdletBinding()]
 param(
     [Parameter()]
-    [ValidateSet(
-        'SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
-        'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
-        'WdacAudit', 'BitLocker')]
+    # Not a ValidateSet: pwsh -File hands a comma-joined list (what the evidence pack sends) over as one
+    # string, which a ValidateSet rejects. Each value, or each comma-separated part of one, must be a target name.
+    [ArgumentCompleter({
+            param($commandName, $parameterName, $wordToComplete)
+            $null = $commandName, $parameterName
+            'SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
+            'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
+            'WdacAudit', 'BitLocker' | Where-Object { $_ -like "$wordToComplete*" }
+        })]
+    [ValidateScript({
+            $valid = @('SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
+                'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
+                'WdacAudit', 'BitLocker')
+            foreach ($part in ([string]$_ -split ',')) {
+                if ($part.Trim() -notin $valid) {
+                    throw "'$($part.Trim())' is not a target. Valid targets: $($valid -join ', ')."
+                }
+            }
+            $true
+        })]
     [string[]]$Target = @('SchannelTls', 'Privacy'),
 
     [Parameter()]
@@ -152,6 +173,10 @@ Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') 
 if ($PSBoundParameters.ContainsKey('ComputerName')) {
     $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
 }
+# The same for -Target, which the evidence pack sends as one comma-joined value.
+if ($PSBoundParameters.ContainsKey('Target')) {
+    $Target = @(ConvertTo-OpsSplitList -Value $Target)
+}
 
 # Schema 'Legacy' reads the plan CSV of the two older scripts. Schema 'State' reads the
 # <Prefix>-apply-state-<timestamp>.json the newer scripts write. Schema 'BitLocker' runs no script.
@@ -182,6 +207,41 @@ $targetScript = @{
 # They are listed in the report but are not items checked, so they can never lift CompliantCount
 # or hide drift.
 $nonVerdictState = @('Unread', 'ReportOnly', 'Precondition', 'NotCheckedRemotely')
+
+# Maps one local row of the older plan CSV to a state. A row the checker cannot classify is
+# Unread, never drift and never a pass: Skipped rows, services (the plan records the status but not
+# the startup type, so 'Stopped; Disabled' cannot be compared), Missing rows (an absent item cannot be
+# told from a failed read) and any action this mapping does not know. A scheduled-task row carries the
+# task state and the desired state, so it is compared.
+function Get-LegacyRowState {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([Parameter(Mandatory = $true)][AllowNull()][object]$Item)
+
+    $action = [string](Get-OpsPropertyValue -InputObject $Item -Name 'Action')
+    $current = ([string](Get-OpsPropertyValue -InputObject $Item -Name 'CurrentValue')).Trim()
+    $desired = ([string](Get-OpsPropertyValue -InputObject $Item -Name 'DesiredValue')).Trim()
+
+    switch ($action) {
+        'NoChange' { return [pscustomobject]@{ State = 'Compliant'; Reason = '' } }
+        'CreateValue' { return [pscustomobject]@{ State = 'NotConfigured'; Reason = '' } }
+        'SetValue' { return [pscustomobject]@{ State = 'Drifted'; Reason = '' } }
+        'DeleteValue' { return [pscustomobject]@{ State = 'Drifted'; Reason = '' } }
+        { $_ -in @('DisableScheduledTask', 'EnableScheduledTask') } {
+            $known = @('Ready', 'Running', 'Queued', 'Disabled')
+            if ($current -notin $known -or $desired -notin @('Enabled', 'Disabled')) {
+                return [pscustomobject]@{ State = 'Unread'; Reason = "The scheduled task state '$current' could not be compared with '$desired'; not assumed compliant." }
+            }
+            $isDisabled = ($current -eq 'Disabled')
+            $meets = if ($desired -eq 'Disabled') { $isDisabled } else { -not $isDisabled }
+            return [pscustomobject]@{ State = $(if ($meets) { 'Compliant' } else { 'Drifted' }); Reason = '' }
+        }
+        default {
+            $why = if ($action -eq 'Skipped') { 'The plan skipped this row' } elseif ($action) { "The plan action '$action' cannot be compared with the machine" } else { 'The plan row carried no action' }
+            return [pscustomobject]@{ State = 'Unread'; Reason = "$why; not assumed compliant." }
+        }
+    }
+}
 
 function Get-HardeningStateVerdict {
     [CmdletBinding()]
@@ -585,18 +645,14 @@ foreach ($name in $Target) {
 
             $registryPath = [string](Get-OpsPropertyValue -InputObject $item -Name 'RegistryPath')
             $valueName = [string](Get-OpsPropertyValue -InputObject $item -Name 'ValueName')
+            $legacyReason = ''
 
             if ($machine -eq $env:COMPUTERNAME) {
                 # NoChange is the plan saying the machine already holds the desired
                 # value. Anything else is the hardening not being in effect right now.
-                $state = switch ($action) {
-                    'NoChange' { 'Compliant' }
-                    'CreateValue' { 'NotConfigured' }
-                    'SetValue' { 'Drifted' }
-                    'DeleteValue' { 'Drifted' }
-                    'Skipped' { 'Skipped' }
-                    default { if ($action) { "Other:$action" } else { 'Unknown' } }
-                }
+                $legacyRow = Get-LegacyRowState -Item $item
+                $state = $legacyRow.State
+                $legacyReason = $legacyRow.Reason
             } elseif (-not $registryPath) {
                 # Services and scheduled tasks are in the plan but were not read
                 # remotely. Saying so beats implying they were checked.
@@ -617,6 +673,7 @@ foreach ($name in $Target) {
             # The two hardening scripts describe the same thing differently: the
             # privacy plan carries a combined Target, the Schannel plan carries
             # RegistryPath and ValueName separately.
+            $rowReason = (@([string](Get-OpsPropertyValue -InputObject $item -Name 'Reason'), $legacyReason) | Where-Object { $_ }) -join ' '
             $itemLabel = if (Get-OpsPropertyValue -InputObject $item -Name 'Target') {
                 [string](Get-OpsPropertyValue -InputObject $item -Name 'Target')
             } else {
@@ -629,7 +686,7 @@ foreach ($name in $Target) {
                         -Item $itemLabel -CurrentValue $currentValue -DesiredValue $desiredValue `
                         -DesiredState ([string](Get-OpsPropertyValue -InputObject $item -Name 'DesiredState')) `
                         -PlannedAction $action `
-                        -Reason ([string](Get-OpsPropertyValue -InputObject $item -Name 'Reason'))))
+                        -Reason $rowReason))
         }
 
         if ($name -eq 'CredentialProtection') {

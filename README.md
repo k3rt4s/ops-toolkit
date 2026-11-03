@@ -499,7 +499,8 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
   turn them on once the audit events look clean.
 - Credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no
   LM hash. Credential Guard, memory integrity, the UEFI lock and DMA protection are opt-in switches,
-  and they take effect after a restart.
+  and they take effect after a restart. Credential Guard is planned only on Enterprise and Education
+  editions, and the platform-security requirement only when Secure Boot reads on.
 - Network protocols: SMBv1 and PowerShell 2.0 removed, SMB signing required, LLMNR and NetBIOS over
   TCP/IP off. `-DisableMulticastDns` is opt-in.
 - Exploit mitigation: system-wide DEP, bottom-up and high-entropy ASLR, SEHOP and CFG, effective

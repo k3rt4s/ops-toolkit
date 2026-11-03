@@ -97,6 +97,13 @@ resolves its command through `Get-Command` and then reads `.Source`, which is em
 a function, so a function stub resolves to an empty string. That one is driven by a
 real command file on disk.
 
+**`-WhatIf` faults in module auto-load reproduce only under `pwsh -File`.** A module's
+import-time `Set-Alias` is suppressed when the script is the process's own
+`pwsh -File script -WhatIf` entry point, which is why ConfigDefender and ConfigCI failed to
+load in a real preview. `Invoke-OpsWindowsScriptPair` runs the script as `& script @splat`
+from a runner and does not reproduce it, so a test for such a fault starts `pwsh -File`
+directly. The Defender and ConfigCI fakes create an alias at import to model the real failure.
+
 ### Standing in for the ActiveDirectory module
 
 The directory scripts declare `#Requires -Modules ActiveDirectory`, so without RSAT

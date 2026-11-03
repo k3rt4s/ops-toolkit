@@ -71,6 +71,12 @@ facts the scripts assume but nobody has checked on a real machine, is under "Ing
 - **fake-contracts** Make the test fake modules behave like the cmdlets they stand in for: a consistent `ShouldProcess` rule across the fakes, and read fakes that honour their filter parameters instead of returning everything. `score: kind=debt gain=0.25/1/3 p=0.3 hours=1.5/3/6 rev=two-way conf=opinion id=fake-contracts` `return: likelihood a test passes against a fake that a real cmdlet would fail, p 0.3, opinion; impact a defect ships behind a green suite, an hour or more to find on a machine; evidence the fakes under tests handle ShouldProcess differently from one another and the read fakes ignore filters, found in the 2026-10-29 review`
   - `worker: sonnet 1.5/3/6 h`
 
+- **bitlocker-decrypting-volume** Make `Enable-BitLockerOsVolume.ps1` treat an OS volume in DecryptionInProgress or DecryptionPaused as its own case (report it and stop, or ask for an explicit switch) instead of planning a fresh enable on a volume mid-decryption. `score: kind=prevent gain=0.25/1/3 p=0.1 hours=0.5/1/2 rev=two-way conf=assessed flags=security id=bitlocker-decrypting-volume` `return: likelihood the script meets a decrypting volume, p 0.1, estimated; impact an enable plan on a volume another tool is decrypting, an hour to sort out; evidence the already-protected status list at Enable-BitLockerOsVolume.ps1 around line 305 omits both decryption states, found by the rf bitlocker-wdac lane on 2026-11-02`
+  - `worker: sonnet 0.5/1/2 h`
+
+- **elevated-whatif-restore-tests** Prove the `$script:WhatIfPreference` restore in `Set-WindowsDefenderHardening.ps1` and `Set-WdacAuditPolicy.ps1` in an elevated run: unelevated, `Skipped: requires elevation` precedes `ShouldProcess`, so a broken restore is invisible to the normal suite. Pairs with hard-elevated-run. `score: kind=debt gain=0.25/1/3 p=0.2 hours=0.5/1/2 rev=two-way conf=assessed flags=security id=elevated-whatif-restore-tests` `return: likelihood the restore regresses, p 0.2, estimated; impact a -WhatIf run that changes the machine, found only elevated; evidence the 2026-11-02 Opus review of the rf state-defender lane, finding F2`
+  - `worker: sonnet 0.5/1/2 h`
+
 ## Moved to the work board
 
 Five features left this index on 2026-09-06 when the developer approved them. Their

@@ -151,7 +151,7 @@ Roll back the browser credential posture:
 pwsh -File .\scripts\it-operations\windows-hardening\Set-BrowserCredentialPosture.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 ```
 
-Apply the TLS 1.2-only Schannel baseline (elevated; live run, then preview only):
+Apply the TLS 1.2 minimum Schannel baseline (keeps TLS 1.3; elevated; live run, then preview only):
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsSchannelTlsHardening.ps1

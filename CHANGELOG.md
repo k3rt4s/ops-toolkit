@@ -7,6 +7,84 @@ that produced the current layout is described in the README under "What Changed"
 
 ## 2026-11-02
 
+### Fixed: privacy hardening carries on past a refused setting, and exploit mitigation no longer reports unstored values as applied
+
+`Set-Windows11PrivacyHardening.ps1` used to stop at the first registry value Windows refused to write, leaving the
+rest of the plan unrun and no state file. Each item now runs on its own: a refused item is recorded as Failed with
+the error message, the remaining items still run, the state list is always written, and the summary reports a
+FailedCount and lists the failed items separately. Refused items are not reported as disabled or restored.
+
+`Set-WindowsExploitMitigation.ps1` trusted `Set-ProcessMitigation` to have stored what it was given, but on some
+machines it returns without error for system DEP and SEHOP and they still read NOTSET. The script now reads each
+mitigation back after setting it and reports Applied only if it holds the desired state; otherwise the item is
+Failed ("not stored by Set-ProcessMitigation") and is left out of the rollback record. The help notes that system
+DEP can depend on the boot configuration nx setting, which the script does not change.
+
+### Fixed: Set-WindowsCredentialProtection no longer applies Credential Guard on unlicensed editions or requires Secure Boot where it is off
+
+`-EnableCredentialGuard` now reads the Windows edition and applies the Credential Guard items only on Enterprise and
+Education editions (including their N and LTSC variants). On any other edition, Windows 11 Pro included, the items
+end Skipped with a reason naming the edition and the licensing requirement, and an edition that cannot be read ends
+Failed rather than passing; the summary lists each reason. Previously the setting was written anyway and Credential
+Guard failed to start after the restart. `RequirePlatformSecurityFeatures`, written by `-EnableCredentialGuard` and
+`-EnableMemoryIntegrity`, is now written only when Secure Boot is confirmed on; where it is off, unsupported or
+unreadable that single item is Skipped with the reason, because requiring Secure Boot there would likely stop
+virtualization-based security and memory integrity at the next boot, and the other VBS and memory integrity items
+plan as before.
+
+### Fixed: Defender hardening preview read nothing, and the state checker over-reported BitLocker and Credential Guard
+
+`Set-WindowsDefenderHardening.ps1` now loads the Defender module with the -WhatIf preference cleared for the load,
+before its first read. Previously a -WhatIf run auto-loaded the module with its alias creation suppressed, every
+Defender value read as unknown, and nothing was planned, which also left `Test-WindowsHardeningState.ps1` (which
+runs the script with -WhatIf) with no verdict for the Defender target. A module that cannot be imported is now named
+in the report-only row.
+
+`Test-WindowsHardeningState.ps1` scores the OS volume Compliant only when it is fully encrypted and protection is
+On. A volume with protection suspended, or still encrypting or decrypting, is Drifted with a reason naming what is
+missing, and a status it cannot read stays Unread. The CredentialProtection target now also reads
+Win32_DeviceGuard: Credential Guard that is configured but not running is Drifted rather than passing, running is
+Compliant, and an unreadable source is Unread. A machine with Credential Guard neither configured nor running is
+reported but not counted as drift, since it is opt-in and not required by the baseline. The new
+`-DeviceGuardSnapshotPath` parameter reads those lists from a JSON file for tests and offline review.
+
+### Fixed: network protocol hardening works under PowerShell 7, and the Schannel baseline keeps TLS 1.3
+
+`Set-WindowsNetworkProtocolHardening.ps1` now works under PowerShell 7. It reads and changes optional features
+through dism.exe, with timeouts that stop a hung call, instead of the DISM cmdlets, which fail there. A feature
+missing from the Windows build counts as compliant, and output it cannot read is reported as unread rather than
+guessed. New `-DismPath`, `-DismTimeoutSeconds`, `-DismChangeTimeoutSeconds` and `-FeatureProvider` (Auto, Dism or
+Cmdlet) parameters control the route.
+
+`Set-WindowsSchannelTlsHardening.ps1` no longer turns TLS 1.3 off. The TLS 1.3 cipher suites lead the list, WinHTTP
+and user default protocols are TLS 1.2 plus 1.3, and a disabled TLS 1.3 setting is planned back to enabled. The
+baseline is now named "TLS 1.2 minimum"; the old Tls12Only name still works.
+
+### Added: Remove-WindowsProvisionedBloatwareApps.ps1 -ExcludePackage
+
+`-ExcludePackage` keeps named packages (wildcards allowed), reported as Skipped with the reason "excluded by
+operator" and counted in the summary. Provisioned packages are now listed and removed through dism.exe with
+timeouts.
+
+### Fixed: automatically encrypted OS volume had no recovery key backup, and the WDAC preview always failed its ConfigCI check
+
+`Enable-BitLockerOsVolume.ps1` treated a volume that Windows automatic device encryption had already encrypted as
+plain NoChange, so its recovery password stayed only on the machine. When the volume is FullyEncrypted,
+EncryptionInProgress or EncryptionPaused and has a recovery password protector, the script now plans a
+BackupRecoveryProtector row for each one and, on a live elevated run, saves it to the operator's key directory
+under the same rules as the key it writes on an enable (off the OS volume, write probe, read-back, never in a report
+or log). It adds no second protector, and a live run that is not elevated fails instead of exiting 0 with the
+password still unsaved. A protected volume with no recovery password protector gets a report-only note instead of a
+silent no-change. The summary reports the volume and protection status, and the help notes that Secure Boot can
+read False in Setup Mode with no Platform Key.
+
+`Set-WdacAuditPolicy.ps1` tested for the ConfigCI cmdlets without importing the module, and the Windows PowerShell
+compatibility layer's automatic load fails under -WhatIf, so every preview reported ConfigCI missing. The script now
+imports it explicitly with the preference cleared at script scope, because a function-local copy does not reach the
+module. Its failure text and help now name PowerShell 7.4 or later with the compatibility layer instead of Windows
+PowerShell 5.1. It also takes a `-CiToolPath`, so its tests run against a stand-in CiTool and never touch the
+machine's code integrity policies.
+
 ### Fixed: WDAC audit policy apply failed with "The property 'CipPath' cannot be found"
 
 `Set-WdacAuditPolicy.ps1` built the `.cip` but never deployed it. The real

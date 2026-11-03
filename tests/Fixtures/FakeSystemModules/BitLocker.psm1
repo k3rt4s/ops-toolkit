@@ -15,6 +15,10 @@ Instructions:
 - Set OPSTOOLKIT_TEST_BL_PROTECTORID to the protector ID that call returns.
 - Set OPSTOOLKIT_TEST_BL_READERROR to any value to make Get-BitLockerVolume throw, the way an
   unelevated session does.
+- Set OPSTOOLKIT_TEST_BL_ENABLE_FAIL to any value to make Enable-BitLocker record the attempt and
+  then throw, so a test can prove what a script undoes after a failed enable.
+- Enable-BitLocker -TpmAndPinProtector requires a [securestring] -Pin; the log records its length
+  and type, never its value.
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record attempted changes.
 
 Purpose:
@@ -100,10 +104,23 @@ function Enable-BitLocker {
         [Parameter(Position = 0)][string]$MountPoint,
         [string]$EncryptionMethod,
         [switch]$TpmProtector,
+        [switch]$TpmAndPinProtector,
+        [securestring]$Pin,
         [switch]$UsedSpaceOnly,
         [switch]$SkipHardwareTest
     )
-    Write-FakeBlMutation -Command 'Enable-BitLocker' -Target $MountPoint -Detail "$EncryptionMethod;tpm=$([bool]$TpmProtector);usedspace=$([bool]$UsedSpaceOnly)"
+    $detail = "$EncryptionMethod;tpm=$([bool]$TpmProtector);usedspace=$([bool]$UsedSpaceOnly)"
+    if ($TpmAndPinProtector) {
+        # Like the real cmdlet, a PIN protector needs a PIN. The log records only that a SecureString arrived and
+        # how long it was, never its value, so a test can show the right one was passed without it ever being on disk.
+        if ($null -eq $Pin) { throw 'Enable-BitLocker: -TpmAndPinProtector requires -Pin (fake).' }
+        $detail += ";tpmpin=True;pin=SecureString;pinlen=$($Pin.Length)"
+    }
+    if ($env:OPSTOOLKIT_TEST_BL_ENABLE_FAIL) {
+        Write-FakeBlMutation -Command 'Enable-BitLocker' -Target $MountPoint -Detail "$detail;failed=True"
+        throw 'Enable-BitLocker failed (fake).'
+    }
+    Write-FakeBlMutation -Command 'Enable-BitLocker' -Target $MountPoint -Detail $detail
     [pscustomobject]@{ MountPoint = $MountPoint }
 }
 

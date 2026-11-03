@@ -25,6 +25,7 @@ BeforeAll {
     $script:wdigest = 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest'
     $script:deviceGuard = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard'
     $script:hvci = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+    $script:ntVersion = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 
     $script:registryShadow = @'
 
@@ -52,17 +53,23 @@ function Test-Path {
 '@
 
     function Get-Fixture {
-        param([hashtable]$Registry)
+        param([hashtable]$Registry, [string]$SecureBoot = 'false')
         $json = ($Registry | ConvertTo-Json -Depth 5 -Compress)
-        "`$env:OPSTOOLKIT_TEST_REGISTRY_ON = '1'`n`$env:OPSTOOLKIT_TEST_REGISTRY = '$json'`n"
+        "`$env:OPSTOOLKIT_TEST_REGISTRY_ON = '1'`n`$env:OPSTOOLKIT_TEST_REGISTRY = '$json'`n`$env:OPSTOOLKIT_TEST_SECUREBOOT = '$SecureBoot'`n"
+    }
+
+    # A machine that licenses Credential Guard with Secure Boot on, unless the caller says otherwise.
+    function Get-CapableRegistry {
+        param([string]$Edition = 'Enterprise')
+        @{ $script:ntVersion = @{ EditionID = $Edition } }
     }
 
     function Invoke-CredPair {
-        param([string]$Tag, [hashtable]$Argument, [hashtable]$Registry = @{})
+        param([string]$Tag, [hashtable]$Argument, [hashtable]$Registry = @{}, [string]$SecureBoot = 'true')
         $Argument.ReportDirectory = (Join-Path $script:workRoot $Tag)
         Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
             -RelativePath $script:scriptRelative -Argument $Argument -Tag $Tag `
-            -ExtraSetup $script:registryShadow -FixtureEnvironment (Get-Fixture -Registry $Registry)
+            -ExtraSetup $script:registryShadow -FixtureEnvironment (Get-Fixture -Registry $Registry -SecureBoot $SecureBoot)
     }
 
     function Get-PlanItem {
@@ -141,8 +148,8 @@ Describe 'Set-WindowsCredentialProtection default run' {
 
 Describe 'Set-WindowsCredentialProtection opt-in controls' {
     BeforeAll {
-        $script:full = Invoke-CredPair -Tag 'credFull' -Argument @{ EnableCredentialGuard = $true; EnableMemoryIntegrity = $true }
-        $script:locked = Invoke-CredPair -Tag 'credLocked' -Argument @{ UefiLock = $true; EnableCredentialGuard = $true; RequireDmaProtection = $true }
+        $script:full = Invoke-CredPair -Tag 'credFull' -Argument @{ EnableCredentialGuard = $true; EnableMemoryIntegrity = $true } -Registry (Get-CapableRegistry)
+        $script:locked = Invoke-CredPair -Tag 'credLocked' -Argument @{ UefiLock = $true; EnableCredentialGuard = $true; RequireDmaProtection = $true } -Registry (Get-CapableRegistry)
     }
 
     It 'runs to completion in both modes' {
@@ -483,7 +490,7 @@ Describe 'Set-WindowsCredentialProtection rollback safety' {
         $dir = New-RollbackDir
         $log = Join-Path $script:workRoot 'credDriftApply.log'
         $apply = Invoke-ScriptUnderTest -RelativePath $script:scriptRelative -ModulePath $script:systemModulePath `
-            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + (Get-Fixture -Registry @{}) + $script:registryShadow) `
+            -Setup ((Get-WindowsMutationStubText -MutationLogPath $log) + (Get-Fixture -Registry (Get-CapableRegistry) -SecureBoot 'true') + $script:registryShadow) `
             -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'credDriftPlan'); EnableCredentialGuard = $true; EnableMemoryIntegrity = $true; WhatIf = $true }
         $apply.ExitCode | Should -Be 0 -Because $apply.Output
         $forward = @(Get-Content -LiteralPath $apply.Summary.PlanJsonPath -Raw | ConvertFrom-Json | Where-Object { $_.Category -ne 'Report' })
@@ -542,5 +549,142 @@ Describe 'Set-WindowsCredentialProtection rollback safety' {
         $rb3 = Invoke-CredRollback -Dir $dir -Tag 'credLifoRollback3' -Execute
         $rb3.Run.ExitCode | Should -Not -Be 0
         $rb3.Run.Output | Should -Match 'Nothing to roll back'
+    }
+}
+
+Describe 'Set-WindowsCredentialProtection Credential Guard edition gate and Secure Boot guard' {
+    BeforeAll {
+        function Get-Row {
+            param($Run, [string]$Setting)
+            @($Run.Summary.Items | Where-Object { $_.Setting -eq $Setting })
+        }
+        $script:cgArg = @{ EnableCredentialGuard = $true }
+        $script:editionRuns = @{}
+        foreach ($edition in 'Professional', 'Enterprise', 'Education', 'EnterpriseN', 'EnterpriseS', 'EducationN', 'EnterpriseSN', 'CoreSingleLanguage', 'ProfessionalEducation') {
+            $script:editionRuns[$edition] = Invoke-CredPair -Tag "credEd$edition" -Argument $script:cgArg -Registry (Get-CapableRegistry -Edition $edition)
+        }
+        $script:editionRuns['unreadable'] = Invoke-CredPair -Tag 'credEdNone' -Argument $script:cgArg -Registry @{}
+        $script:editionRuns['keyOnly'] = Invoke-CredPair -Tag 'credEdKeyOnly' -Argument $script:cgArg -Registry @{ $script:ntVersion = @{ ProductName = 'x' } }
+        $script:sbRuns = @{}
+        foreach ($sb in 'true', 'false', 'error') {
+            $script:sbRuns[$sb] = Invoke-CredPair -Tag "credSb$sb" -Argument @{ EnableMemoryIntegrity = $true } -Registry @{} -SecureBoot $sb
+        }
+    }
+
+    It 'runs every variant to completion in both modes' {
+        foreach ($r in @($script:editionRuns.Values) + @($script:sbRuns.Values)) {
+            $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+            $r.Execute.ExitCode | Should -Be 0 -Because $r.Execute.Output
+        }
+    }
+
+    It 'does not apply Credential Guard on Pro and says why, naming the edition and the licensing requirement' {
+        $run = $script:editionRuns['Professional']
+        foreach ($mode in $run.WhatIf, $run.Execute) {
+            $cg = @(Get-Row -Run $mode -Setting 'LsaCfgFlags')
+            $cg.Count | Should -Be 1
+            $cg[0].Result | Should -Match '^Skipped: .*Professional.*Enterprise or Education'
+            $cg[0].Action | Should -Match 'Not applied'
+            $mode.Summary.PreconditionNotes.Count | Should -Be 1
+            $mode.Summary.PreconditionNotes[0] | Should -Match 'LsaCfgFlags: Skipped: .*Professional'
+        }
+        # Credential Guard alone: the VBS prerequisites are not planned either, so nothing is written.
+        @(Get-PlanItem -Run $run.WhatIf -Setting 'RequirePlatformSecurityFeatures').Count | Should -Be 0
+        @(Get-PlanItem -Run $run.WhatIf -Setting 'EnableVirtualizationBasedSecurity').Count | Should -Be 0
+        @(Get-OpsMutationRecord -Path $run.ExecuteLog).Count | Should -Be 0 -Because 'an unlicensed edition must not write RequirePlatformSecurityFeatures or anything else'
+        $run.Execute.Summary.RollbackJsonPath | Should -BeNullOrEmpty -Because 'no Credential Guard value was changed'
+    }
+
+    It 'plans Credential Guard on every licensed edition' {
+        foreach ($edition in 'Enterprise', 'Education', 'EnterpriseN', 'EnterpriseS', 'EducationN', 'EnterpriseSN') {
+            $row = @(Get-PlanItem -Run $script:editionRuns[$edition].WhatIf -Setting 'LsaCfgFlags')
+            $row.Count | Should -Be 1 -Because $edition
+            $row[0].Action | Should -Match 'Set LsaCfgFlags = 2' -Because $edition
+            $row[0].Precondition | Should -BeNullOrEmpty -Because $edition
+            @($script:editionRuns[$edition].WhatIf.Summary.Items | Where-Object { $_.Result -like 'Skipped: Windows edition*' -or $_.Result -like 'Failed:*' }).Count | Should -Be 0 -Because $edition
+            @(Get-PlanItem -Run $script:editionRuns[$edition].WhatIf -Setting 'RequirePlatformSecurityFeatures').Count | Should -Be 1 -Because $edition
+        }
+    }
+
+    It 'refuses editions that are close to but not on the licensed list' {
+        foreach ($edition in 'CoreSingleLanguage', 'ProfessionalEducation') {
+            $cg = @(Get-Row -Run $script:editionRuns[$edition].WhatIf -Setting 'LsaCfgFlags')
+            $cg[0].Result | Should -Match '^Skipped: ' -Because $edition
+        }
+    }
+
+    It 'fails the precondition, never passes, when the edition cannot be read' {
+        foreach ($key in 'unreadable', 'keyOnly') {
+            foreach ($mode in $script:editionRuns[$key].WhatIf, $script:editionRuns[$key].Execute) {
+                $cg = @(Get-Row -Run $mode -Setting 'LsaCfgFlags')
+                $cg.Count | Should -Be 1
+                $cg[0].Result | Should -Match '^Failed: .*edition could not be read' -Because $key
+                $mode.Summary.FailedCount | Should -Be 1 -Because $key
+            }
+            @(Get-OpsMutationRecord -Path $script:editionRuns[$key].ExecuteLog).Count | Should -Be 0 -Because $key
+        }
+    }
+
+    It 'leaves a Credential Guard value that is already in place as No change on an unlicensed edition' {
+        $r = Invoke-CredPair -Tag 'credEdProDone' -Argument $script:cgArg -Registry @{
+            $script:ntVersion = @{ EditionID = 'Professional' }
+            $script:lsa = @{ LsaCfgFlags = 2; RunAsPPL = 2; LmCompatibilityLevel = 5; NoLMHash = 1 }
+            $script:wdigest = @{ UseLogonCredential = 0 }
+        }
+        $r.Execute.ExitCode | Should -Be 0 -Because $r.Execute.Output
+        (Get-Row -Run $r.Execute -Setting 'LsaCfgFlags')[0].Result | Should -Be 'NoChange'
+    }
+
+    It 'leaves the default run and -EnableMemoryIntegrity alone: no edition gate without -EnableCredentialGuard' {
+        $def = Invoke-CredPair -Tag 'credEdDefault' -Argument @{} -Registry @{}
+        @($def.WhatIf.Summary.Items | Where-Object { $_.Result -like '*edition*' }).Count | Should -Be 0
+        $def.WhatIf.Summary.PreconditionNotes.Count | Should -Be 0
+        $mi = $script:sbRuns['true']
+        @(Get-PlanItem -Run $mi.WhatIf -Setting 'Enabled').Count | Should -Be 1
+        $mi.WhatIf.Summary.PreconditionNotes.Count | Should -Be 0
+    }
+
+    It 'writes RequirePlatformSecurityFeatures only when Secure Boot reads True' {
+        $row = Get-Row -Run $script:sbRuns['true'].WhatIf -Setting 'RequirePlatformSecurityFeatures'
+        $row.Count | Should -Be 1
+        $row[0].Precondition | Should -BeNullOrEmpty
+        $row[0].Action | Should -Match 'Set RequirePlatformSecurityFeatures = 1'
+        if ($script:isElevated) {
+            $targets = @(Get-OpsMutationRecord -Path $script:sbRuns['true'].ExecuteLog | ForEach-Object { $_.Target })
+            $targets | Should -Contain "$($script:deviceGuard)\RequirePlatformSecurityFeatures"
+        }
+    }
+
+    It 'skips only RequirePlatformSecurityFeatures when Secure Boot is off or cannot be read, and still plans the HVCI rows' {
+        foreach ($sb in 'false', 'error') {
+            $run = $script:sbRuns[$sb]
+            foreach ($mode in $run.WhatIf, $run.Execute) {
+                $platform = @(Get-Row -Run $mode -Setting 'RequirePlatformSecurityFeatures')
+                $platform.Count | Should -Be 1 -Because $sb
+                $platform[0].Result | Should -Match '^Skipped: Secure Boot is not confirmed' -Because $sb
+                $platform[0].Action | Should -Match 'Not applied' -Because $sb
+                $mode.Summary.PreconditionNotes.Count | Should -Be 1 -Because $sb
+            }
+            (Get-PlanItem -Run $run.WhatIf -Setting 'Enabled').Action | Should -Match 'Set Enabled = 1' -Because $sb
+            (Get-PlanItem -Run $run.WhatIf -Setting 'EnableVirtualizationBasedSecurity').Action | Should -Match 'Set EnableVirtualizationBasedSecurity = 1' -Because $sb
+            $targets = @(Get-OpsMutationRecord -Path $run.ExecuteLog | ForEach-Object { $_.Target })
+            $targets | Should -Not -Contain "$($script:deviceGuard)\RequirePlatformSecurityFeatures" -Because $sb
+            if ($script:isElevated) {
+                $targets | Should -Contain "$($script:hvci)\Enabled" -Because $sb
+            }
+        }
+    }
+
+    It 'applies the Secure Boot guard to -RequireDmaProtection (value 3) as well' {
+        $r = Invoke-CredPair -Tag 'credSbDma' -Argument @{ EnableMemoryIntegrity = $true; RequireDmaProtection = $true } -Registry @{} -SecureBoot 'false'
+        $row = @(Get-Row -Run $r.WhatIf -Setting 'RequirePlatformSecurityFeatures')
+        $row[0].DesiredValue | Should -Be 3
+        $row[0].Result | Should -Match '^Skipped: Secure Boot'
+    }
+
+    It 'reports Secure Boot unconfirmed for Credential Guard on a licensed edition, with the edition gate passing' {
+        $r = Invoke-CredPair -Tag 'credCgNoSb' -Argument $script:cgArg -Registry (Get-CapableRegistry) -SecureBoot 'false'
+        (Get-Row -Run $r.WhatIf -Setting 'LsaCfgFlags')[0].Action | Should -Match 'Set LsaCfgFlags = 2'
+        (Get-Row -Run $r.WhatIf -Setting 'RequirePlatformSecurityFeatures')[0].Result | Should -Match '^Skipped: Secure Boot'
     }
 }

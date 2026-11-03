@@ -10,6 +10,10 @@ Instructions:
   the system-wide mitigations that already exist, for example `DEP=ON;BottomUp=ON;SEHOP=OFF`.
   Names: DEP, BottomUp, HighEntropy, ForceRelocateImages, SEHOP, CFG. States: ON, OFF, NOTSET.
   A name that is not listed reads NOTSET. The value `UNREADABLE` makes Get-ProcessMitigation throw.
+- Set-ProcessMitigation -System -Enable/-Disable updates the state in OPSTOOLKIT_TEST_PM_SYSTEM
+  (ON / OFF), so a read-back sees the change like the real cmdlet. Set OPSTOOLKIT_TEST_PM_DROP_ON_SET
+  to a comma-separated list of names (for example `DEP,SEHOP`) that the fake accepts without error
+  but does not store, the shape a real machine returned for DEP and SEHOP.
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record attempted changes.
 
 Purpose:
@@ -94,6 +98,18 @@ function Set-ProcessMitigation {
         if ($PolicyFilePath) { 'PolicyFilePath' }
     ) -join ' '
     Write-FakePmMutation -Command 'Set-ProcessMitigation' -Target $target -Detail $detail
+
+    if ($System -and $env:OPSTOOLKIT_TEST_PM_SYSTEM -ne 'UNREADABLE') {
+        $dropped = @(([string]$env:OPSTOOLKIT_TEST_PM_DROP_ON_SET) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $map = [ordered]@{}
+        foreach ($pair in @(([string]$env:OPSTOOLKIT_TEST_PM_SYSTEM) -split ';')) {
+            $parts = $pair -split '=', 2
+            if ($parts.Count -eq 2 -and $parts[0].Trim()) { $map[$parts[0].Trim()] = $parts[1].Trim() }
+        }
+        foreach ($n in @($Enable)) { if ($n -and $n -notin $dropped) { $map[$n] = 'ON' } }
+        foreach ($n in @($Disable)) { if ($n -and $n -notin $dropped) { $map[$n] = 'OFF' } }
+        $env:OPSTOOLKIT_TEST_PM_SYSTEM = (@($map.Keys | ForEach-Object { "$_=$($map[$_])" }) -join ';')
+    }
 }
 
 Export-ModuleMember -Function 'Get-ProcessMitigation', 'Set-ProcessMitigation'

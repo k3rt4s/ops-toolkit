@@ -937,6 +937,30 @@ function CiTool.exe {
         @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0
     }
 
+    It 'forces the boot safety options 9 and 10 and the supplemental-policy option 17 on, so a later reviewed enforcement is safe' {
+        $xml = [xml](Get-Content -LiteralPath $script:wdac.WhatIf.Summary.PolicyXmlPath -Raw)
+        $opts = @($xml.SiPolicy.Rules.Rule | ForEach-Object { $_.Option })
+        $opts | Should -Contain 'Enabled:Advanced Boot Options Menu'
+        $opts | Should -Contain 'Enabled:Boot Audit on Failure'
+        $opts | Should -Contain 'Enabled:Allow Supplemental Policies'
+        $opts | Should -Contain 'Enabled:Audit Mode'
+        $calls = @(Get-OpsMutationRecord -Path $script:wdac.WhatIfLog | Where-Object { $_.Command -eq 'Set-RuleOption' })
+        foreach ($n in 3, 6, 9, 10, 17) { @($calls | Where-Object { $_.Detail -match "option=$n;delete=False" }).Count | Should -Be 1 -Because "option $n" }
+    }
+
+    It 'still refuses when Set-RuleOption does not write option 9, 10 or 17' {
+        foreach ($n in 9, 10, 17) {
+            $reports = Join-Path $script:workRoot "wdac-ignore$n-reports"
+            $pair = Invoke-Pair -Tag "wdac-ignore$n" -RelativePath $script:wdacScript `
+                -Argument @{ ReportDirectory = $reports; ExamplePolicyDirectory = $script:exampleDir } `
+                -FixtureEnvironment ($script:wdacEnv + "`n`$env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION = '$n'") -ExtraSetup $script:ciStub
+            $pair.Execute.ExitCode | Should -Not -Be 0 -Because "option $n"
+            (Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting 'BasePolicyFile').Result |
+                Should -Match '^Failed: building the audit policy failed: .*reviewed move to enforcement' -Because "option $n"
+            @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0
+        }
+    }
+
     It 'has no enforce switch' {
         $cmd = Get-Command (Get-RepositoryScriptPath -RelativePath $script:wdacScript)
         @($cmd.Parameters.Keys | Where-Object { $_ -match 'enforc' }).Count | Should -Be 0

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back local account lockout, Guest, built-in Administrator, and UAC policy on a standalone Windows 11 machine.
+Plan, apply, and roll back local account lockout, Guest, built-in Administrator, and UAC policy on a Windows 11 machine, physical or VDI, standalone or joined.
 
 .DESCRIPTION
 Instructions:
@@ -38,7 +38,13 @@ Instructions:
   not documented. Use the Group Policy or CSP route. Microsoft says not to enable it on Azure
   Virtual Desktop session hosts, Windows 365 Cloud PCs, LAPS-managed devices or devices that
   require Hyper-V, and the October 2026 Windows security baselines turn it on.
-- Windows Hello enrollment, LAPS, and domain policy are out of scope for a standalone machine.
+  On an Azure Virtual Desktop session host the plan carries a report-only item (category
+  AdministratorProtection) stating that Administrator Protection is unwanted there; it is also
+  listed, with the reason that the check could not be read, when the session host check is
+  undetermined. Nothing is ever written for it.
+- Windows Hello enrollment, LAPS, and domain policy are out of scope. On a domain, hybrid or MDM
+  managed host a Group Policy or MDM setting may overwrite the local values; the summary carries
+  HostContext and HostNote saying so.
 - Use -Rollback to restore the exact values this script changed from the newest unconsumed rollback
   file in the report directory. Each executing -Rollback that restores everything marks its file
   consumed, so running -Rollback again undoes the run before it, newest first.
@@ -82,7 +88,8 @@ object with the report paths, result counts, RebootRequired, and the per-item re
 
 .NOTES
 Status:
-Active script in the ops-toolkit repo. Part of the Windows 11 standalone hardening baseline.
+Active script in the ops-toolkit repo. Part of the Windows 11 hardening baseline (physical or VDI, standalone or joined).
+Host detection comes from modules\OpsToolkit.Hardening (Get-OpsHostContext).
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -114,6 +121,8 @@ param(
 )
 
 Set-StrictMode -Version 3.0
+
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 $ErrorActionPreference = 'Stop'
 
 if (-not $Rollback -and $LockoutObservationWindowMinutes -gt $LockoutDurationMinutes) {
@@ -424,6 +433,18 @@ function Get-ForwardPlan {
                 -Label 'UAC secure desktop prompt'))
     $items.Add((Get-RegistryPlanEntry -Category 'BlankPasswordLimit' -Desired 1 `
                 -Label 'blank-password network logon restriction'))
+
+    # Report-only: Administrator Protection is unwanted on an AVD session host. This script never writes it.
+    if ($script:HostContext.IsAvdSessionHost -eq $true) {
+        $items.Add((Get-PlanEntry -Category 'AdministratorProtection' -Setting 'Administrator Protection' -Kind 'Report' -RequiresAdmin $false `
+                    -CurrentValue 'not read (this script never reads or writes it)' -DesiredValue 'not enabled' `
+                    -Action 'Report only: Administrator Protection is unwanted on an AVD session host and is never enabled by this script (not changed)'))
+    } elseif ($null -eq $script:HostContext.IsAvdSessionHost) {
+        $items.Add((Get-PlanEntry -Category 'AdministratorProtection' -Setting 'Administrator Protection' -Kind 'Report' -RequiresAdmin $false `
+                    -CurrentValue 'not read (this script never reads or writes it)' -DesiredValue 'not enabled on a session host' `
+                    -Action 'Report only: could not determine whether this is an AVD session host; Administrator Protection is unwanted on one and is never enabled by this script (not changed)'))
+    }
+
     $items
 }
 
@@ -640,6 +661,8 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+$script:HostContext = Get-OpsHostContext
+$hostNote = Get-OpsPolicyOverrideNote -HostContext $script:HostContext
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
@@ -701,6 +724,8 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
 [pscustomobject]@{
     Operation = "WindowsLocalAccountPolicy ($mode)"
     IsElevated = (Test-IsAdministrator)
+    HostContext = $script:HostContext
+    HostNote = $hostNote
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

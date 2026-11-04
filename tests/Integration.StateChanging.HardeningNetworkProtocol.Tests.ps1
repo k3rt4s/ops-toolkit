@@ -17,6 +17,9 @@ BeforeAll {
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-netproto-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
     $script:systemModulePath = Use-FakeSystemModule
+    Import-Module (Join-Path $PSScriptRoot 'HostContextFixture.psm1') -Force
+    $script:hostFixture = Use-FakeHostContext -Directory $script:workRoot
+    $script:savedHostEnvironment = Set-FakeHostEnvironment -Fixture $script:hostFixture -Confirm:$false
     $script:relativePath = 'scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1'
 
     # Under pwsh 7 the script reads and changes optional features through dism.exe, so every run
@@ -55,9 +58,36 @@ $Extra
         param($Pair)
         @(Get-Content -LiteralPath $Pair.Execute.Summary.PlanJsonPath -Raw | ConvertFrom-Json)
     }
+
+    # A copy of the script that reports itself elevated, so the executing half can run in an
+    # unelevated session, and that imports the module by absolute path because the copy sits in the
+    # work root. Every write still goes to the mutation stubs.
+    function New-ElevatedScriptCopy {
+        param([string]$Name)
+        $source = Join-Path (Get-RepositoryRoot) $script:relativePath
+        $text = Get-Content -LiteralPath $source -Raw
+        $elevated = '$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+        $text.Contains($elevated) | Should -BeTrue -Because 'the elevation check this copy replaces must still exist'
+        $import = "(Join-Path `$PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening')"
+        $text.Contains($import) | Should -BeTrue -Because 'the module import this copy replaces must still exist'
+        $module = Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Hardening'
+        $patched = $text.Replace($elevated, '$true').Replace($import, "'$module'")
+        $copy = Join-Path $script:workRoot "$Name.ps1"
+        Set-Content -LiteralPath $copy -Value $patched -Encoding utf8
+        [System.IO.Path]::GetRelativePath((Get-RepositoryRoot), $copy)
+    }
+
+    # Replaces the MSV1_0 key read with a table so no NTLM assertion depends on this machine.
+    # Values is 'none' (key present, no values) or 'Name=1;Other=2'.
+    $script:msv1ShadowPath = Join-Path $PSScriptRoot 'Fixtures\Msv1Shadow.ps1'
+    function Get-Msv1FixtureText {
+        param([string]$Values = 'none')
+        "`n`$env:OPSTOOLKIT_TEST_MSV1 = '$Values'`n" + (Get-Content -LiteralPath $script:msv1ShadowPath -Raw)
+    }
 }
 
 AfterAll {
+    if ($script:savedHostEnvironment) { Restore-FakeHostEnvironment -Saved $script:savedHostEnvironment -Confirm:$false }
     foreach ($p in $script:workRoot, $script:systemModulePath) {
         if ($p -and (Test-Path $p)) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -392,7 +422,9 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
             $text = Get-Content -LiteralPath $script:npScriptFullPath -Raw
             $elevated = '$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
             $text.Contains($elevated) | Should -BeTrue -Because 'the elevation check this copy replaces must still exist'
-            $patched = $text.Replace($elevated, '$true')
+            $import = "(Join-Path `$PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening')"
+            $text.Contains($import) | Should -BeTrue -Because 'the module import this copy replaces must still exist'
+            $patched = $text.Replace($elevated, '$true').Replace($import, "'$(Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Hardening')'")
             if ($FailSmb) {
                 $restore = 'Set-SmbServerConfiguration -EnableSMB1Protocol $enable -Force -Confirm:$false -ErrorAction Stop'
                 $patched.Contains($restore) | Should -BeTrue -Because 'the SMB1 restore this copy replaces must still exist'
@@ -664,15 +696,18 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
     }
 
     It 'validates one entry in a pure function lifted from the script, against whatever control table it is given' {
-        $text = (Get-LiftedFunctionText -Name 'Test-RollbackDword') + "`n" + (Get-LiftedFunctionText -Name 'Get-RollbackEntryProblem')
+        $text = (Get-LiftedFunctionText -Name 'Get-OptionalProperty') + "`n" + (Get-LiftedFunctionText -Name 'Test-RollbackDword') + "`n" + (Get-LiftedFunctionText -Name 'Get-RollbackEntryProblem')
         $check = [scriptblock]::Create("param(`$Entry, `$Controls)`n$text`nGet-RollbackEntryProblem -Entry `$Entry -Controls `$Controls")
-        $row = { param($Category, $Kind, $Settings, $Path, $Name, $Desired, $Reboot = $false, $Root = $null, $Pattern = $null)
-            [pscustomobject]@{ Category = $Category; Kind = $Kind; Settings = $Settings; Path = $Path; Name = $Name; PathRoot = $Root; Pattern = $Pattern; Desired = $Desired; RequiresReboot = $Reboot } }
+        $row = { param($Category, $Kind, $Settings, $Path, $Name, $Desired, $Reboot = $false, $Root = $null, $Pattern = $null, $Floor = $false)
+            $r = [pscustomobject]@{ Category = $Category; Kind = $Kind; Settings = $Settings; Path = $Path; Name = $Name; PathRoot = $Root; Pattern = $Pattern; Desired = $Desired; RequiresReboot = $Reboot }
+            if ($Floor) { $r | Add-Member -NotePropertyName KeepIfAtLeast -NotePropertyValue $true }
+            $r }
         $controls = @(
             (& $row 'Reg' 'Registry' @('R') 'HKLM:\X' 'V' 7)
             (& $row 'Feat' 'OptionalFeature' @('F1', 'F2') '' '' 'Disabled' $true)
             (& $row 'One' 'SmbServerSmb1' @('S') '' '' 'False')
             (& $row 'Keyed' 'Registry' $null $null 'V' 2 $false 'HKLM:\Root' '^K_[0-9a-z]+$')
+            (& $row 'Floor' 'Registry' @('L') 'HKLM:\X' 'V' 1 $false $null $null $true)
         )
         function New-Probe {
             param($Category = 'Reg', $Setting = 'R', $Kind = 'Registry', $Path = 'HKLM:\X', $Name = 'V', $Prior = 'absent', $Applied = 7, $Admin = $true, $Reboot = $false)
@@ -698,6 +733,11 @@ Describe 'Set-WindowsNetworkProtocolHardening rollback safety' {
         & $check (New-Probe -Category 'Keyed' -Setting 'K_AB' -Path 'HKLM:\Root\K_AB' -Applied 2) $controls | Should -Not -BeNullOrEmpty
         & $check (New-Probe -Category 'Keyed' -Setting 'K_ab12' -Path 'HKLM:\Root\K_other' -Applied 2) $controls | Should -Not -BeNullOrEmpty
         & $check (New-Probe) @() | Should -Not -BeNullOrEmpty -Because 'a table without the entry allows nothing'
+        # A floor control (KeepIfAtLeast) never records a prior above the applied value; a plain one may.
+        & $check (New-Probe -Category 'Floor' -Setting 'L' -Prior 2 -Applied 1) $controls | Should -Not -BeNullOrEmpty -Because 'the forward plan leaves a stricter value alone'
+        & $check (New-Probe -Category 'Floor' -Setting 'L' -Prior 0 -Applied 1) $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Category 'Floor' -Setting 'L' -Prior 'absent' -Applied 1) $controls | Should -BeNullOrEmpty
+        & $check (New-Probe -Prior 9) $controls | Should -BeNullOrEmpty -Because 'a plain control has no floor'
         $twice = @($controls[0], $controls[0])
         & $check (New-Probe) $twice | Should -Not -BeNullOrEmpty -Because 'a category that matches two rows is ambiguous, so nothing is allowed'
     }
@@ -892,5 +932,131 @@ Describe 'Set-WindowsNetworkProtocolHardening dism.exe failure handling' {
         $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
         $smb = @(Get-PlanItem -Pair $r | Where-Object { $_.Kind -eq 'OptionalFeature' -and $_.Setting -eq 'SMB1Protocol' })
         $smb[0].CurrentValue | Should -Be 'Enabled'
+    }
+}
+
+Describe 'Set-WindowsNetworkProtocolHardening NTLM auditing and the opt-in restriction' {
+    BeforeAll {
+        $script:ntlmCopy = New-ElevatedScriptCopy -Name 'np-ntlm-elevated'
+        $script:ntlmFeatures = 'SMB1Protocol=Disabled'
+        function Invoke-NtlmRun {
+            param([string]$Tag, [string]$Msv1 = 'none', [string]$HostKind = 'Physical', [switch]$Restrict)
+            $arguments = @{ ReportDirectory = (Join-Path $script:workRoot $Tag); SkipSmbSigning = $true; NetbiosInterface = @('Tcpip_{no-such-interface}') }
+            if ($Restrict) { $arguments['RestrictOutgoingNtlm'] = $true }
+            $extra = (Get-Msv1FixtureText -Values $Msv1) + (Get-FakeHostSetupText -Fixture $script:hostFixture -Kind $HostKind)
+            Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath -RelativePath $script:ntlmCopy -Tag $Tag `
+                -FixtureEnvironment (Get-FixtureEnvironment -Smb1 'false' -Features $script:ntlmFeatures -Extra $extra) -Argument $arguments
+        }
+        function Get-NtlmPlan { param($Pair) @(Get-PlanItem -Pair $Pair | Where-Object { $_.Category -like 'Ntlm*' } | Sort-Object Category) }
+        function Get-MsvWrite {
+            param($Pair, [string]$Name)
+            @(Get-OpsMutationRecord -Path $Pair.ExecuteLog | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like "*\MSV1_0\$Name" })
+        }
+        $script:ntlmDefault = Invoke-NtlmRun -Tag 'ntlm-default'
+        $script:ntlmStrict = Invoke-NtlmRun -Tag 'ntlm-strict' -Msv1 'RestrictSendingNTLMTraffic=2'
+        $script:ntlmRestrict = Invoke-NtlmRun -Tag 'ntlm-restrict' -Restrict
+        $script:ntlmAvd = Invoke-NtlmRun -Tag 'ntlm-avd' -Restrict -HostKind 'Avd'
+        $script:ntlmUnread = Invoke-NtlmRun -Tag 'ntlm-unread' -Restrict -HostKind 'AvdUnread'
+        $script:ntlmDomain = Invoke-NtlmRun -Tag 'ntlm-domain' -HostKind 'Domain'
+    }
+
+    It 'runs to completion in both modes' -ForEach @(
+        @{ Name = 'ntlmDefault' }, @{ Name = 'ntlmStrict' }, @{ Name = 'ntlmRestrict' }, @{ Name = 'ntlmAvd' }, @{ Name = 'ntlmUnread' }, @{ Name = 'ntlmDomain' }
+    ) {
+        $pair = Get-Variable -Name $Name -Scope Script -ValueOnly
+        $pair.WhatIf.ExitCode | Should -Be 0 -Because $pair.WhatIf.Output
+        $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+    }
+
+    It 'audits incoming and outgoing NTLM by default and offers no restriction' {
+        $ntlm = Get-NtlmPlan -Pair $script:ntlmDefault
+        $ntlm.Count | Should -Be 2
+        $ntlm[0].Category | Should -Be 'NtlmAuditOutgoing'
+        $ntlm[1].Category | Should -Be 'NtlmAuditReceiving'
+        $ntlm[0].ValueName | Should -Be 'RestrictSendingNTLMTraffic'
+        "$($ntlm[0].DesiredValue)" | Should -Be '1'
+        $ntlm[1].ValueName | Should -Be 'AuditReceivingNTLMTraffic'
+        "$($ntlm[1].DesiredValue)" | Should -Be '2'
+        $ntlm[0].CurrentValue | Should -Be 'absent'
+        @(Get-PlanItem -Pair $script:ntlmDefault | Where-Object { $_.ValueName -eq 'RestrictReceivingNTLMTraffic' }).Count | Should -Be 0
+    }
+
+    It 'writes only the two audit values on the executing run and nothing under -WhatIf' {
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:ntlmDefault
+        @(Get-OpsMutationRecord -Path $script:ntlmDefault.ExecuteLog | Where-Object { $_.Target -like '*\MSV1_0\*' }).Count | Should -Be 2
+        $send = @(Get-MsvWrite -Pair $script:ntlmDefault -Name 'RestrictSendingNTLMTraffic')
+        $send.Count | Should -Be 1
+        $send[0].Detail | Should -Be '1'
+        $recv = @(Get-MsvWrite -Pair $script:ntlmDefault -Name 'AuditReceivingNTLMTraffic')
+        $recv.Count | Should -Be 1
+        $recv[0].Detail | Should -Be '2'
+    }
+
+    It 'never downgrades an outgoing restriction that is already stricter than audit' {
+        $ntlm = Get-NtlmPlan -Pair $script:ntlmStrict
+        $ntlm.Count | Should -Be 2
+        $ntlm[0].Category | Should -Be 'NtlmAuditOutgoing'
+        $ntlm[0].CurrentValue | Should -Be 2
+        $ntlm[0].Action | Should -BeLike 'No change*stricter*'
+        $ntlm[1].Action | Should -BeLike 'Audit incoming*'
+        (Get-MsvWrite -Pair $script:ntlmStrict -Name 'RestrictSendingNTLMTraffic').Count | Should -Be 0
+        (Get-MsvWrite -Pair $script:ntlmStrict -Name 'AuditReceivingNTLMTraffic').Count | Should -Be 1
+    }
+
+    It 'records the prior values so the audit settings can be rolled back, then restores them' {
+        $recorded = Get-Content -LiteralPath $script:ntlmDefault.Execute.Summary.RollbackJsonPath -Raw | ConvertFrom-Json
+        $entries = @($recorded.ChangedSettings | Where-Object { $_.Category -like 'Ntlm*' } | Sort-Object Category)
+        $entries.Count | Should -Be 2
+        $entries[0].PriorValue | Should -Be 'absent'
+        $entries[0].AppliedValue | Should -Be 1
+        $entries[1].PriorValue | Should -Be 'absent'
+        $entries[1].AppliedValue | Should -Be 2
+
+        $dir = Join-Path $script:workRoot 'ntlm-default'
+        $rb = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath -RelativePath $script:ntlmCopy -Tag 'ntlm-rollback' `
+            -FixtureEnvironment (Get-FixtureEnvironment -Extra (Get-Msv1FixtureText -Values 'none')) -Argument @{ ReportDirectory = $dir; Rollback = $true }
+        Assert-OpsNoChangeUnderWhatIf -Pair $rb
+        $rb.Execute.ExitCode | Should -Be 0 -Because $rb.Execute.Output
+        $removed = @(Get-OpsMutationRecord -Path $rb.ExecuteLog | Where-Object { $_.Command -eq 'Remove-ItemProperty' -and $_.Target -like '*\MSV1_0\*' })
+        $removed.Count | Should -Be 2
+        @($removed | ForEach-Object { ($_.Target -split '\\')[-1] } | Sort-Object) | Should -Be @('AuditReceivingNTLMTraffic', 'RestrictSendingNTLMTraffic')
+    }
+
+    It 'plans the outgoing restriction only with the switch, in place of the outgoing audit' {
+        $ntlm = Get-NtlmPlan -Pair $script:ntlmRestrict
+        $ntlm.Count | Should -Be 2
+        $ntlm[0].Category | Should -Be 'NtlmAuditReceiving'
+        $ntlm[1].Category | Should -Be 'NtlmRestrictOutgoing'
+        "$($ntlm[1].DesiredValue)" | Should -Be '2'
+        $ntlm[1].Action | Should -BeLike 'DENY*'
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:ntlmRestrict
+        $send = @(Get-MsvWrite -Pair $script:ntlmRestrict -Name 'RestrictSendingNTLMTraffic')
+        $send.Count | Should -Be 1
+        $send[0].Detail | Should -Be '2'
+        # And without the switch no run ever writes a 2 to that value.
+        @(Get-MsvWrite -Pair $script:ntlmDefault -Name 'RestrictSendingNTLMTraffic' | Where-Object { $_.Detail -eq '2' }).Count | Should -Be 0
+    }
+
+    It 'refuses the restriction on a session host and when that cannot be determined' -ForEach @(
+        @{ Name = 'ntlmAvd'; Reason = 'Skipped: AVD session host*' }
+        @{ Name = 'ntlmUnread'; Reason = 'Skipped: could not determine whether this is an AVD session host*' }
+    ) {
+        $pair = Get-Variable -Name $Name -Scope Script -ValueOnly
+        $ntlm = Get-NtlmPlan -Pair $pair
+        $ntlm.Count | Should -Be 2
+        $ntlm[1].Category | Should -Be 'NtlmRestrictOutgoing'
+        $ntlm[1].Action | Should -BeLike $Reason
+        $result = @($pair.Execute.Summary.Items | Where-Object Category -eq 'NtlmRestrictOutgoing')
+        $result.Count | Should -Be 1
+        $result[0].Result | Should -BeLike $Reason
+        (Get-MsvWrite -Pair $pair -Name 'RestrictSendingNTLMTraffic').Count | Should -Be 0
+        # Audit is safe anywhere, so the audit item is still applied.
+        (Get-MsvWrite -Pair $pair -Name 'AuditReceivingNTLMTraffic').Count | Should -Be 1
+    }
+
+    It 'notes that policy may override local writes on a domain-joined host' {
+        $script:ntlmDomain.Execute.Summary.HostContext.JoinType | Should -Be 'DomainJoined'
+        $script:ntlmDomain.Execute.Summary.HostNote | Should -Match 'policy'
+        $script:ntlmDefault.Execute.Summary.HostNote | Should -BeNullOrEmpty
     }
 }

@@ -11,7 +11,7 @@ This folder contains active endpoint and general IT operations scripts for the o
 | `printers\`                 | Windows printer connection helpers.                                                                                                                                                   |
 | `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                                      |
 | `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                                         |
-| `windows-hardening\`        | Standalone Windows 11 hardening (TLS, privacy, bloatware, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and its compliance check. |
+| `windows-hardening\`        | Windows 11 hardening for a physical or VDI machine, standalone or joined (TLS, privacy, bloatware, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and its compliance check. |
 | `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                                        |
 
 ## Examples
@@ -174,7 +174,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBl
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 ```
 
-Preview the standalone-machine hardening scripts. Each state-changing one needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; `Export-WdacAuditEvent.ps1` only reads. The repository README lists what each one changes by default and what is opt-in:
+Preview the Windows hardening scripts (physical or VDI, standalone or joined). Each state-changing one needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; `Export-WdacAuditEvent.ps1` only reads. The repository README lists what each one changes by default and what is opt-in:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -WhatIf
@@ -200,7 +200,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.
 pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,Firewall,BitLocker -FailOnDrift"
 ```
 
-The default checks `SchannelTls` and `Privacy` only. Name the standalone-machine targets
+The default checks `SchannelTls` and `Privacy` only. Name the hardening-script targets
 (Defender, CredentialProtection, NetworkProtocol, ExploitMitigation, AuditLogging,
 RemoteAccess, LocalAccount, Firewall, WdacAudit, BitLocker) with `-Target`. An unread item
 keeps `Passed` false.

@@ -15,11 +15,14 @@ Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Fo
   resolution, CSV plus JSON export, run summaries, safe property reads under strict
   mode, value flattening, byte-to-hex conversion, age-in-days with the Windows
   never-set sentinels handled, and severity ranking.
+- `OpsToolkit.Hardening/` - read-only host context for the Windows hardening scripts: join type (domain, Entra, hybrid, workgroup), Azure Virtual Desktop session host, MDM management and virtual machine detection (`Get-OpsHostContext`), plus the one-sentence note that policy may override local writes (`Get-OpsPolicyOverrideNote`). A probe that fails leaves its field null and listed as unread; it is never folded into a guess.
 
 ## Rules
 
 - Modules hold shape and file handling, not domain logic. Nothing here should know
-  about Active Directory, Azure, Exchange, or Windows specifics.
+  about Active Directory, Azure, Exchange, or Windows specifics. The one exception is
+  `OpsToolkit.Hardening`, which exists to hold Windows host detection once so the
+  hardening scripts do not each re-derive it; it only reads and never changes the host.
 - Every exported function carries comment-based help using only standard keywords,
   so `Get-Help` works. See the root README Script Header Standard.
 - `Invoke-RepoValidation.ps1` validates every manifest here and fails if a manifest

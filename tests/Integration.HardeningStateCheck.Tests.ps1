@@ -606,9 +606,9 @@ Describe 'Test-WindowsHardeningState Defender target against the real script' {
         $maps[0].State | Should -Be 'Drifted'
     }
 
-    It 'plans all 14 ASR rules as drifted on a machine with none configured' {
+    It 'plans all 18 ASR rules as drifted on a machine with none configured' {
         $asr = @($script:defRun.Records | Where-Object Category -eq 'AsrRule')
-        $asr.Count | Should -Be 14
+        $asr.Count | Should -Be 18
         @($asr | Where-Object State -ne 'Drifted').Count | Should -Be 0
     }
 }

@@ -501,7 +501,11 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
 - Credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no
   LM hash. Credential Guard, memory integrity, the UEFI lock and DMA protection are opt-in switches,
   and they take effect after a restart. Credential Guard is planned only on Enterprise and Education
-  editions, and the platform-security requirement only when Secure Boot reads on.
+  editions, and the platform-security requirement only when Secure Boot reads on. Every apply run,
+  `-WhatIf` included, first writes a `credential-protection-lsa-preflight-<timestamp>` CSV and JSON
+  listing the LSA packages and Winsock name-space providers that are not Microsoft-signed (Bonjour's
+  `mdnsNSP.dll` is one): those modules stop loading once LSA protection is on. A module that cannot be
+  found or checked is listed as Unread, never as safe. It is a report and does not block the change.
 - Network protocols: SMBv1 and PowerShell 2.0 removed, SMB signing required, LLMNR and NetBIOS over
   TCP/IP off. `-DisableMulticastDns` and `-DisableWpad` are opt-in. On a proxied network, set a
   manual WinHTTP proxy before `-DisableWpad`, and turn off automatic proxy detection in Settings too.

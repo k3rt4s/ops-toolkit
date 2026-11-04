@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back Microsoft Defender attack surface reduction, Controlled Folder Access, network protection, PUA and cloud protection settings on a standalone Windows 11 machine.
+Plan, apply, and roll back Microsoft Defender attack surface reduction, Controlled Folder Access, network protection, PUA and cloud protection settings on a Windows 11 machine, physical or VDI, standalone or joined.
 
 .DESCRIPTION
 Instructions:

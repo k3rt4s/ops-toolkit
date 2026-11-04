@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back the local Remote Desktop, Remote Assistance, and WinRM posture of a standalone Windows 11 machine.
+Plan, apply, and roll back the local Remote Desktop, Remote Assistance, and WinRM posture of a Windows 11 machine, physical or VDI, standalone or joined.
 
 .DESCRIPTION
 Instructions:
@@ -14,6 +14,8 @@ Instructions:
   session is remote') when the running session is a Remote Desktop session, and also when that
   cannot be determined, because turning RDP off from inside an RDP session ends your way back in.
   What breaks: every inbound Remote Desktop connection to this machine.
+  On an Azure Virtual Desktop session host it is always refused (plan item 'Skipped: AVD session host'),
+  and also when the session host check could not be read, because RDP is how users reach a session host.
 - -DisableWinRM sets the WinRM service to Disabled and stops it. The prior startup type and status
   are recorded and -Rollback restores them. It is refused inside a PowerShell remoting session.
   What breaks: Invoke-Command, Enter-PSSession and any remote management tool that uses WinRM.
@@ -28,11 +30,12 @@ Instructions:
   belong under a data root outside the repo.
 
 Purpose:
-Reduces the remote-administration attack surface of a workgroup (not domain-joined, not
-Intune-managed) machine using local registry values and the service manager only. No Group
-Policy, Active Directory, or Entra mechanism is used. A Group Policy or MDM setting that already
-manages the same value will overwrite the local value; the report-only policy item shows when a
-Remote Desktop policy value is present.
+Reduces the remote-administration attack surface of a physical or VDI Windows machine, standalone or
+joined, using local registry values and the service manager only. No Group Policy, Active Directory,
+or Entra mechanism is used. A Group Policy or MDM setting that already manages the same value will
+overwrite the local value; the report-only policy item shows when a Remote Desktop policy value is
+present, and the summary carries HostContext (join type, AVD session host, MDM, VM) and HostNote
+(a warning when policy may override the local writes).
 
 Every change is recorded in a rollback JSON so the posture can be reversed with -Rollback. No
 reboot is required for any change made here.
@@ -62,7 +65,8 @@ object with the report paths, result counts, RebootRequired, and the per-item re
 
 .NOTES
 Status:
-Active script in the ops-toolkit repo. Part of the Windows 11 standalone hardening baseline.
+Active script in the ops-toolkit repo. Part of the Windows 11 hardening baseline (physical or VDI, standalone or joined).
+Host detection comes from modules\OpsToolkit.Hardening (Get-OpsHostContext).
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -82,6 +86,8 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 
 $script:TerminalServerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
 $script:RdpTcpPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
@@ -205,7 +211,7 @@ function Get-ForwardPlan {
         $rdpGate = 'Skipped: Remote Desktop state could not be confirmed as enabled'
     }
     # With -DisableRemoteDesktop the NLA settings are moot, so they are left alone.
-    if ($DisableRemoteDesktop -and -not $rdpGate) { $rdpGate = 'No change (Remote Desktop is being disabled in this run)' }
+    if ($DisableRemoteDesktop -and $script:HostContext.IsAvdSessionHost -eq $false -and -not $rdpGate) { $rdpGate = 'No change (Remote Desktop is being disabled in this run)' }
     $items.Add((Get-RegistryPlanEntry -Category 'RdpNla' -Desired 1 `
                 -Label 'Network Level Authentication' -Gate $rdpGate))
     $items.Add((Get-RegistryPlanEntry -Category 'RdpSecurityLayer' -Desired 2 `
@@ -213,10 +219,17 @@ function Get-ForwardPlan {
 
     if ($DisableRemoteDesktop) {
         $remote = Get-SessionRemoteState
-        $gate = switch ($remote) {
-            'remote' { 'Skipped: current session is remote' }
-            'unknown' { 'Skipped: could not determine whether the current session is remote' }
-            default { '' }
+        # Never switch RDP off on an AVD session host: it is how users reach it. An unread answer is
+        # treated the same way, because the safe default is to leave RDP alone.
+        $gate = if ($script:HostContext.IsAvdSessionHost -eq $true) { 'Skipped: AVD session host (Remote Desktop is how users reach it)' }
+        elseif ($null -eq $script:HostContext.IsAvdSessionHost) { 'Skipped: could not determine whether this is an AVD session host' }
+        else { $null }
+        if (-not $gate) {
+            $gate = switch ($remote) {
+                'remote' { 'Skipped: current session is remote' }
+                'unknown' { 'Skipped: could not determine whether the current session is remote' }
+                default { '' }
+            }
         }
         $items.Add((Get-RegistryPlanEntry -Category 'RdpDisable' `
                     -Desired 1 -Label 'Remote Desktop connections denied' -Gate $gate))
@@ -433,6 +446,8 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+$script:HostContext = Get-OpsHostContext
+$hostNote = Get-OpsPolicyOverrideNote -HostContext $script:HostContext
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
@@ -493,6 +508,8 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
 [pscustomobject]@{
     Operation = "WindowsRemoteAccessPosture ($mode)"
     IsElevated = (Test-IsAdministrator)
+    HostContext = $script:HostContext
+    HostNote = $hostNote
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

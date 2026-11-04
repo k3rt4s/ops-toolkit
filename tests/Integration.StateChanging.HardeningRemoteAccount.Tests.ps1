@@ -19,6 +19,9 @@ BeforeAll {
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-hardra-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
     $script:systemModulePath = Use-FakeSystemModule
+    Import-Module (Join-Path $PSScriptRoot 'HostContextFixture.psm1') -Force
+    $script:hostFixture = Use-FakeHostContext -Directory $script:workRoot
+    $script:savedHostEnvironment = Set-FakeHostEnvironment -Fixture $script:hostFixture -Confirm:$false
 
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -109,7 +112,8 @@ function net.exe {
     }
 
     function Invoke-Pair {
-        param([string]$Script, [string]$Tag, [hashtable]$Argument, [string]$Fixture = '', [string]$Extra = '')
+        param([string]$Script, [string]$Tag, [hashtable]$Argument, [string]$Fixture = '', [string]$Extra = '', [string]$HostKind = '')
+        if ($HostKind) { $Extra += Get-FakeHostSetupText -Fixture $script:hostFixture -Kind $HostKind }
         Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
             -RelativePath "scripts\it-operations\windows-hardening\$Script" -Argument $Argument -Tag $Tag `
             -FixtureEnvironment $Fixture -ExtraSetup $Extra
@@ -117,6 +121,7 @@ function net.exe {
 }
 
 AfterAll {
+    if ($script:savedHostEnvironment) { Restore-FakeHostEnvironment -Saved $script:savedHostEnvironment -Confirm:$false }
     foreach ($p in $script:workRoot, $script:systemModulePath) {
         if ($p -and (Test-Path $p)) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -282,6 +287,61 @@ function Get-ItemProperty {
             $writes = @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Command -eq 'Set-ItemProperty' -and $_.Target -like '*\fDenyTSConnections' })
             $writes.Count | Should -Be 1
             $writes[0].Detail | Should -Be '1'
+        }
+    }
+
+    Context 'session-host safety' {
+        It 'keeps Remote Desktop on an AVD session host and says why' -ForEach @(
+            @{ Kind = 'Avd' }
+            @{ Kind = 'AvdMarkerKeyOnly' }
+        ) {
+            $dir = Join-Path $script:workRoot "ra-avd-$Kind"
+            $pair = Invoke-Pair -Script $script:raScript -Tag "ra-avd-$Kind" -Argument @{ ReportDirectory = $dir; DisableRemoteDesktop = $true } `
+                -Fixture $script:raEnabled -Extra "`n`$env:SESSIONNAME = 'Console'`n" -HostKind $Kind
+            Assert-OpsNoChangeUnderWhatIf -Pair $pair
+            $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+            $plan = Get-LatestJson -Directory $dir -Pattern 'remote-access-posture-apply-plan-*.json'
+            (Get-PlanItem -Plan $plan -Setting 'fDenyTSConnections').Action | Should -BeLike 'Skipped: AVD session host*'
+            # Remote Desktop stays on, so the NLA setting is still hardened rather than left alone as moot.
+            (Get-PlanItem -Plan $plan -Setting 'UserAuthentication').Action | Should -BeLike 'Set *'
+            $item = @($pair.Execute.Summary.Items | Where-Object { $_.Setting -eq 'fDenyTSConnections' })
+            $item.Count | Should -Be 1
+            $item[0].Result | Should -BeLike 'Skipped: AVD session host*'
+            $pair.Execute.Summary.HostContext.IsAvdSessionHost | Should -BeTrue
+            @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Target -like '*fDenyTSConnections' }).Count | Should -Be 0
+        }
+
+        It 'does not disable Remote Desktop when it cannot tell whether this is a session host' {
+            $dir = Join-Path $script:workRoot 'ra-avd-unread'
+            $pair = Invoke-Pair -Script $script:raScript -Tag 'ra-avd-unread' -Argument @{ ReportDirectory = $dir; DisableRemoteDesktop = $true } `
+                -Fixture $script:raEnabled -Extra "`n`$env:SESSIONNAME = 'Console'`n" -HostKind 'AvdUnread'
+            Assert-OpsNoChangeUnderWhatIf -Pair $pair
+            $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+            $item = @($pair.Execute.Summary.Items | Where-Object { $_.Setting -eq 'fDenyTSConnections' })
+            $item.Count | Should -Be 1
+            $item[0].Result | Should -BeLike 'Skipped: could not determine whether this is an AVD session host*'
+            @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Target -like '*fDenyTSConnections' }).Count | Should -Be 0
+        }
+
+        It 'still plans the disable on a physical host and records no policy note' {
+            if ($script:hostIsRemote) { Set-ItResult -Skipped -Because 'the test host is itself in a remote session'; return }
+            $dir = Join-Path $script:workRoot 'ra-avd-physical'
+            $pair = Invoke-Pair -Script $script:raScript -Tag 'ra-avd-physical' -Argument @{ ReportDirectory = $dir; DisableRemoteDesktop = $true } `
+                -Fixture $script:raEnabled -Extra "`n`$env:SESSIONNAME = 'Console'`n" -HostKind 'Physical'
+            $item = @($pair.Execute.Summary.Items | Where-Object { $_.Setting -eq 'fDenyTSConnections' })
+            $item.Count | Should -Be 1
+            (Get-PlanItem -Plan (Get-LatestJson -Directory $dir -Pattern 'remote-access-posture-apply-plan-*.json') -Setting 'fDenyTSConnections').Action | Should -BeLike 'Set *'
+            $pair.Execute.Summary.HostContext.IsAvdSessionHost | Should -BeFalse
+            $pair.Execute.Summary.HostNote | Should -BeNullOrEmpty
+        }
+
+        It 'notes that policy may override local writes on a domain-joined host' {
+            $dir = Join-Path $script:workRoot 'ra-domain-note'
+            $pair = Invoke-Pair -Script $script:raScript -Tag 'ra-domain-note' -Argument @{ ReportDirectory = $dir } -Fixture $script:raEnabled -HostKind 'Domain'
+            Assert-OpsNoChangeUnderWhatIf -Pair $pair
+            $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+            $pair.Execute.Summary.HostContext.JoinType | Should -Be 'DomainJoined'
+            $pair.Execute.Summary.HostNote | Should -Match 'policy'
         }
     }
 
@@ -593,6 +653,35 @@ Describe 'Set-WindowsLocalAccountPolicy' {
                 -Setup (Get-WindowsMutationStubText -MutationLogPath (Join-Path $script:workRoot 'la-badname.log')) `
                 -Argument @{ ReportDirectory = (Join-Path $script:workRoot 'la-badname'); RenameBuiltInAdministrator = 'bad;name'; WhatIf = $true }
             $bad.ExitCode | Should -Not -Be 0
+        }
+    }
+
+    Context 'Administrator Protection on a session host' {
+        It 'reports it as unwanted and writes nothing for it' -ForEach @(
+            @{ Kind = 'Avd'; Expect = '*unwanted on an AVD session host*' }
+            @{ Kind = 'AvdUnread'; Expect = '*could not determine*' }
+        ) {
+            $dir = Join-Path $script:workRoot "la-adminprot-$Kind"
+            $pair = Invoke-Pair -Script $script:laScript -Tag "la-adminprot-$Kind" -Argument @{ ReportDirectory = $dir } `
+                -Fixture ((ConvertTo-RegistryFixtureText -Table $script:uacCompliant) + $script:usersGuestOff) -Extra (Get-NetExeStubText -Line $script:netCompliant) -HostKind $Kind
+            Assert-OpsNoChangeUnderWhatIf -Pair $pair
+            $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+            $items = @($pair.Execute.Summary.Items | Where-Object { $_.Category -eq 'AdministratorProtection' })
+            $items.Count | Should -Be 1
+            $items[0].Result | Should -Be 'ReportOnly'
+            $plan = Get-LatestJson -Directory $dir -Pattern 'local-account-policy-apply-plan-*.json'
+            @($plan | Where-Object { $_.Category -eq 'AdministratorProtection' }).Count | Should -Be 1
+            (Get-PlanItem -Plan $plan -Setting 'Administrator Protection').Action | Should -BeLike $Expect
+            @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Target -like '*AdminProtection*' -or $_.Detail -like '*AdminProtection*' }).Count | Should -Be 0
+        }
+
+        It 'adds no Administrator Protection item on a physical host' {
+            $dir = Join-Path $script:workRoot 'la-adminprot-physical'
+            $pair = Invoke-Pair -Script $script:laScript -Tag 'la-adminprot-physical' -Argument @{ ReportDirectory = $dir } `
+                -Fixture ((ConvertTo-RegistryFixtureText -Table $script:uacCompliant) + $script:usersGuestOff) -Extra (Get-NetExeStubText -Line $script:netCompliant) -HostKind 'Physical'
+            $pair.Execute.ExitCode | Should -Be 0 -Because $pair.Execute.Output
+            @($pair.Execute.Summary.Items | Where-Object { $_.Category -eq 'AdministratorProtection' }).Count | Should -Be 0
+            $pair.Execute.Summary.HostNote | Should -BeNullOrEmpty
         }
     }
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back legacy network protocol hardening (SMBv1, PowerShell 2.0, SMB signing, LLMNR, NetBIOS over TCP/IP, optional mDNS and WPAD) on a standalone Windows 11 machine.
+Plan, apply, and roll back legacy network protocol hardening (SMBv1, PowerShell 2.0, SMB signing, LLMNR, NetBIOS over TCP/IP, NTLM auditing, optional mDNS, WPAD and outgoing NTLM restriction) on a Windows 11 machine, physical or VDI, standalone or joined.
 
 .DESCRIPTION
 Instructions:
@@ -19,8 +19,8 @@ Instructions:
   outside the repo on every run.
 
 Purpose:
-Removes the legacy and relay-prone network protocols from a workgroup (non-domain) Windows 11
-machine. Default controls:
+Removes the legacy and relay-prone network protocols from a physical or VDI Windows 11 machine,
+standalone or joined. Default controls:
 - SMBv1 server protocol off (Set-SmbServerConfiguration) and the SMB1Protocol optional feature
   and its sub-features disabled (Disable-WindowsOptionalFeature -NoRestart).
 - PowerShell 2.0 optional features (MicrosoftWindowsPowerShellV2 and ...V2Root) disabled.
@@ -32,6 +32,17 @@ machine. Default controls:
 - NetBIOS over TCP/IP off on every adapter interface key (NetbiosOptions = 2), each interface a
   separate plan item with its prior value recorded. This can break name resolution of old hosts
   by NetBIOS name. -NetbiosInterface limits it to chosen interfaces.
+- NTLM auditing, audit only, nothing is blocked: AuditReceivingNTLMTraffic = 2 (log NTLM used by every
+  account to sign in to this machine) and RestrictSendingNTLMTraffic = 1 (log outgoing NTLM) under
+  HKLM\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0. The events land in the Microsoft-Windows-NTLM/
+  Operational log, which this script does not enable; if that log is off, nothing is recorded. An
+  outgoing value that is already 2 (deny all) is never lowered to 1: it is reported 'No change'.
+Opt-in: -RestrictOutgoingNtlm sets RestrictSendingNTLMTraffic = 2, which DENIES outgoing NTLM to every
+remote server. That breaks anything that still authenticates with NTLM (file shares reached by IP
+address, old NAS devices, some printers and line-of-business servers). Review the NTLM audit events
+first. It replaces the outgoing audit item, since both write the same value. It is refused on an
+Azure Virtual Desktop session host, and when that cannot be determined, because its effect on the
+session host is not verified. Incoming NTLM restriction (RestrictReceivingNTLMTraffic) is not offered.
 Opt-in: -DisableMulticastDns turns off the Windows mDNS responder. This breaks casting,
 AirPlay, Bonjour printer discovery and other .local discovery.
 
@@ -55,13 +66,18 @@ first. Microsoft also says to turn WPAD off in the Settings UI (Network and Inte
 Automatically detect settings) because third-party applications and browsers can rely on it;
 this script does not do that part. The WinHttpAutoProxySvc service is never disabled.
 
-Not covered, on purpose: NTLM / LmCompatibilityLevel belongs to another script. SMB1 on the
+Not covered, on purpose: LmCompatibilityLevel belongs to another script; this one only audits NTLM
+and, on request, denies outgoing NTLM. SMB1 on the
 client side is removed by the SMB1Protocol-Client optional feature; there is no client cmdlet
 switch for it.
 
 SMB signing, LLMNR, NetBIOS and mDNS registry values apply when the related service or adapter
 restarts, normally at the next reboot. RebootRequired in the summary is true only when an
-optional feature was changed.
+optional feature was changed. NTLM audit values apply without a restart.
+
+On a domain, hybrid or MDM managed host a Group Policy or MDM setting may overwrite these local values;
+the summary carries HostContext (join type, AVD session host, MDM, VM) and HostNote saying so. On a
+session host, or when that cannot be determined, -RestrictOutgoingNtlm is planned as skipped.
 
 Rollback: -Rollback reads the newest network-protocol-hardening-rollback-<timestamp>.json in the
 report directory. Before any plan is written or any change made, it checks every recorded entry
@@ -83,6 +99,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolH
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir>
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -SkipSmbSigning -DisableMulticastDns
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -DisableWpad
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -RestrictOutgoingNtlm   # after reviewing the NTLM audit events
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -NetbiosInterface 'Tcpip_{guid}'
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
@@ -93,7 +110,10 @@ Returns a summary object with report paths, counts, RebootRequired and the Items
 
 .NOTES
 Status:
-Active script in the ops-toolkit repo. Part of the Windows 11 standalone hardening baseline.
+Active script in the ops-toolkit repo. Part of the Windows 11 hardening baseline (physical or VDI,
+standalone or joined). Host detection comes from modules\OpsToolkit.Hardening (Get-OpsHostContext).
+Unverified on a real host: that the NTLM audit values produce events with the NTLM Operational log in
+its default state, and what denying outgoing NTLM does on an AVD session host (hence skipped there).
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -119,6 +139,11 @@ param(
     # (Windows Update, Defender for Endpoint, the Azure Virtual Desktop agent). Not in the default run.
     [Parameter()]
     [switch]$DisableWpad,
+
+    # Opt-in. Sets RestrictSendingNTLMTraffic = 2 (deny all outgoing NTLM); replaces the outgoing audit
+    # item. Review the NTLM audit events first. Skipped on an AVD session host or when that is unread.
+    [Parameter()]
+    [switch]$RestrictOutgoingNtlm,
 
     [Parameter()]
     [switch]$Rollback,
@@ -147,6 +172,8 @@ param(
 )
 
 Set-StrictMode -Version 3.0
+
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 $ErrorActionPreference = 'Stop'
 
 # dism.exe settings the helper functions read, gathered once here so they do not depend on the
@@ -162,11 +189,15 @@ $script:ReportPrefix = 'network-protocol-hardening'
 $script:NetbtRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:RollbackSourceFile = $null
+$script:Msv1Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0'
 
 # Every control the forward plan can change. Get-ForwardPlan reads its categories, names, paths and
 # desired values from here, and the rollback validator accepts exactly these rows, so the two cannot
 # drift. Kind is SmbServerSmb1, OptionalFeature or Registry. Settings lists the fixed setting names
 # (null for NetBIOS, whose setting is an interface key name matched by Pattern under PathRoot).
+# KeepIfAtLeast (optional, read with Get-OptionalProperty) marks a value where a number above
+# Desired is already stricter than the control: the forward plan leaves it, and a rollback file may
+# not claim it was a prior value.
 $script:RollbackControls = @(
     [pscustomobject]@{ Category = 'Smb1Server'; Kind = 'SmbServerSmb1'; Settings = @('EnableSMB1Protocol'); Path = ''; Name = ''; PathRoot = $null; Pattern = $null; Desired = 'False'; RequiresReboot = $false }
     [pscustomobject]@{ Category = 'Smb1Feature'; Kind = 'OptionalFeature'; Settings = @('SMB1Protocol-Client', 'SMB1Protocol-Server', 'SMB1Protocol-Deprecation', 'SMB1Protocol'); Path = ''; Name = ''; PathRoot = $null; Pattern = $null; Desired = 'Disabled'; RequiresReboot = $true }
@@ -177,6 +208,9 @@ $script:RollbackControls = @(
     [pscustomobject]@{ Category = 'NetBIOS'; Kind = 'Registry'; Settings = $null; Path = $null; Name = 'NetbiosOptions'; PathRoot = $script:NetbtRoot; Pattern = '^Tcpip_[0-9A-Za-z{}-]+$'; Desired = 2; RequiresReboot = $false }
     [pscustomobject]@{ Category = 'Mdns'; Kind = 'Registry'; Settings = @('Dnscache EnableMDNS'); Path = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters'; Name = 'EnableMDNS'; PathRoot = $null; Pattern = $null; Desired = 0; RequiresReboot = $false }
     [pscustomobject]@{ Category = 'Wpad'; Kind = 'Registry'; Settings = @('WinHttp DisableWpad'); Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp'; Name = 'DisableWpad'; PathRoot = $null; Pattern = $null; Desired = 1; RequiresReboot = $false }
+    [pscustomobject]@{ Category = 'NtlmAuditReceiving'; Kind = 'Registry'; Settings = @('MSV1_0 AuditReceivingNTLMTraffic'); Path = $script:Msv1Path; Name = 'AuditReceivingNTLMTraffic'; PathRoot = $null; Pattern = $null; Desired = 2; RequiresReboot = $false; KeepIfAtLeast = $true }
+    [pscustomobject]@{ Category = 'NtlmAuditOutgoing'; Kind = 'Registry'; Settings = @('MSV1_0 RestrictSendingNTLMTraffic audit'); Path = $script:Msv1Path; Name = 'RestrictSendingNTLMTraffic'; PathRoot = $null; Pattern = $null; Desired = 1; RequiresReboot = $false; KeepIfAtLeast = $true }
+    [pscustomobject]@{ Category = 'NtlmRestrictOutgoing'; Kind = 'Registry'; Settings = @('MSV1_0 RestrictSendingNTLMTraffic deny'); Path = $script:Msv1Path; Name = 'RestrictSendingNTLMTraffic'; PathRoot = $null; Pattern = $null; Desired = 2; RequiresReboot = $false }
 )
 
 function Get-NetworkControl {
@@ -297,7 +331,8 @@ function Get-PlanRecord {
         [bool]$RequiresReboot = $false,
         [Parameter(Mandatory = $true)]$CurrentValue,
         [Parameter(Mandatory = $true)]$DesiredValue,
-        [Parameter(Mandatory = $true)][string]$Describe
+        [Parameter(Mandatory = $true)][string]$Describe,
+        [switch]$KeepIfAtLeast
     )
 
     $current = "$CurrentValue"
@@ -310,6 +345,8 @@ function Get-PlanRecord {
         "No change ($Setting already disabled)"
     } elseif ($current -eq $desired) {
         "No change ($Setting already $desired)"
+    } elseif ($KeepIfAtLeast -and $CurrentValue -is [int] -and $CurrentValue -gt [int]$DesiredValue) {
+        "No change ($Setting is $current, already stricter than $desired)"
     } else {
         $Describe
     }
@@ -335,8 +372,9 @@ function Add-RegistryDwordItem {
     $Name = $Control.Name
     $Value = [int]$Control.Desired
     $state = Get-RegistryState -Path $Path -Name $Name
+    $keep = [bool](Get-OptionalProperty -InputObject $Control -Name 'KeepIfAtLeast')
     $Items.Add((Get-PlanRecord -Category $Category -Setting $Setting -Kind Registry -RegistryPath $Path -ValueName $Name `
-                -CurrentValue $state -DesiredValue $Value -Describe $Describe))
+                -CurrentValue $state -DesiredValue $Value -Describe $Describe -KeepIfAtLeast:$keep))
 }
 
 # ---------------------------------------------------------------------------
@@ -348,7 +386,8 @@ function Get-ForwardPlan {
         [switch]$SkipSmbSigning,
         [string[]]$NetbiosInterface,
         [switch]$DisableMulticastDns,
-        [switch]$DisableWpad
+        [switch]$DisableWpad,
+        [switch]$RestrictOutgoingNtlm
     )
 
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
@@ -427,6 +466,26 @@ function Get-ForwardPlan {
             -Describe 'Stop WinHTTP WPAD proxy discovery (DisableWpad = 1; a manual WinHTTP proxy must already exist on a proxied network)'
     }
 
+    # NTLM. Audit only by default. The restriction is opt-in and writes the same value as the outgoing audit,
+    # so it takes that item's place rather than adding a second write to one value.
+    $ntlmIn = Get-NetworkControl 'NtlmAuditReceiving'
+    Add-RegistryDwordItem -Items $items -Control $ntlmIn -Setting $ntlmIn.Settings[0] `
+        -Describe 'Audit incoming NTLM for all accounts (AuditReceivingNTLMTraffic = 2; log only, nothing is blocked)'
+    if ($RestrictOutgoingNtlm) {
+        $deny = Get-NetworkControl 'NtlmRestrictOutgoing'
+        Add-RegistryDwordItem -Items $items -Control $deny -Setting $deny.Settings[0] `
+            -Describe 'DENY all outgoing NTLM (RestrictSendingNTLMTraffic = 2; breaks anything that still needs NTLM)'
+        $reason = if ($script:HostContext.IsAvdSessionHost -eq $true) { 'Skipped: AVD session host (denying outgoing NTLM is not proven safe there)' }
+        elseif ($null -eq $script:HostContext.IsAvdSessionHost) { 'Skipped: could not determine whether this is an AVD session host' }
+        else { $null }
+        $last = $items[$items.Count - 1]
+        if ($reason -and $last.Action -notlike 'No change*' -and $last.Action -notlike 'Unreadable*') { $last.Action = $reason }
+    } else {
+        $audit = Get-NetworkControl 'NtlmAuditOutgoing'
+        Add-RegistryDwordItem -Items $items -Control $audit -Setting $audit.Settings[0] `
+            -Describe 'Audit outgoing NTLM (RestrictSendingNTLMTraffic = 1; log only, nothing is blocked)'
+    }
+
     $items
 }
 
@@ -492,6 +551,8 @@ function Get-RollbackEntryProblem {
             return "PriorValue '$prior' is not 'absent' or a whole number"
         } elseif ($prior -eq $applied) {
             return "PriorValue $prior equals the applied value, so the forward plan would not have changed it"
+        } elseif ([bool](Get-OptionalProperty -InputObject $control -Name 'KeepIfAtLeast') -and $prior -gt $applied) {
+            return "PriorValue $prior is stricter than the applied value, so the forward plan would have left it"
         }
     } elseif ($control.Kind -eq 'SmbServerSmb1') {
         if ($applied -isnot [string] -or $applied -cne $control.Desired) { return "AppliedValue '$applied' is not '$($control.Desired)'" }
@@ -576,6 +637,7 @@ function Invoke-PlanItem {
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
+    if ($Item.Action -like 'Skipped:*') { return $Item.Action }
     if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
     if ($Item.Action -like 'Unreadable*') { return 'Skipped: current state unreadable' }
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
@@ -638,10 +700,13 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+$script:HostContext = Get-OpsHostContext
+$hostNote = Get-OpsPolicyOverrideNote -HostContext $script:HostContext
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
-        Get-ForwardPlan -SkipSmbSigning:$SkipSmbSigning -NetbiosInterface $NetbiosInterface -DisableMulticastDns:$DisableMulticastDns -DisableWpad:$DisableWpad
+        Get-ForwardPlan -SkipSmbSigning:$SkipSmbSigning -NetbiosInterface $NetbiosInterface -DisableMulticastDns:$DisableMulticastDns -DisableWpad:$DisableWpad `
+            -RestrictOutgoingNtlm:$RestrictOutgoingNtlm
     })
 
 $planPath = Join-Path $resolvedReportDirectory "$($script:ReportPrefix)-$mode-plan-$timestamp.csv"
@@ -699,6 +764,8 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
 [pscustomobject]@{
     Operation = "NetworkProtocolHardening ($mode)"
     IsElevated = (Test-IsAdministrator)
+    HostContext = $script:HostContext
+    HostNote = $hostNote
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

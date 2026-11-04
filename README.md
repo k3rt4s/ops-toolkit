@@ -385,7 +385,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.
 pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Target Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker -FailOnDrift"
 ```
 
-The default checks `SchannelTls` and `Privacy`; the standalone-machine targets are named with
+The default checks `SchannelTls` and `Privacy`; the hardening-script targets (physical or VDI, standalone or joined) are named with
 `-Target`. An item that cannot be read, often because the shell is not elevated, is reported
 `Unread` and keeps `Passed` false; run elevated for a complete verification.
 
@@ -474,7 +474,7 @@ script reports, without changing, the talk defenses that are not a single machin
 Edge cookie protection, Device-Bound Session Credentials, SmartScreen state, and local administrator
 rights (deferring the full membership and LAPS view to `Export-LocalAdminAndLapsPosture.ps1`).
 
-Harden a standalone (not domain-joined) Windows 11 machine past the privacy and TLS baseline. Each
+Harden a Windows 11 machine, physical or VDI, standalone or joined, past the privacy and TLS baseline. Each
 script below takes a required `-ReportDirectory`, writes a plan and a state file, applies only from
 an elevated shell, and records a rollback JSON that `-Rollback` replays. Run each with `-WhatIf`
 first, read the plan, then apply one at a time:
@@ -557,7 +557,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardenin
 
 > **Folder note:** `scripts\it-operations\windows-hardening\` mixes two run cadences. System-level
 > hardening (TLS cipher policy, Windows 11 privacy/telemetry, AppX bloatware removal, and the
-> standalone-machine scripts above) is typically run once at build or provisioning time. Operator posture scripts (idle-lock, sleep, browser
+> hardening scripts above) is typically run once at build or provisioning time. Operator posture scripts (idle-lock, sleep, browser
 > credential hardening) are run and rolled back as workload needs change.
 
 Report OS support lifecycle and how long each machine has left:
@@ -665,7 +665,7 @@ python .\scripts\email\thunderbird\export_emails_to_parquet.py --source-dir "C:\
 | `scripts\it-operations\windows-file-cleanup\Invoke-DiskSpaceReclaim.ps1`             | New script reclaiming pip cache, Docker build cache and dangling images, Recycle Bin, and WinSxS component store by default, with npm, torch, pre-commit, Codex runtime, NVIDIA shader, Playwright, Hugging Face, stopped-container, unused-volume, superseded image-tag, Windows Update cache, and Docker virtual-disk compaction targets available by name, plus `-WhatIf`, target selection, admin gating, and plan/state reports. |
 | `scripts\it-operations\performance\Set-WorkstationPerformance.ps1`                   | New script setting workstation performance posture (Ultimate/High Performance power plan plus opt-in Defender path/process exclusions) with `-WhatIf`, `-Rollback`, admin gating, and plan/state/rollback reports.                                                                                                                                                                                                                    |
 | `scripts\it-operations\windows-hardening\Set-WorkstationLockPosture.ps1`             | New script setting workstation idle-lock and sleep posture (never sleep/hibernate on AC, screensaver lock) with `-WhatIf`, `-Rollback`, optional elevated ConsoleLock and machine-wide inactivity lock.                                                                                                                                                                                                                               |
-| `scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1`           | New state-changing Defender hardening for a standalone machine: attack surface reduction rules, Controlled Folder Access and network protection in audit mode by default (block or enable by switch), PUA and cloud protection, with `-WhatIf`, `-Rollback` and plan/state/rollback reports.                                                                                                                                          |
+| `scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1`           | New state-changing Defender hardening for a physical or VDI, standalone or joined machine: attack surface reduction rules, Controlled Folder Access and network protection in audit mode by default (block or enable by switch), PUA and cloud protection, with `-WhatIf`, `-Rollback` and plan/state/rollback reports.                                                                                                                                          |
 | `scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1`        | New state-changing credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no LM hash, with Credential Guard, memory integrity, the UEFI lock and DMA protection opt-in, plus `-WhatIf` and `-Rollback`.                                                                                                                                                                                      |
 | `scripts\it-operations\windows-hardening\Set-WindowsNetworkProtocolHardening.ps1`    | New state-changing removal of SMBv1 and PowerShell 2.0, required SMB signing, and LLMNR and NetBIOS over TCP/IP off, with opt-in mDNS off, `-WhatIf` and `-Rollback` that re-enables only what it disabled.                                                                                                                                                                                                                           |
 | `scripts\it-operations\windows-hardening\Set-WindowsExploitMitigation.ps1`           | New state-changing system-wide exploit mitigations (DEP, bottom-up and high-entropy ASLR, SEHOP, CFG) with an exported prior configuration, opt-in mandatory ASLR and Office internet-macro blocking, `-WhatIf` and `-Rollback`.                                                                                                                                                                                                      |

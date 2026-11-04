@@ -26,8 +26,10 @@ Instructions:
 Purpose:
 Makes the implicit Windows Firewall defaults explicit so a later policy change cannot silently
 weaken them, turns on dropped-packet logging for a forensic trail, and reduces the inbound
-listening surface that installers accumulate. Targets a standalone (workgroup) machine and
-changes the local persistent store only, never Group Policy.
+listening surface that installers accumulate. Targets a physical or VDI Windows machine, standalone
+or joined, and changes the local persistent store only, never Group Policy. A Group Policy or MDM
+firewall setting may overwrite the local values; the summary carries HostContext and HostNote saying
+so on a domain, hybrid or MDM managed host.
 
 Backup: before any change is made, on every run including -WhatIf and -Rollback, the script runs
 `netsh advfirewall export` into <ReportDirectory>\firewall-backup-<timestamp>.wfw. If the export
@@ -65,6 +67,15 @@ Controls:
   Profile is replaced, not merged, so a rule on Public and Private ends Private only. Prior
   Profile and RemoteAddress are recorded. A DisplayName that matches nothing is reported in the
   plan; it is never a silent no-op.
+
+Azure Virtual Desktop session hosts: the profile defaults (firewall on, inbound blocked by default,
+outbound allowed, prompts off, logging) are applied as on any host, because they leave every existing
+allow rule working. Every control that disables, scopes or drops inbound allow rules is NOT proven safe
+there (Remote Desktop Shortpath and management agents depend on inbound rules), so on a session host,
+and also when the session host check could not be read, the plan lists those items as 'Skipped: AVD
+session host' (or 'Skipped: could not determine whether this is an AVD session host') and changes
+nothing for them: -BlockAllInboundOnPublic, -DisableStaleProgramRules, -DisablePublicFeatureGroup and
+-ScopeRuleDisplayName.
 
 Rollback: -Rollback reads the newest firewall-baseline-rollback-<timestamp>.json in the report
 directory and reverses each recorded change in reverse order: Enable-NetFirewallRule for disabled
@@ -125,7 +136,10 @@ Emits a summary object (Operation, paths, counts, RebootRequired, Items).
 Status:
 Active script in the ops-toolkit repo. No reboot is needed. Unverified on real hardware by the test
 suite: the suite fakes the NetSecurity module, so the real cmdlets' acceptance of AllowInboundRules
-on the local persistent store has not been exercised.
+on the local persistent store has not been exercised. Also unverified on a real AVD session host:
+that the profile defaults leave Remote Desktop and the AVD agent working, and what the skipped inbound
+controls would do there.
+Host detection comes from modules\OpsToolkit.Hardening (Get-OpsHostContext).
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -154,6 +168,8 @@ param(
 )
 
 Set-StrictMode -Version 3.0
+
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 $ErrorActionPreference = 'Stop'
 
 # Every profile and profile property the forward plan can set. Get-ForwardPlan builds its profile items
@@ -265,7 +281,7 @@ function Get-AddressText {
 # Plan builders
 # ---------------------------------------------------------------------------
 
-function Get-ForwardPlan {
+function Get-UngatedForwardPlan {
     param(
         [int]$LogMaxSizeKilobytes,
         [bool]$BlockAllInboundOnPublic,
@@ -408,6 +424,31 @@ function Get-ForwardPlan {
     $items
 }
 
+# The forward plan with the session host gate applied. Controls that disable, scope or drop inbound allow
+# rules are not proven safe on an AVD session host, so a pending change to one becomes a skipped item with
+# the reason; an unread session host answer is treated the same way. Items already at their target stay
+# 'No change', and the profile defaults are untouched.
+function Get-ForwardPlan {
+    param(
+        [int]$LogMaxSizeKilobytes,
+        [bool]$BlockAllInboundOnPublic,
+        [bool]$DisableStaleProgramRules,
+        [string[]]$DisablePublicFeatureGroup = @(),
+        [string[]]$ScopeRuleDisplayName = @()
+    )
+    $items = @(Get-UngatedForwardPlan @PSBoundParameters)
+    $reason = if ($script:HostContext.IsAvdSessionHost -eq $true) { 'Skipped: AVD session host (inbound rule changes are not proven safe there)' }
+    elseif ($null -eq $script:HostContext.IsAvdSessionHost) { 'Skipped: could not determine whether this is an AVD session host' }
+    else { $null }
+    if ($reason) {
+        foreach ($item in $items) {
+            $inboundControl = $item.Category -in @('StaleProgramRule', 'PublicFeatureRule', 'ScopeRule') -or ($item.Category -eq 'ProfileSetting' -and $item.Property -eq 'AllowInboundRules')
+            if ($inboundControl -and $item.Action -notlike 'No change*') { $item.Action = $reason }
+        }
+    }
+    $items
+}
+
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
     # Exact name: the pattern must not also match firewall-baseline-rollback-plan-<ts>.json, nor a
@@ -540,6 +581,7 @@ function Invoke-PlanItem {
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
+    if ($Item.Action -like 'Skipped:*') { return $Item.Action }
     if ($Item.Category -eq 'Unreadable') { return "Failed: $($Item.CurrentValue)" }
     if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
     if (-not $Rollback) {
@@ -590,6 +632,8 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+$script:HostContext = Get-OpsHostContext
+$hostNote = Get-OpsPolicyOverrideNote -HostContext $script:HostContext
 $plan = @(if ($Rollback) { Get-RollbackPlan } else {
         Get-ForwardPlan -LogMaxSizeKilobytes $LogMaxSizeKilobytes -BlockAllInboundOnPublic ([bool]$BlockAllInboundOnPublic) `
             -DisableStaleProgramRules ([bool]$DisableStaleProgramRules) -DisablePublicFeatureGroup $DisablePublicFeatureGroup `
@@ -656,6 +700,8 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
 [pscustomobject]@{
     Operation = "WindowsFirewallBaseline ($mode)"
     IsElevated = (Test-IsAdministrator)
+    HostContext = $script:HostContext
+    HostNote = $hostNote
     BackupPath = if ($backupPath) { (Resolve-Path -LiteralPath $backupPath).Path } else { $null }
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path

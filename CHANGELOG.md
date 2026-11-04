@@ -5,6 +5,44 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-03
+
+### Added: a reviewed WDAC enforce path, a BitLocker startup PIN, four ASR rules and opt-in WPAD off
+
+`Set-WdacEnforcedPolicy.ps1` is a separate, reviewed path from the audit-only WDAC policy to an enforced one.
+`-Mode BuildAllowRules` builds a supplemental allow-rules XML from the Code Integrity audit events into the report
+directory and deploys nothing. `-Mode Enforce` takes the operator-reviewed XML. It refuses unless the toolkit audit
+base is active, not already enforced, and carries options 9, 10 and 17. It deploys the supplemental, then redeploys
+the base with option 3 removed under the same ID. `-Rollback` restores audit mode and removes that supplemental. It
+validates the whole rollback file first and consumes it only after a clean run. `Set-WdacAuditPolicy.ps1` now carries
+options 9, 10 and 17 and still has no enforce switch. The enforce path is tested against fakes only and has never run
+on a real machine. A wrong enforced policy can stop a machine starting normally, so test it in a disposable VM first.
+
+`Enable-BitLockerOsVolume.ps1` gains an opt-in TPM plus startup PIN protector: `-UseTpmAndPin` with a SecureString
+`-StartupPin`, numeric, 6 to 20 digits. The PIN is never logged or written to any report, plan, state or rollback
+file. The FVE startup-authentication policy values are planned as rows, and their prior values go into the rollback
+file. They are undone if the enable fails and restored on rollback. The PIN is refused on a virtual machine, or where
+the model cannot be read, because nobody can type a pre-boot PIN on a VDI guest. A volume in DecryptionInProgress or
+DecryptionPaused now stops the run with no changes. The FVE value codes come from the Learn reference and are
+unverified on a live machine.
+
+`Set-WindowsDefenderHardening.ps1` plans 18 ASR rules, up from 14. The new four are Adobe Reader child processes,
+Win32 API calls from Office macros, rebooting in Safe Mode, and copied or impersonated system tools. The last reaches
+Block only when named in `-AsrRuleId`, because Microsoft documents heuristic false positives. The Exchange-only
+Webshell rule stays out. `Set-WindowsNetworkProtocolHardening.ps1` gains an opt-in, rollback-aware `-DisableWpad`,
+which turns off WinHTTP WPAD discovery only. `Set-WindowsLocalAccountPolicy.ps1` help names the documented
+Administrator Protection route, the Policy CSP or GPO, and the cases where Microsoft says not to enable it, including
+Azure Virtual Desktop session hosts. Its registry value is undocumented, so no script writes it.
+
+### Fixed: unclassifiable checker rows count as unread, and the evidence pack grades every hardening target
+
+`Test-WindowsHardeningState.ps1` counts a local legacy-plan row it cannot classify (Skipped, a service, Missing, an
+unknown action) as Unread instead of folding it into a pass, and compares scheduled-task rows. `-Target` splits a
+comma-joined value. `Export-SecurityControlEvidencePack.ps1` grades CFG-01 from the checker's `UnreadCount` and `Passed`
+through `Get-OpsHardeningControlStatus`, and passes all twelve targets. New tests prove `Set-WindowsDefenderHardening.ps1`
+and `Set-WdacAuditPolicy.ps1` restore `$WhatIfPreference` after loading their modules. Two of them run unelevated and
+fail without the restore.
+
 ## 2026-11-02
 
 ### Fixed: privacy hardening carries on past a refused setting, and exploit mitigation no longer reports unstored values as applied

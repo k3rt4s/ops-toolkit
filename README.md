@@ -496,13 +496,15 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
 
 - Defender: attack surface reduction rules, Controlled Folder Access and network protection start in
   audit mode. `-AsrMode Block`, `-ControlledFolderAccess Enabled` and `-NetworkProtection Enabled`
-  turn them on once the audit events look clean.
+  turn them on once the audit events look clean. The script plans 18 ASR rules; the copied or
+  impersonated system tools rule reaches Block only when named in `-AsrRuleId`.
 - Credential protection: LSA protection without a UEFI lock, WDigest caching off, NTLMv2 only and no
   LM hash. Credential Guard, memory integrity, the UEFI lock and DMA protection are opt-in switches,
   and they take effect after a restart. Credential Guard is planned only on Enterprise and Education
   editions, and the platform-security requirement only when Secure Boot reads on.
 - Network protocols: SMBv1 and PowerShell 2.0 removed, SMB signing required, LLMNR and NetBIOS over
-  TCP/IP off. `-DisableMulticastDns` is opt-in.
+  TCP/IP off. `-DisableMulticastDns` and `-DisableWpad` are opt-in. On a proxied network, set a
+  manual WinHTTP proxy before `-DisableWpad`, and turn off automatic proxy detection in Settings too.
 - Exploit mitigation: system-wide DEP, bottom-up and high-entropy ASLR, SEHOP and CFG, effective
   after a restart. Mandatory ASLR (`-ForceRelocateImages`) and the Office internet-macro block
   (`-OfficeMacroPolicy`) are opt-in.
@@ -520,12 +522,18 @@ The defaults lean safe, and the disruptive half of each control is a switch you 
   rules are opt-in.
 - WDAC: an audit-only base policy built from a Microsoft example policy. It logs what would have
   been blocked and blocks nothing; there is no enforce switch. Read the events with
-  `Export-WdacAuditEvent.ps1` before considering enforcement.
+  `Export-WdacAuditEvent.ps1`, then `Set-WdacEnforcedPolicy.ps1 -Mode BuildAllowRules` writes a
+  supplemental allow-rules file for review and `-Mode Enforce` deploys the reviewed file and
+  enforces the base, with its own `-Rollback`. Roll the enforce script back before the audit one.
+  The enforce path is tested against fakes only; try it on a disposable VM or VDI test host first.
 - BitLocker: TPM protector, XTS-AES 256, used space only. The recovery password is written to
   `-RecoveryKeyDirectory`, which must be off the system drive, and read back before encryption
   starts; it never appears in a report. Run it last, and move the key file off the machine.
+  `-UseTpmAndPin` with a SecureString `-StartupPin` (6 to 20 digits) adds a pre-boot PIN on a
+  physical machine and is refused on a virtual one; the summary reports `UseTpmAndPin`. A volume
+  that is mid-decryption stops the run with no changes.
 
-Rollback in these ten scripts follows one contract:
+Rollback in these eleven scripts follows one contract:
 
 - `-Rollback` reads the newest unconsumed `<prefix>-rollback-<timestamp>.json` in the report
   directory, newest by name.

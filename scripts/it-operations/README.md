@@ -187,6 +187,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsLocalAccountPoli
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsFirewallBaseline.ps1 -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacAuditPolicy.ps1 -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1 -Days 14
+pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacEnforcedPolicy.ps1 -Mode BuildAllowRules -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <folder off the system drive> -WhatIf
 ```
 

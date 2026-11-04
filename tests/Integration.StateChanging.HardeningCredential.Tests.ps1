@@ -50,12 +50,44 @@ function Test-Path {
     $map = $env:OPSTOOLKIT_TEST_REGISTRY | ConvertFrom-Json
     return ($null -ne $map.PSObject.Properties[$target])
 }
+
+# Child keys of a fixture key are the map keys one level below it. A key not in the map does not exist.
+function Get-ChildItem {
+    param($Path, $LiteralPath, $Filter, [switch]$File, [switch]$Recurse, $ErrorAction)
+    $target = if ($LiteralPath) { [string]$LiteralPath } else { [string]$Path }
+    if ($env:OPSTOOLKIT_TEST_REGISTRY_ON -ne '1' -or $target -notlike 'HKLM:*') {
+        return Microsoft.PowerShell.Management\Get-ChildItem @PSBoundParameters
+    }
+    $map = $env:OPSTOOLKIT_TEST_REGISTRY | ConvertFrom-Json
+    if ($null -eq $map.PSObject.Properties[$target]) { throw [System.Management.Automation.ItemNotFoundException]::new("Cannot find path '$target'") }
+    $prefix = "$target\"
+    foreach ($p in $map.PSObject.Properties) {
+        if ($p.Name.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase) -and $p.Name.Substring($prefix.Length) -notmatch '\\') {
+            [pscustomobject]@{ PSChildName = $p.Name.Substring($prefix.Length) }
+        }
+    }
+}
+
+# Signatures are a fixture too: file path -> Status, Subject, Issuer. A path with no staged entry
+# throws, as the real cmdlet does for a file it cannot open, so the script must call it Unread.
+function Get-AuthenticodeSignature {
+    param($FilePath, $LiteralPath, $ErrorAction)
+    $target = if ($LiteralPath) { [string]$LiteralPath } else { [string]$FilePath }
+    $map = $env:OPSTOOLKIT_TEST_SIGNATURES | ConvertFrom-Json
+    $entry = $map.PSObject.Properties[$target]
+    if ($null -eq $entry) { throw "no staged signature for '$target'" }
+    $v = $entry.Value
+    $cert = $null
+    if ($v.PSObject.Properties['Subject'] -and $v.Subject) { $cert = [pscustomobject]@{ Subject = $v.Subject; Issuer = $v.Issuer } }
+    [pscustomobject]@{ Status = $v.Status; SignerCertificate = $cert }
+}
 '@
 
     function Get-Fixture {
-        param([hashtable]$Registry, [string]$SecureBoot = 'false')
+        param([hashtable]$Registry, [string]$SecureBoot = 'false', [hashtable]$Signature = @{})
         $json = ($Registry | ConvertTo-Json -Depth 5 -Compress)
-        "`$env:OPSTOOLKIT_TEST_REGISTRY_ON = '1'`n`$env:OPSTOOLKIT_TEST_REGISTRY = '$json'`n`$env:OPSTOOLKIT_TEST_SECUREBOOT = '$SecureBoot'`n"
+        $sigJson = ($Signature | ConvertTo-Json -Depth 5 -Compress)
+        "`$env:OPSTOOLKIT_TEST_REGISTRY_ON = '1'`n`$env:OPSTOOLKIT_TEST_REGISTRY = '$json'`n`$env:OPSTOOLKIT_TEST_SECUREBOOT = '$SecureBoot'`n`$env:OPSTOOLKIT_TEST_SIGNATURES = '$sigJson'`n"
     }
 
     # A machine that licenses Credential Guard with Secure Boot on, unless the caller says otherwise.
@@ -65,11 +97,11 @@ function Test-Path {
     }
 
     function Invoke-CredPair {
-        param([string]$Tag, [hashtable]$Argument, [hashtable]$Registry = @{}, [string]$SecureBoot = 'true')
+        param([string]$Tag, [hashtable]$Argument, [hashtable]$Registry = @{}, [string]$SecureBoot = 'true', [hashtable]$Signature = @{}, [string]$MoreSetup = '')
         $Argument.ReportDirectory = (Join-Path $script:workRoot $Tag)
         Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
             -RelativePath $script:scriptRelative -Argument $Argument -Tag $Tag `
-            -ExtraSetup $script:registryShadow -FixtureEnvironment (Get-Fixture -Registry $Registry -SecureBoot $SecureBoot)
+            -ExtraSetup ($script:registryShadow + $MoreSetup) -FixtureEnvironment (Get-Fixture -Registry $Registry -SecureBoot $SecureBoot -Signature $Signature)
     }
 
     function Get-PlanItem {
@@ -686,5 +718,243 @@ Describe 'Set-WindowsCredentialProtection Credential Guard edition gate and Secu
         $r = Invoke-CredPair -Tag 'credCgNoSb' -Argument $script:cgArg -Registry (Get-CapableRegistry) -SecureBoot 'false'
         (Get-Row -Run $r.WhatIf -Setting 'LsaCfgFlags')[0].Action | Should -Match 'Set LsaCfgFlags = 2'
         (Get-Row -Run $r.WhatIf -Setting 'RequirePlatformSecurityFeatures')[0].Result | Should -Match '^Skipped: Secure Boot'
+    }
+}
+
+Describe 'Set-WindowsCredentialProtection LSA protection preflight' {
+    BeforeAll {
+        $script:modDir = Join-Path $script:workRoot 'lsaModules'
+        New-Item -ItemType Directory -Path $script:modDir -Force | Out-Null
+        $msSubject = 'CN=Microsoft Windows, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+        $msIssuer = 'CN=Microsoft Windows Production PCA 2011, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+        $vendorSubject = 'CN=Apple Inc., O=Apple Inc., L=Cupertino, S=California, C=US'
+        $vendorIssuer = 'CN=DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1, O=DigiCert, Inc., C=US'
+
+        # Every module file exists except the one named missing.dll.
+        $script:mod = @{}
+        foreach ($n in 'ms_auth', 'vendor_auth', 'unsigned_notify', 'spoof_auth', 'tampered_auth', 'noread_auth', 'mdnsNSP') {
+            $p = Join-Path $script:modDir "$n.dll"
+            Set-Content -LiteralPath $p -Value 'x' -Encoding ascii
+            $script:mod[$n] = $p
+        }
+        $script:mod['missing'] = Join-Path $script:modDir 'missing.dll'
+
+        $script:sig = @{
+            $script:mod['ms_auth'] = @{ Status = 'Valid'; Subject = $msSubject; Issuer = $msIssuer }
+            $script:mod['vendor_auth'] = @{ Status = 'Valid'; Subject = $vendorSubject; Issuer = $vendorIssuer }
+            $script:mod['unsigned_notify'] = @{ Status = 'NotSigned' }
+            # A valid signature whose subject claims Microsoft but whose issuer does not is not Microsoft.
+            $script:mod['spoof_auth'] = @{ Status = 'Valid'; Subject = $msSubject; Issuer = $vendorIssuer }
+            $script:mod['tampered_auth'] = @{ Status = 'HashMismatch'; Subject = $msSubject; Issuer = $msIssuer }
+            # noread_auth has no staged entry, so the signature call throws.
+            $script:mod['mdnsNSP'] = @{ Status = 'Valid'; Subject = $vendorSubject; Issuer = $vendorIssuer }
+        }
+
+        $script:nsParent64 = 'HKLM:\SYSTEM\CurrentControlSet\Services\Winsock2\Parameters\NameSpace_Catalog5\Catalog_Entries64'
+        $script:nsParent32 = 'HKLM:\SYSTEM\CurrentControlSet\Services\Winsock2\Parameters\NameSpace_Catalog5\Catalog_Entries'
+        $script:reg = @{
+            $script:lsa = @{
+                'Authentication Packages' = @($script:mod['ms_auth'], $script:mod['vendor_auth'], $script:mod['spoof_auth'], $script:mod['tampered_auth'], $script:mod['noread_auth'])
+                'Notification Packages'   = @($script:mod['unsigned_notify'], $script:mod['missing'])
+                'Security Packages'       = @('')
+            }
+            "$($script:lsa)\OSConfig" = @{ 'Security Packages' = @() }
+            $script:nsParent64 = @{}
+            "$($script:nsParent64)\000000000001" = @{ LibraryPath = $script:mod['mdnsNSP']; DisplayString = 'Bonjour' }
+            $script:nsParent32 = @{}
+        }
+        $script:pf = Invoke-CredPair -Tag 'credPreflight' -Argument @{} -Registry $script:reg -Signature $script:sig
+
+        function Get-PreflightRow {
+            param($Run)
+            @(Get-Content -LiteralPath $Run.Summary.LsaPreflightJsonPath -Raw | ConvertFrom-Json)
+        }
+        function Get-RowFor {
+            param($Run, [string]$Name)
+            $rows = @(Get-PreflightRow -Run $Run | Where-Object { $_.ResolvedPath -eq $script:mod[$Name] })
+            $rows.Count | Should -Be 1 -Because "exactly one row for $Name"
+            $rows[0]
+        }
+    }
+
+    It 'runs to completion in both modes, writes the preflight report in both, and changes nothing under -WhatIf' {
+        $script:pf.Execute.ExitCode | Should -Be 0 -Because $script:pf.Execute.Output
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:pf
+        foreach ($mode in $script:pf.WhatIf, $script:pf.Execute) {
+            Test-Path -LiteralPath $mode.Summary.LsaPreflightCsvPath | Should -BeTrue
+            Test-Path -LiteralPath $mode.Summary.LsaPreflightJsonPath | Should -BeTrue
+            $mode.Summary.LsaPreflightCsvPath | Should -Match 'credential-protection-lsa-preflight-\d{8}_\d{6}\.csv$'
+            $mode.Summary.LsaPreflightError | Should -BeNullOrEmpty
+        }
+    }
+
+    It 'does not list a Microsoft-signed module' {
+        foreach ($mode in $script:pf.WhatIf, $script:pf.Execute) {
+            $row = Get-RowFor -Run $mode -Name 'ms_auth'
+            $row.Verdict | Should -Be 'Microsoft'
+            $row.Listed | Should -BeFalse
+            $row.Source | Should -Be 'Lsa\Authentication Packages'
+        }
+    }
+
+    It 'lists a validly signed third-party module with its signer' {
+        $row = Get-RowFor -Run $script:pf.WhatIf -Name 'vendor_auth'
+        $row.Verdict | Should -Be 'ThirdParty'
+        $row.Listed | Should -BeTrue
+        $row.Signer | Should -Match 'Apple Inc'
+    }
+
+    It 'lists a Winsock name-space provider such as mdnsNSP.dll that is not Microsoft-signed' {
+        $row = Get-RowFor -Run $script:pf.WhatIf -Name 'mdnsNSP'
+        $row.Source | Should -Be 'Winsock namespace providers'
+        $row.Verdict | Should -Be 'ThirdParty'
+        $row.Listed | Should -BeTrue
+    }
+
+    It 'lists an unsigned module' {
+        $row = Get-RowFor -Run $script:pf.WhatIf -Name 'unsigned_notify'
+        $row.Verdict | Should -Be 'Unsigned'
+        $row.Listed | Should -BeTrue
+        $row.Source | Should -Be 'Lsa\Notification Packages'
+    }
+
+    It 'does not accept a Microsoft subject from a non-Microsoft issuer, or a signature that no longer matches the file' {
+        $spoof = Get-RowFor -Run $script:pf.WhatIf -Name 'spoof_auth'
+        $spoof.Verdict | Should -Be 'ThirdParty'
+        $spoof.Listed | Should -BeTrue
+        $bad = Get-RowFor -Run $script:pf.WhatIf -Name 'tampered_auth'
+        $bad.Verdict | Should -Be 'InvalidSignature'
+        $bad.Listed | Should -BeTrue
+    }
+
+    It 'lists a missing file as Unread, never as safe' {
+        $row = Get-RowFor -Run $script:pf.WhatIf -Name 'missing'
+        $row.Verdict | Should -Be 'Unread'
+        $row.Listed | Should -BeTrue
+        $row.Unread | Should -BeTrue
+        $row.Detail | Should -Match 'file not found'
+    }
+
+    It 'lists a module whose signature cannot be read as Unread, never as safe' {
+        $row = Get-RowFor -Run $script:pf.WhatIf -Name 'noread_auth'
+        $row.Verdict | Should -Be 'Unread'
+        $row.Listed | Should -BeTrue
+        $row.Unread | Should -BeTrue
+    }
+
+    It 'counts modules, listed and unread, and the CSV matches the JSON' {
+        # 8 rows: ms_auth is not listed; the other 7 are, and 2 of those (missing, noread_auth) are Unread.
+        foreach ($mode in $script:pf.WhatIf, $script:pf.Execute) {
+            $mode.Summary.LsaPreflightModuleCount | Should -Be 8
+            $mode.Summary.LsaPreflightListedCount | Should -Be 7
+            $mode.Summary.LsaPreflightUnreadCount | Should -Be 2
+            @(Import-Csv -LiteralPath $mode.Summary.LsaPreflightCsvPath).Count | Should -Be 8
+            $mode.Summary.LsaPreflightNote | Should -Match '7 module\(s\) will stop loading'
+        }
+    }
+
+    It 'is a report, not a blocker: LSA protection is still planned and applied with modules listed' {
+        (Get-PlanItem -Run $script:pf.WhatIf -Setting 'RunAsPPL').DesiredValue | Should -Be 2
+        (Get-PlanItem -Run $script:pf.Execute -Setting 'RunAsPPL').Action | Should -Match 'Set RunAsPPL = 2'
+        $script:pf.Execute.Summary.FailedCount | Should -Be 0
+        if (-not $script:isElevated) { Set-ItResult -Skipped -Because 'applying requires an elevated session'; return }
+        $targets = @(Get-OpsMutationRecord -Path $script:pf.ExecuteLog | ForEach-Object { $_.Target })
+        $targets | Should -Contain "$($script:lsa)\RunAsPPL"
+    }
+
+    It 'treats empty package lists as nothing to check, not as one blank module (the @($null) trap)' {
+        $empty = @{
+            $script:lsa = @{ 'Authentication Packages' = @(); 'Notification Packages' = @(''); 'Security Packages' = @('', '  ') }
+            "$($script:lsa)\OSConfig" = @{ 'Security Packages' = @() }
+            $script:nsParent64 = @{}
+            $script:nsParent32 = @{}
+        }
+        $r = Invoke-CredPair -Tag 'credPreflightEmpty' -Argument @{} -Registry $empty
+        foreach ($mode in $r.WhatIf, $r.Execute) {
+            $mode.ExitCode | Should -Be 0 -Because $mode.Output
+            $mode.Summary.LsaPreflightModuleCount | Should -Be 0
+            $mode.Summary.LsaPreflightListedCount | Should -Be 0
+            @(Get-Content -LiteralPath $mode.Summary.LsaPreflightJsonPath -Raw | ConvertFrom-Json).Count | Should -Be 0
+            # An empty report still has its header.
+            (Get-Content -LiteralPath $mode.Summary.LsaPreflightCsvPath -Raw) | Should -Match '"Source"'
+            $mode.Summary.LsaPreflightNote | Should -Match 'No module outside Microsoft-signed'
+        }
+    }
+
+    It 'reports an absent Winsock name-space catalog as Unread, never as an empty and safe list' {
+        $r = Invoke-CredPair -Tag 'credPreflightNoCatalog' -Argument @{} -Registry @{ $script:lsa = @{ 'Authentication Packages' = @() } }
+        $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+        $rows = @(Get-PreflightRow -Run $r.WhatIf)
+        $rows.Count | Should -Be 1
+        $rows[0].Verdict | Should -Be 'Unread'
+        $rows[0].Source | Should -Be 'Winsock namespace providers'
+        $r.WhatIf.Summary.LsaPreflightUnreadCount | Should -Be 1
+    }
+
+    It 'reports a provider entry with no LibraryPath as Unread' {
+        $reg = @{
+            $script:nsParent64 = @{}
+            "$($script:nsParent64)\000000000002" = @{ DisplayString = 'no library' }
+            $script:nsParent32 = @{}
+        }
+        $r = Invoke-CredPair -Tag 'credPreflightNoLib' -Argument @{} -Registry $reg
+        $rows = @(Get-PreflightRow -Run $r.WhatIf)
+        $rows.Count | Should -Be 1
+        $rows[0].Verdict | Should -Be 'Unread'
+        $rows[0].Detail | Should -Match 'no readable LibraryPath'
+    }
+
+    It 'never lets a preflight failure stop the apply' {
+        $failing = @'
+
+function Export-Csv {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([Parameter(ValueFromPipeline = $true)]$InputObject, [string]$Path, [switch]$NoTypeInformation, [string]$Encoding)
+    begin { $rows = [System.Collections.Generic.List[object]]::new() }
+    process { if ($null -ne $InputObject) { $rows.Add($InputObject) } }
+    end {
+        if ($Path -like '*lsa-preflight*') { throw 'staged preflight failure' }
+        $rows | Microsoft.PowerShell.Utility\Export-Csv -Path $Path -NoTypeInformation -Encoding $Encoding -WhatIf:$false
+    }
+}
+'@
+        $r = Invoke-CredPair -Tag 'credPreflightFails' -Argument @{} -Registry $script:reg -Signature $script:sig -MoreSetup $failing
+        foreach ($mode in $r.WhatIf, $r.Execute) {
+            $mode.ExitCode | Should -Be 0 -Because $mode.Output
+            $mode.Summary.LsaPreflightError | Should -Match 'staged preflight failure'
+            $mode.Summary.LsaPreflightCsvPath | Should -BeNullOrEmpty
+        }
+        (Get-PlanItem -Run $r.WhatIf -Setting 'RunAsPPL').DesiredValue | Should -Be 2
+        $r.Execute.Summary.FailedCount | Should -Be 0
+    }
+
+    It 'does not run under -Rollback' {
+        $dir = Join-Path $script:workRoot 'credPreflightRollback'
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        [pscustomobject]@{
+            Timestamp = '20260101_000000'
+            ChangedSettings = @([pscustomobject]@{ Category = 'LsaProtection'; Setting = 'RunAsPPL'; RegistryPath = $script:lsa; RequiresReboot = $true; PriorValue = 0; AppliedValue = 2 })
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dir 'credential-protection-rollback-20260101_000000.json') -Encoding utf8
+        $r = Invoke-CredPair -Tag 'credPreflightRollback' -Argument @{ Rollback = $true } -Registry $script:reg -Signature $script:sig
+        $r.WhatIf.ExitCode | Should -Be 0 -Because $r.WhatIf.Output
+        $r.WhatIf.Summary.LsaPreflightCsvPath | Should -BeNullOrEmpty
+        $r.WhatIf.Summary.LsaPreflightModuleCount | Should -Be 0
+        @(Get-ChildItem -LiteralPath $dir -Filter '*lsa-preflight*').Count | Should -Be 0
+    }
+
+    It 'resolves a registered name to a file in a pure function lifted from the script' {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-RepositoryRoot) $script:scriptRelative), [ref]$tokens, [ref]$parseErrors)
+        $hit = @($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq 'Resolve-LsaModulePath' })
+        $hit.Count | Should -Be 1
+        $resolve = [scriptblock]::Create("param(`$Entry, `$Dir)`n$($hit[0].Extent.Text)`nResolve-LsaModulePath -Entry `$Entry -SystemDirectory `$Dir")
+        $dir = 'C:\SysDir'
+        & $resolve 'msv1_0' $dir | Should -Be 'C:\SysDir\msv1_0.dll'
+        & $resolve 'scecli.dll' $dir | Should -Be 'C:\SysDir\scecli.dll'
+        & $resolve '"D:\Vendor\auth.dll"' $dir | Should -Be 'D:\Vendor\auth.dll'
+        & $resolve '' $dir | Should -BeNullOrEmpty
+        & $resolve '   ' $dir | Should -BeNullOrEmpty
+        & $resolve $null $dir | Should -BeNullOrEmpty
     }
 }

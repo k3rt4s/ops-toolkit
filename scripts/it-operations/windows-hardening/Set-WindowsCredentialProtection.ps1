@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back local credential-protection registry settings on a standalone Windows 11 machine.
+Plan, apply, and roll back local credential-protection registry settings on a physical or VDI Windows 11 machine, standalone or joined, and list the modules LSA protection would stop loading.
 
 .DESCRIPTION
 Instructions:
@@ -17,8 +17,29 @@ Instructions:
   developer's workstation must never be applied to someone else's machine. Supply it on every run.
 
 Purpose:
-Raises the cost of stealing credentials from memory on a workgroup machine, using local registry
-values only (no Group Policy, no Active Directory).
+Raises the cost of stealing credentials from memory on a physical or VDI machine, standalone or
+joined, using local registry values only (this script sets no Group Policy and no Active Directory
+object).
+
+LSA protection preflight (a report, never a blocker):
+- On every apply run, including -WhatIf, the script first lists the modules that LSA protection
+  (RunAsPPL) would stop loading into lsass, so the cause of events 3033 and 3063 is known before the
+  restart. It reads the LSA package lists under HKLM:\SYSTEM\CurrentControlSet\Control\Lsa
+  (Authentication Packages, Notification Packages, Security Packages) and the Security Packages value
+  under Lsa\OSConfig, plus the Winsock name-space providers (for example Bonjour's mdnsNSP.dll is
+  one), resolves each to a file and checks its Authenticode signature.
+- A module is listed unless it is validly signed by Microsoft. The listed modules WILL STOP LOADING
+  once LSA protection is on and the machine restarts; the script does not refuse to enable it.
+  Third-party signed, unsigned and badly signed modules are listed with the reason.
+- A module that cannot be resolved to a file or whose signature cannot be read is listed as
+  Unread, never as safe. A source that cannot be read at all is also an Unread row.
+- The report is credential-protection-lsa-preflight-<timestamp>.csv and .json in the report
+  directory, and the summary carries LsaPreflightCsvPath, LsaPreflightJsonPath,
+  LsaPreflightModuleCount, LsaPreflightListedCount (includes Unread) and LsaPreflightUnreadCount.
+  -Rollback does not run it.
+- Which registry values and which Winsock catalog really feed lsass has not been proven on a real
+  host (see the comments at Get-LsaProtectionPreflight); treat an empty report as "nothing found in
+  these sources", not as "nothing will be blocked".
 
 Default run (least disruptive):
 - LSA protection (RunAsPPL = 2, protected process WITHOUT a UEFI lock).
@@ -87,8 +108,9 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtec
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsCredentialProtection.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 
 .OUTPUTS
-Writes credential-protection plan and state CSV/JSON under the report directory, plus a rollback
-JSON capturing the prior value of every setting changed. The summary object carries RebootRequired.
+Writes credential-protection plan and state CSV/JSON under the report directory, an LSA protection
+preflight CSV/JSON (apply runs only), plus a rollback JSON capturing the prior value of every
+setting changed. The summary object carries RebootRequired and the LsaPreflight* counts.
 
 .NOTES
 Status:
@@ -352,6 +374,194 @@ function Get-ForwardPlan {
     $items
 }
 
+# LSA protection preflight. Read-only. Lists the modules LSA protection (RunAsPPL) would stop
+# loading into lsass so the operator sees the cause of events 3033 and 3063 before the restart.
+#
+# UNVERIFIED ON A REAL HOST (the script has never run on one, hard-elevated-run); these are the
+# assumptions behind the candidate list, each to be confirmed against a machine that really logs
+# 3033/3063 for a known module:
+# - That the three LSA package values (Authentication Packages, Notification Packages, Security
+#   Packages) under the Lsa key and the Security Packages value under Lsa\OSConfig are the registry
+#   lists lsass loads packages from, and that a bare name (msv1_0) means <System32>\<name>.dll.
+# - That the Winsock name-space provider catalog is NameSpace_Catalog5\Catalog_Entries64 (native) and
+#   Catalog_Entries (32-bit) under Services\Winsock2\Parameters, with the DLL in each entry's
+#   LibraryPath, and that lsass loads those providers (the Bonjour mdnsNSP.dll case on a real laptop
+#   says it does; which lsass code path loads it is not established).
+# - That a third-party signature is not enough: LSA plug-ins must carry a Microsoft signature, so a
+#   validly third-party-signed module is listed. A module also cosigned by Microsoft (WHQL) is
+#   treated as Microsoft only when its signer certificate subject and issuer both name Microsoft
+#   Corporation; whether that matches the loader's own signing-level check is not established.
+# - That Get-AuthenticodeSignature, which also consults catalog signatures, reports the Microsoft
+#   signer for in-box catalog-signed DLLs.
+# - Packages and providers loaded some other way (a Security Support Provider added by API at run
+#   time, Smart Card or credential provider DLLs, plug-ins named by other keys) are not enumerated,
+#   so an empty or short report is not proof that nothing will be blocked.
+#
+# The seams a test replaces are Get-ItemProperty, Get-ChildItem, Test-Path and
+# Get-AuthenticodeSignature (functions shadowing the cmdlets), the same way the other tests shadow
+# registry reads.
+
+# Registry sources of LSA package names. Source is the label reported on each row.
+$script:LsaPackageSources = @(
+    [pscustomobject]@{ Source = 'Lsa\Authentication Packages'; Path = $script:LsaPath; Name = 'Authentication Packages' }
+    [pscustomobject]@{ Source = 'Lsa\Notification Packages'; Path = $script:LsaPath; Name = 'Notification Packages' }
+    [pscustomobject]@{ Source = 'Lsa\Security Packages'; Path = $script:LsaPath; Name = 'Security Packages' }
+    [pscustomobject]@{ Source = 'Lsa\OSConfig\Security Packages'; Path = "$($script:LsaPath)\OSConfig"; Name = 'Security Packages' }
+)
+$script:WinsockNamespaceParents = @(
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Winsock2\Parameters\NameSpace_Catalog5\Catalog_Entries64'
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Winsock2\Parameters\NameSpace_Catalog5\Catalog_Entries'
+)
+
+# Reads one registry value as a list of non-blank strings. Status is Read, Absent (key or value
+# missing) or Unreadable. Values is always a string array, empty when nothing is there, and is
+# returned inside an object so an empty list cannot unroll to $null (@($null) has Count 1).
+function Get-LsaRegistryStringList {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    $values = [System.Collections.Generic.List[string]]::new()
+    try {
+        $props = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        $missing = -not (Test-Path -LiteralPath $Path)
+        return [pscustomobject]@{ Status = $(if ($missing) { 'Absent' } else { 'Unreadable' }); Values = $values.ToArray() }
+    }
+    if ($null -eq $props -or -not $props.PSObject.Properties[$Name]) {
+        return [pscustomobject]@{ Status = 'Absent'; Values = $values.ToArray() }
+    }
+    $raw = $props.PSObject.Properties[$Name].Value
+    if ($null -eq $raw) {
+        return [pscustomobject]@{ Status = 'Unreadable'; Values = $values.ToArray() }
+    }
+    foreach ($item in @($raw)) {
+        if ($null -eq $item) { continue }
+        $text = ([string]$item).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text)) { $values.Add($text) }
+    }
+    [pscustomobject]@{ Status = 'Read'; Values = $values.ToArray() }
+}
+
+# Turns a registered module name into a file path, or $null when the entry is blank. Environment
+# variables are expanded; a name with no directory is looked up in the system directory and gets
+# .dll when it has no extension (the LSA package lists hold bare names such as msv1_0).
+function Resolve-LsaModulePath {
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Entry,
+        [string]$SystemDirectory = (Join-Path $(if ($env:SystemRoot) { $env:SystemRoot } else { 'C:\Windows' }) 'System32')
+    )
+    if ([string]::IsNullOrWhiteSpace($Entry)) { return $null }
+    $text = [Environment]::ExpandEnvironmentVariables($Entry.Trim()).Trim('"')
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    if ([System.IO.Path]::GetExtension($text) -eq '') { $text = "$text.dll" }
+    if (-not [System.IO.Path]::IsPathRooted($text)) { $text = Join-Path $SystemDirectory $text }
+    $text
+}
+
+# Returns Verdict (Microsoft, ThirdParty, Unsigned, InvalidSignature or Unread), Signer and Detail.
+# Only Microsoft is not listed. Anything that could not be checked is Unread, never Microsoft.
+function Get-LsaModuleVerdict {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [pscustomobject]@{ Verdict = 'Unread'; Signer = ''; Detail = 'file not found, so its signature could not be checked' }
+    }
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        return [pscustomobject]@{ Verdict = 'Unread'; Signer = ''; Detail = "signature could not be read: $($_.Exception.Message)" }
+    }
+    if ($null -eq $sig -or -not $sig.PSObject.Properties['Status']) {
+        return [pscustomobject]@{ Verdict = 'Unread'; Signer = ''; Detail = 'signature check returned nothing' }
+    }
+    $status = [string]$sig.Status
+    $subject = ''
+    $issuer = ''
+    if ($sig.PSObject.Properties['SignerCertificate'] -and $null -ne $sig.SignerCertificate) {
+        $cert = $sig.SignerCertificate
+        if ($cert.PSObject.Properties['Subject'] -and $null -ne $cert.Subject) { $subject = [string]$cert.Subject }
+        if ($cert.PSObject.Properties['Issuer'] -and $null -ne $cert.Issuer) { $issuer = [string]$cert.Issuer }
+    }
+    $microsoft = '(^|,\s*)O=Microsoft Corporation(,|$)'
+    switch ($status) {
+        'Valid' {
+            if ($subject -match $microsoft -and $issuer -match $microsoft) {
+                return [pscustomobject]@{ Verdict = 'Microsoft'; Signer = $subject; Detail = 'valid Microsoft signature' }
+            }
+            return [pscustomobject]@{ Verdict = 'ThirdParty'; Signer = $subject; Detail = 'valid signature, but the signer is not Microsoft' }
+        }
+        'NotSigned' { return [pscustomobject]@{ Verdict = 'Unsigned'; Signer = ''; Detail = 'no Authenticode signature' } }
+        { $_ -in 'HashMismatch', 'NotTrusted', 'Incompatible', 'NotSupportedFileFormat' } {
+            return [pscustomobject]@{ Verdict = 'InvalidSignature'; Signer = $subject; Detail = "signature status $status" }
+        }
+        default {
+            return [pscustomobject]@{ Verdict = 'Unread'; Signer = $subject; Detail = "signature status $status could not be judged" }
+        }
+    }
+}
+
+function ConvertTo-LsaPreflightRow {
+    param([string]$Source, [string]$Entry, [string]$ResolvedPath, [string]$Verdict, [string]$Signer, [string]$Detail)
+    [pscustomobject]@{
+        Source = $Source; Entry = $Entry; ResolvedPath = $ResolvedPath
+        Verdict = $Verdict; Signer = $Signer
+        Listed = ($Verdict -ne 'Microsoft')
+        Unread = ($Verdict -eq 'Unread')
+        Detail = $Detail
+    }
+}
+
+# Returns one row per candidate module. Pure reads; never throws for a missing or unreadable source.
+function Get-LsaProtectionPreflight {
+    $rows = [System.Collections.Generic.List[pscustomobject]]::new()
+    $verdicts = @{}
+    $judge = {
+        param([string]$Source, [string]$Entry)
+        $path = Resolve-LsaModulePath -Entry $Entry
+        if ($null -eq $path) { return }
+        $key = $path.ToLowerInvariant()
+        if (-not $verdicts.ContainsKey($key)) { $verdicts[$key] = Get-LsaModuleVerdict -Path $path }
+        $v = $verdicts[$key]
+        $rows.Add((ConvertTo-LsaPreflightRow -Source $Source -Entry $Entry -ResolvedPath $path -Verdict $v.Verdict -Signer $v.Signer -Detail $v.Detail))
+    }
+
+    foreach ($src in $script:LsaPackageSources) {
+        $list = Get-LsaRegistryStringList -Path $src.Path -Name $src.Name
+        if ($list.Status -eq 'Unreadable') {
+            $rows.Add((ConvertTo-LsaPreflightRow -Source $src.Source -Entry '(whole list)' -ResolvedPath '' -Verdict 'Unread' -Signer '' -Detail "$($src.Name) under $($src.Path) exists but could not be read"))
+            continue
+        }
+        foreach ($entry in $list.Values) { & $judge $src.Source $entry }
+    }
+
+    $catalogRead = 0
+    foreach ($parent in $script:WinsockNamespaceParents) {
+        try {
+            $children = @(Get-ChildItem -LiteralPath $parent -ErrorAction Stop)
+        } catch {
+            if (Test-Path -LiteralPath $parent) {
+                $rows.Add((ConvertTo-LsaPreflightRow -Source 'Winsock namespace providers' -Entry $parent -ResolvedPath '' -Verdict 'Unread' -Signer '' -Detail 'the catalog key exists but could not be enumerated'))
+                $catalogRead++
+            }
+            continue
+        }
+        $catalogRead++
+        foreach ($child in $children) {
+            $childPath = "$parent\$($child.PSChildName)"
+            $lib = Get-LsaRegistryStringList -Path $childPath -Name 'LibraryPath'
+            if ($lib.Status -ne 'Read' -or $lib.Values.Count -eq 0) {
+                $rows.Add((ConvertTo-LsaPreflightRow -Source 'Winsock namespace providers' -Entry $childPath -ResolvedPath '' -Verdict 'Unread' -Signer '' -Detail "provider entry has no readable LibraryPath ($($lib.Status))"))
+                continue
+            }
+            & $judge 'Winsock namespace providers' $lib.Values[0]
+        }
+    }
+    if ($catalogRead -eq 0) {
+        $rows.Add((ConvertTo-LsaPreflightRow -Source 'Winsock namespace providers' -Entry ($script:WinsockNamespaceParents -join '; ') -ResolvedPath '' -Verdict 'Unread' -Signer '' -Detail 'the Winsock name-space catalog was not found, so name-service providers could not be listed'))
+    }
+    $rows
+}
+
 function Get-LatestRollbackFile {
     if (-not (Test-Path -LiteralPath $ReportDirectory)) { return $null }
     # A rollback run writes credential-protection-rollback-plan-<ts>.json, which a bare
@@ -503,6 +713,43 @@ $plan | Export-Csv -Path $planPath -NoTypeInformation -Encoding utf8 -WhatIf:$fa
 $planJson = if (@($plan).Count) { @($plan) | ConvertTo-Json -Depth 4 } else { '[]' }
 Set-Content -LiteralPath $planJsonPath -Value $planJson -Encoding utf8 -WhatIf:$false
 
+# LSA protection preflight: a report, never a gate. It runs before any change, also under -WhatIf,
+# and a failure to build it is recorded and warned about, never allowed to stop the apply.
+$preflight = @()
+$preflightCsvPath = $null
+$preflightJsonPath = $null
+$preflightError = $null
+$preflightNote = $null
+if (-not $Rollback) {
+    try {
+        $preflight = @(Get-LsaProtectionPreflight)
+        $preflightCsvPath = Join-Path $resolvedReportDirectory "credential-protection-lsa-preflight-$timestamp.csv"
+        $preflightJsonPath = Join-Path $resolvedReportDirectory "credential-protection-lsa-preflight-$timestamp.json"
+        $preflight | Export-Csv -Path $preflightCsvPath -NoTypeInformation -Encoding utf8 -WhatIf:$false
+        if (-not (Test-Path -LiteralPath $preflightCsvPath) -or (Get-Item -LiteralPath $preflightCsvPath).Length -eq 0) {
+            # Export-Csv writes no file, or an empty one, for an empty list; an empty report still has its header.
+            Set-Content -LiteralPath $preflightCsvPath -Value '"Source","Entry","ResolvedPath","Verdict","Signer","Listed","Unread","Detail"' -Encoding utf8 -WhatIf:$false
+        }
+        $preflightJson = if ($preflight.Count) { ConvertTo-Json -InputObject @($preflight) -Depth 4 } else { '[]' }
+        Set-Content -LiteralPath $preflightJsonPath -Value $preflightJson -Encoding utf8 -WhatIf:$false
+        $listedNow = @($preflight | Where-Object { $_.Listed })
+        $ppl = @($plan | Where-Object { $_.Setting -eq 'RunAsPPL' })
+        if ($ppl.Count -gt 0 -and "$($ppl[0].Action)" -like 'No change*') {
+            $preflightNote = 'LSA protection is already set, so the listed modules are blocked as soon as it is running; this run changes nothing about them.'
+        } elseif ($listedNow.Count -gt 0) {
+            $preflightNote = "$($listedNow.Count) module(s) will stop loading into lsass once LSA protection is on and the machine restarts (including $(@($listedNow | Where-Object { $_.Unread }).Count) that could not be read). See $preflightCsvPath."
+        } else {
+            $preflightNote = 'No module outside Microsoft-signed ones was found in the sources read; see the limits in the script help.'
+        }
+        if ($listedNow.Count -gt 0) { Write-Warning $preflightNote }
+    } catch {
+        $preflightError = "LSA protection preflight failed: $($_.Exception.Message)"
+        $preflightCsvPath = $null
+        $preflightJsonPath = $null
+        Write-Warning $preflightError
+    }
+}
+
 $state = foreach ($item in $plan) {
     $result = Invoke-PlanItem -Item $item -WhatIf:$WhatIfPreference
     $item | Add-Member -NotePropertyName Result -NotePropertyValue $result -Force
@@ -556,6 +803,13 @@ $changedRequiringReboot = @($script:ChangedSettings | Where-Object { $_.Requires
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path
     StateJsonPath = (Resolve-Path -LiteralPath $stateJsonPath).Path
+    LsaPreflightCsvPath = $preflightCsvPath
+    LsaPreflightJsonPath = $preflightJsonPath
+    LsaPreflightModuleCount = @($preflight).Count
+    LsaPreflightListedCount = @($preflight | Where-Object { $_.Listed }).Count
+    LsaPreflightUnreadCount = @($preflight | Where-Object { $_.Unread }).Count
+    LsaPreflightNote = $preflightNote
+    LsaPreflightError = $preflightError
     RollbackJsonPath = $rollbackPath
     RollbackSourcePath = $rollbackSourcePath
     RollbackConsumedPath = $rollbackConsumedPath

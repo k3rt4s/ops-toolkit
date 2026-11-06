@@ -83,6 +83,15 @@ nothing left to shadow. If you add a script that reaches a new subsystem, stage 
 module for it rather than trusting a function stub, and then **verify the machine
 afterwards** rather than trusting the test result.
 
+**A fake mutating cmdlet follows the real one's `-WhatIf` contract.** Its recorder writes with
+`-WhatIf:$false`, so a caller's `-WhatIf` cannot silence the log. The fake declares
+`SupportsShouldProcess` exactly when the real cmdlet does (read with `Get-Command` on the real
+module, read-only) and then records nothing under `-WhatIf`; a real cmdlet without it gets a
+fake without it, so a stray `-WhatIf` fails to bind as it would for real. The AD and IIS write
+fakes under-declare on purpose so the scripts must gate their own calls. Read fakes honour the
+filters the real cmdlet has, wildcards included. `FakeSystemModules.Contract.Tests.ps1` pins all
+of this.
+
 **Type switch parameters as switches, in fixtures too.** This is the same trap as
 above and it has now been introduced twice. A stub declaring a plain `$Force` swallows
 the following argument and fails with "Missing an argument for parameter 'Force'",

@@ -39,7 +39,7 @@ function Write-FakeMpMutation {
     param([string]$Command, [string]$Target, [string]$Detail = '')
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 

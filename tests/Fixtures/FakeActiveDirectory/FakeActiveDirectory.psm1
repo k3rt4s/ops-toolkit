@@ -64,7 +64,7 @@ function Write-FakeAdMutation {
 
     $record = [ordered]@{ Command = $Command; Identity = [string]$Identity }
     foreach ($key in $Detail.Keys) { $record[$key] = [string]$Detail[$key] }
-    Add-Content -LiteralPath $path -Value ([pscustomobject]$record | ConvertTo-Json -Compress) -Encoding utf8
+    Add-Content -LiteralPath $path -Value ([pscustomobject]$record | ConvertTo-Json -Compress) -Encoding utf8 -WhatIf:$false
 }
 
 function Get-ADDomain {

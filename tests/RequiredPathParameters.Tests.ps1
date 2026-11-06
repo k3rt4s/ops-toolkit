@@ -178,7 +178,7 @@ Describe '<_.Leaf> path parameters' -ForEach @(
     @{ Leaf = 'Set-WindowsLocalAccountPolicy.ps1'; Required = @('ReportDirectory') }
     @{ Leaf = 'Set-WindowsFirewallBaseline.ps1'; Required = @('ReportDirectory') }
     @{ Leaf = 'Set-WdacAuditPolicy.ps1'; Required = @('ReportDirectory') }
-    @{ Leaf = 'Enable-BitLockerOsVolume.ps1'; Required = @('ReportDirectory', 'RecoveryKeyDirectory') }
+    @{ Leaf = 'Enable-BitLockerOsVolume.ps1'; Required = @('ReportDirectory') }
 ) {
     It 'marks its path parameters mandatory' {
         $mandatory = Get-MandatoryParameterNames -RelativePath ('scripts\it-operations\windows-hardening\' + $_.Leaf)

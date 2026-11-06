@@ -21,7 +21,10 @@ Instructions:
   LocalAccount, Firewall and WdacAudit are read from the apply-state JSON the newer
   scripts write (Result: NoChange, Previewed, ReportOnly, Skipped, Failed). BitLocker
   is read directly from the OS volume with Get-BitLockerVolume, because
-  Enable-BitLockerOsVolume.ps1 needs a recovery key directory and is never run here.
+  Enable-BitLockerOsVolume.ps1 needs a key backup destination and is never run here;
+  a second BitLocker row (Category KeyBackup, ReportOnly) names the destination the
+  organisation settings file configures, or says it is not configured or invalid, and
+  never claims a key reached it.
   The default is SchannelTls and Privacy, the two targets the evidence pack has always
   verified; name the newer targets with -Target to verify them. -Target also accepts one
   comma-joined value (A,B), which is how pwsh -File and the evidence pack pass a list.
@@ -36,6 +39,12 @@ Instructions:
   checks elevation, so reaching the elevation check means the value was read and is not
   the desired one. Where the item itself says its current value was unreadable, it is
   Unread instead.
+- AuditLogging also carries the off-host rows of Set-WindowsAuditLogging (from the organisation
+  settings file). The WEF subscription manager value and the NETWORK SERVICE group row are
+  compared like any other setting (Compliant when already as configured, Drifted when the
+  plan would change them). Its report-only rows (no destination configured or invalid, an
+  Azure Monitor Agent or share destination, a WinRM service that is not confirmed running)
+  are Unread, so none of them can lift a pass: delivery off the host is never assumed.
 - WdacAudit is Compliant when the toolkit audit policy is already active, Drifted when
   it is not, and Unread when the active policy list cannot be read or the policy cannot
   be built (the ConfigCI module, CiTool.exe or the example policy is missing).
@@ -166,6 +175,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 
 # pwsh -File hands every argument as a literal string, so an estate-scoped caller
 # that joins targets into one comma-separated value needs them split back into a
@@ -255,6 +265,17 @@ function Get-HardeningStateVerdict {
 
     if ($category -eq 'Precondition' -or $result -eq 'Met') {
         $state = 'Precondition'; $reason = 'Prerequisite row; not counted.'
+    } elseif ($category -eq 'OffHostReport' -and $result -eq 'ReportOnly') {
+        # The off-host rows of Set-WindowsAuditLogging. They state facts the script cannot turn into a delivery
+        # check (no destination configured, an agent or share destination it only reports, a service that is
+        # not running), so each is Unread, which keeps Passed false: logs that may never leave the host are
+        # not a pass. The one exception is WinRM confirmed running, a supporting fact beside the WEF value row.
+        $setting = [string](Get-OpsPropertyValue -InputObject $Item -Name 'Setting')
+        if ($setting -eq 'WinRM service' -and $current -eq 'Running') {
+            $state = 'ReportOnly'; $reason = 'WinRM is running; source-initiated forwarding can start. Delivery itself is not checked here.'
+        } else {
+            $state = 'Unread'; $reason = 'Whether logs leave this host is not established by this row; not assumed compliant.'
+        }
     } elseif ($result -eq 'ReportOnly') {
         $state = 'ReportOnly'; $reason = 'Reported only; the script changes nothing here.'
     } elseif ($result -eq 'NoChange') {
@@ -315,7 +336,7 @@ function Get-WdacDeployVerdict {
     [pscustomobject]@{ State = 'Unread'; Reason = "Whether the audit policy is active could not be determined ($activeCheck)." }
 }
 
-# Reads the OS volume directly. Enable-BitLockerOsVolume.ps1 needs a recovery key directory and is
+# Reads the OS volume directly. Enable-BitLockerOsVolume.ps1 needs a recovery key destination and is
 # never run here. Only status fields are read; no key protector or recovery password is touched.
 function Get-BitLockerOsVolumeState {
     [CmdletBinding()]
@@ -482,6 +503,22 @@ foreach ($name in $Target) {
                         -Category 'OsVolume' -ItemType 'BitLockerVolume' -Item $mountPoint -CurrentValue $currentValue `
                         -DesiredValue 'ProtectionStatus=On' -DesiredState 'OS volume encrypted with protection on' `
                         -PlannedAction '' -Reason $reason))
+            if ($machine -eq $env:COMPUTERNAME) {
+                # Where recovery keys are meant to go, from the organisation settings file. ReportOnly always: this
+                # check does not read a protector or a key, so it cannot say a key reached the destination.
+                $keyBackup = (Get-OpsOrgSettings).BitLockerKeyBackup
+                $keyCurrent = "Status=$($keyBackup.Status);Type=$($keyBackup.Type)"
+                $keyReason = if ($keyBackup.Status -eq 'Configured') {
+                    $where = if ($keyBackup.Type -eq 'Folder') { " (folder $($keyBackup.FolderPath))" } else { '' }
+                    "Organisation settings send recovery keys to $($keyBackup.Type)$where. Whether a key reached it is not checked here."
+                } else {
+                    "Key backup destination is $($keyBackup.Status): $($keyBackup.Reason)"
+                }
+                $complianceRecords.Add((ConvertTo-HardeningComplianceRecord -Target $name -ComputerName $machine -State 'ReportOnly' `
+                            -Category 'KeyBackup' -ItemType 'OrgSetting' -Item 'BitLockerKeyBackup' -CurrentValue $keyCurrent `
+                            -DesiredValue 'Configured' -DesiredState 'A recovery key destination is configured' `
+                            -PlannedAction '' -Reason $keyReason))
+            }
             $forTarget = @($complianceRecords | Where-Object { $_.Target -eq $name -and $_.ComputerName -eq $machine })
             $scriptResults.Add((ConvertTo-HardeningScriptResult -Target $name -ComputerName $machine -Status 'Checked' `
                         -Note 'Get-BitLockerVolume' -Record $forTarget -Schema 'State'))

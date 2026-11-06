@@ -34,6 +34,7 @@ BeforeAll {
     $copyDir = Join-Path $copyRoot 'scripts\it-operations\windows-hardening'
     New-Item -ItemType Directory -Path $copyDir -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $script:repoRoot 'modules\OpsToolkit.Reporting') -Destination (Join-Path $copyRoot 'modules\OpsToolkit.Reporting') -Recurse
+    Copy-Item -LiteralPath (Join-Path $script:repoRoot 'modules\OpsToolkit.Hardening') -Destination (Join-Path $copyRoot 'modules\OpsToolkit.Hardening') -Recurse
     $original = Get-Content -LiteralPath $script:realPath -Raw
     $patched = [regex]::Replace($original, '(?s)function Test-IsAdministrator \{.*?\r?\n\}', 'function Test-IsAdministrator { $true }')
     if ($patched -eq $original) { throw 'The elevated copy could not be made: Test-IsAdministrator was not found in the script.' }
@@ -157,6 +158,7 @@ function Get-CimInstance {
 `$env:OPSTOOLKIT_TEST_FVE_STATE = '$FveState'
 `$env:OPSTOOLKIT_TEST_CS = '$Machine'
 `$env:OPSTOOLKIT_TEST_PIN = '$Pin'
+`$env:OPSTOOLKIT_TEST_ORGSETTINGS_PATH = '$(Join-Path $script:workRoot 'no-such-settings.json')'
 $Extra
 "@
     }

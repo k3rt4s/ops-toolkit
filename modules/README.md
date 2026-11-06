@@ -15,7 +15,7 @@ Import-Module (Join-Path $PSScriptRoot '..\..\modules\OpsToolkit.Reporting') -Fo
   resolution, CSV plus JSON export, run summaries, safe property reads under strict
   mode, value flattening, byte-to-hex conversion, age-in-days with the Windows
   never-set sentinels handled, and severity ranking.
-- `OpsToolkit.Hardening/` - read-only host context for the Windows hardening scripts: join type (domain, Entra, hybrid, workgroup), Azure Virtual Desktop session host, MDM management and virtual machine detection (`Get-OpsHostContext`), plus the one-sentence note that policy may override local writes (`Get-OpsPolicyOverrideNote`). A probe that fails leaves its field null and listed as unread; it is never folded into a guess.
+- `OpsToolkit.Hardening/` - read-only host context for the Windows hardening scripts: join type (domain, Entra, hybrid, workgroup), Azure Virtual Desktop session host, MDM management and virtual machine detection (`Get-OpsHostContext`), plus the one-sentence note that policy may override local writes (`Get-OpsPolicyOverrideNote`), and the organisation settings reader (`Get-OpsOrgSettings`: the off-host event destination and the BitLocker recovery key destination, from `%ProgramData%\OpsToolkit\org-settings.json`; a missing, malformed or invalid file reads as not configured or invalid, never as configured, and never throws). A probe that fails leaves its field null and listed as unread; it is never folded into a guess.
 
 ## Rules
 

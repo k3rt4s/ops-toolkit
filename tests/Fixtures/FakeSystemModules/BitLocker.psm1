@@ -15,6 +15,9 @@ Instructions:
 - Set OPSTOOLKIT_TEST_BL_PROTECTORID to the protector ID that call returns.
 - Set OPSTOOLKIT_TEST_BL_READERROR to any value to make Get-BitLockerVolume throw, the way an
   unelevated session does.
+- Set OPSTOOLKIT_TEST_BL_BACKUP_FAIL to any value to make BackupToAAD-BitLockerKeyProtector and
+  Backup-BitLockerKeyProtector record the attempt and then throw, so a test can prove encryption
+  is not started after a failed key backup. Both record the protector id, never a key value.
 - Set OPSTOOLKIT_TEST_BL_ENABLE_FAIL to any value to make Enable-BitLocker record the attempt and
   then throw, so a test can prove what a script undoes after a failed enable.
 - Enable-BitLocker -TpmAndPinProtector requires a [securestring] -Pin; the log records its length
@@ -37,7 +40,7 @@ function Write-FakeBlMutation {
     param([string]$Command, [string]$Target, [string]$Detail = '')
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -73,7 +76,7 @@ function Get-BitLockerVolume {
 }
 
 function Add-BitLockerKeyProtector {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0)][string]$MountPoint,
         [switch]$RecoveryPasswordProtector,
@@ -83,6 +86,7 @@ function Add-BitLockerKeyProtector {
     )
 
     $kind = if ($RecoveryPasswordProtector) { 'RecoveryPassword' } elseif ($TpmAndPinProtector) { 'TpmPin' } elseif ($TpmProtector) { 'Tpm' } else { 'Other' }
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Add-BitLockerKeyProtector')) { return }
     Write-FakeBlMutation -Command 'Add-BitLockerKeyProtector' -Target $MountPoint -Detail $kind
 
     $id = if ($env:OPSTOOLKIT_TEST_BL_PROTECTORID) { $env:OPSTOOLKIT_TEST_BL_PROTECTORID } else { '{00000000-0000-4000-8000-00000000F4CE}' }
@@ -92,14 +96,40 @@ function Add-BitLockerKeyProtector {
 }
 
 function Remove-BitLockerKeyProtector {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Position = 0)][string]$MountPoint, [string]$KeyProtectorId)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Remove-BitLockerKeyProtector')) { return }
     Write-FakeBlMutation -Command 'Remove-BitLockerKeyProtector' -Target $MountPoint -Detail $KeyProtectorId
     [pscustomobject]@{ MountPoint = $MountPoint; KeyProtector = @() }
 }
 
+function BackupToAAD-BitLockerKeyProtector {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([Parameter(Position = 0)][string]$MountPoint, [string]$KeyProtectorId)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'BackupToAAD-BitLockerKeyProtector')) { return }
+    # The detail records the protector id only. The fake never sees, and never logs, a key value.
+    if ($env:OPSTOOLKIT_TEST_BL_BACKUP_FAIL) {
+        Write-FakeBlMutation -Command 'BackupToAAD-BitLockerKeyProtector' -Target $MountPoint -Detail "$KeyProtectorId;failed=True"
+        throw 'BackupToAAD-BitLockerKeyProtector failed (fake).'
+    }
+    Write-FakeBlMutation -Command 'BackupToAAD-BitLockerKeyProtector' -Target $MountPoint -Detail $KeyProtectorId
+    [pscustomobject]@{ MountPoint = $MountPoint }
+}
+
+function Backup-BitLockerKeyProtector {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param([Parameter(Position = 0)][string]$MountPoint, [string]$KeyProtectorId)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Backup-BitLockerKeyProtector')) { return }
+    if ($env:OPSTOOLKIT_TEST_BL_BACKUP_FAIL) {
+        Write-FakeBlMutation -Command 'Backup-BitLockerKeyProtector' -Target $MountPoint -Detail "$KeyProtectorId;failed=True"
+        throw 'Backup-BitLockerKeyProtector failed (fake).'
+    }
+    Write-FakeBlMutation -Command 'Backup-BitLockerKeyProtector' -Target $MountPoint -Detail $KeyProtectorId
+    [pscustomobject]@{ MountPoint = $MountPoint }
+}
+
 function Enable-BitLocker {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0)][string]$MountPoint,
         [string]$EncryptionMethod,
@@ -116,6 +146,7 @@ function Enable-BitLocker {
         if ($null -eq $Pin) { throw 'Enable-BitLocker: -TpmAndPinProtector requires -Pin (fake).' }
         $detail += ";tpmpin=True;pin=SecureString;pinlen=$($Pin.Length)"
     }
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Enable-BitLocker')) { return }
     if ($env:OPSTOOLKIT_TEST_BL_ENABLE_FAIL) {
         Write-FakeBlMutation -Command 'Enable-BitLocker' -Target $MountPoint -Detail "$detail;failed=True"
         throw 'Enable-BitLocker failed (fake).'
@@ -125,24 +156,27 @@ function Enable-BitLocker {
 }
 
 function Disable-BitLocker {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Position = 0)][string]$MountPoint)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Disable-BitLocker')) { return }
     Write-FakeBlMutation -Command 'Disable-BitLocker' -Target $MountPoint
     [pscustomobject]@{ MountPoint = $MountPoint }
 }
 
 function Suspend-BitLocker {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Position = 0)][string]$MountPoint, [int]$RebootCount)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Suspend-BitLocker')) { return }
     Write-FakeBlMutation -Command 'Suspend-BitLocker' -Target $MountPoint
     [pscustomobject]@{ MountPoint = $MountPoint }
 }
 
 function Resume-BitLocker {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Position = 0)][string]$MountPoint)
+    if (-not $PSCmdlet.ShouldProcess($MountPoint, 'Resume-BitLocker')) { return }
     Write-FakeBlMutation -Command 'Resume-BitLocker' -Target $MountPoint
     [pscustomobject]@{ MountPoint = $MountPoint }
 }
 
-Export-ModuleMember -Function 'Get-BitLockerVolume', 'Add-BitLockerKeyProtector', 'Remove-BitLockerKeyProtector', 'Enable-BitLocker', 'Disable-BitLocker', 'Suspend-BitLocker', 'Resume-BitLocker'
+Export-ModuleMember -Function 'Get-BitLockerVolume', 'Add-BitLockerKeyProtector', 'Remove-BitLockerKeyProtector', 'BackupToAAD-BitLockerKeyProtector', 'Backup-BitLockerKeyProtector', 'Enable-BitLocker', 'Disable-BitLocker', 'Suspend-BitLocker', 'Resume-BitLocker'

@@ -31,6 +31,18 @@ Builds the forensic visibility a standalone workstation lacks by default:
   prior value could not be recorded for rollback.
 - Event log maximum sizes for Security, Microsoft-Windows-PowerShell/Operational, and Windows
   PowerShell (parameters, in bytes). A log that is already as large or larger is never shrunk.
+- Off-host forwarding, from the organisation settings file (modules\OpsToolkit.Hardening,
+  Get-OpsOrgSettings, %ProgramData%\OpsToolkit\settings.json), because a log that stays on the
+  machine it describes is lost with it. EventDestination Type WEF writes the source-initiated
+  subscription manager policy (EventLog\EventForwarding\SubscriptionManager, value "1", REG_SZ) and
+  adds NETWORK SERVICE (S-1-5-20) to Event Log Readers (S-1-5-32-573, resolved by SID) so the
+  forwarder can read the Security log, and reports the WinRM service without changing it.
+  AzureMonitorAgent and Share only report: the agent is installed and its data collection rule is
+  assigned in Azure, and a scheduled export to a share is not built. A missing or invalid settings
+  file plans one report-only row saying so. The summary's Passed is false whenever the destination
+  is not WEF, the file is missing or invalid, WinRM is not running, or any item failed, was skipped or
+  was only previewed, because a log that is not delivered off the host is not a pass. The settings
+  hold no secrets and the summary's OrgSettings repeats statuses and reasons only.
 
 Opt-in controls:
 - -LogScriptBlockInvocation also logs script block start and stop events. This is very verbose on a
@@ -39,6 +51,11 @@ Opt-in controls:
   record everything shown at the console, which can include secrets typed or printed there
   (passwords, tokens, recovery keys). Create the directory first and restrict its ACL to
   administrators and the log reader before enabling, and treat its contents as sensitive.
+
+Unverified until a VDI run (nothing here has run on a real machine): the AzureMonitorAgent service
+name, that Add-LocalGroupMember accepts a SID string as -Member, and that WinRM started by the
+subscription is enough for the Security log to arrive. The Event Log Readers membership is added
+only when the account is not already a member, and a rollback removes it only for a run that added it.
 
 Before changing the audit policy the script runs auditpol /backup to auditpol-backup-<timestamp>.csv
 in the report directory, on a -WhatIf run as well as a live run, because the file records the state the
@@ -72,8 +89,10 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsAuditLogging.ps1
 .OUTPUTS
 Writes plan and state CSV/JSON under the report directory, the auditpol backup CSV, and on a live
 run that changed something a rollback JSON holding every prior value and the backup path. Returns a
-summary object with the report paths, counts, and RebootRequired (always false for this script),
-and for -Rollback RollbackSourcePath, RollbackConsumedPath, and RollbackNote.
+summary object with the report paths, counts (ReportOnlyCount counts rows that only report),
+Passed and PassedReasons (see Off-host forwarding above), OrgSettings (file state and the status and
+reason of each section, never a secret), and RebootRequired (always false for this script), and for
+-Rollback RollbackSourcePath, RollbackConsumedPath, and RollbackNote.
 
 .NOTES
 Status:
@@ -124,6 +143,17 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
+
+# Read once, here, so the forward plan and the summary describe the same file. Never throws.
+$script:OrgSettings = Get-OpsOrgSettings
+$script:WefPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EventLog\EventForwarding\SubscriptionManager'
+$script:WefValueName = '1'
+$script:NetworkServiceSid = 'S-1-5-20'
+$script:EventLogReadersSid = 'S-1-5-32-573'
+# UNVERIFIED: the service name of the Azure Monitor Agent. Confirm on a VDI host with Get-Service.
+$script:AmaServiceName = 'AzureMonitorAgent'
+
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:AuditBackupPath = $null
 $script:AuditBackupError = $null
@@ -173,6 +203,7 @@ Options:
                                      capture secrets typed at the console; ACL-restrict the directory.
   -SkipAuditPolicy                   Do not change advanced audit policy.
   -SkipEventLogSize                  Do not change event log sizes.
+  (off-host)                         Forwarding comes from %ProgramData%\OpsToolkit\settings.json, not a parameter.
   -SecurityLogSizeBytes              Security log maximum size in bytes. Default 268435456.
   -PowerShellOperationalLogSizeBytes PowerShell/Operational log maximum size in bytes. Default 268435456.
   -WindowsPowerShellLogSizeBytes     Windows PowerShell log maximum size in bytes. Default 67108864.
@@ -322,7 +353,95 @@ function Get-ForwardPlan {
         }
     }
 
+    foreach ($row in @(Get-OffHostPlanItem)) { $items.Add($row) }
+
     $items
+}
+
+# One report-only plan row. Result is ReportOnly: nothing is written, and the row never reaches a
+# rollback file, so the rollback control table has no entry for it.
+function New-ReportOnlyItem {
+    param([string]$Setting, [string]$Current, [string]$Text)
+    [pscustomobject]@{
+        Category = 'OffHostReport'; Setting = $Setting; Path = 'report-only'; ValueType = 'report'
+        RequiresAdmin = $false; RequiresReboot = $false; SetSuccess = $false; SetFailure = $false
+        CurrentValue = $Current; DesiredValue = 'n/a'
+        Action = "ReportOnly: $Text"
+    }
+}
+
+# Reads one service for a report-only row. Returns $null when it is absent or cannot be read, and
+# that is reported as such, never as a pass. Get-Service is a read and writes nothing.
+function Get-ServiceFact {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    try {
+        $svc = Get-Service -Name $Name -ErrorAction Stop
+        [pscustomobject]@{ Found = $true; Status = "$($svc.Status)"; StartType = "$($svc.StartType)" }
+    } catch {
+        [pscustomobject]@{ Found = $false; Status = ''; StartType = ''; Reason = $_.Exception.Message }
+    }
+}
+
+# True when the account with this SID is a member of the group with this SID. Throws when the group
+# cannot be read, so the caller can mark the row Skipped rather than guess.
+function Test-LocalGroupMemberSid {
+    param([Parameter(Mandatory = $true)][string]$GroupSid, [Parameter(Mandatory = $true)][string]$MemberSid)
+    $members = @(Get-LocalGroupMember -SID $GroupSid -ErrorAction Stop)
+    @($members | Where-Object { $null -ne $_ -and $_.PSObject.Properties['SID'] -and $_.SID -and "$($_.SID.Value)" -eq $MemberSid }).Count -gt 0
+}
+
+# The off-host rows, from the organisation settings read once at the top. Every branch that cannot
+# establish a fact says so in the row; none of them turns an unknown into a pass.
+function Get-OffHostPlanItem {
+    $dest = $script:OrgSettings.EventDestination
+    if ($dest.Status -ne 'Configured') {
+        $label = if ($dest.Status -eq 'Invalid') { 'invalid' } else { 'not configured' }
+        New-ReportOnlyItem -Setting 'Event destination' -Current $dest.Status -Text "Event destination: $label ($($dest.Reason)); no log is forwarded off this host"
+        return
+    }
+    switch ($dest.Type) {
+        'WEF' {
+            $cur = Get-RegValue -Path $script:WefPolicyPath -Name $script:WefValueName
+            $same = ($null -ne $cur -and "$cur" -ceq "$($dest.SubscriptionManager)")
+            [pscustomobject]@{
+                Category = 'EventForwarding'; Setting = $script:WefValueName; Path = $script:WefPolicyPath; ValueType = 'String'
+                RequiresAdmin = $true; RequiresReboot = $false; SetSuccess = $false; SetFailure = $false
+                CurrentValue = if ($null -ne $cur) { $cur } else { 'absent' }; DesiredValue = $dest.SubscriptionManager
+                Action = if ($same) { 'No change (EventForwarding SubscriptionManager already set to the settings value)' } else { "Set EventForwarding SubscriptionManager '$($script:WefValueName)' to '$($dest.SubscriptionManager)'" }
+            }
+
+            $member = $null
+            $readError = $null
+            try { $member = Test-LocalGroupMemberSid -GroupSid $script:EventLogReadersSid -MemberSid $script:NetworkServiceSid } catch { $readError = $_.Exception.Message }
+            [pscustomobject]@{
+                Category = 'EventLogReadersMember'; Setting = $script:NetworkServiceSid; Path = $script:EventLogReadersSid; ValueType = 'LocalGroupMember'
+                RequiresAdmin = $true; RequiresReboot = $false; SetSuccess = $false; SetFailure = $false
+                CurrentValue = if ($null -eq $member) { 'unknown' } elseif ($member) { 'Member' } else { 'NotMember' }; DesiredValue = 'Member'
+                Action = if ($null -eq $member) { "Skipped: Event Log Readers ($($script:EventLogReadersSid)) membership could not be read ($readError), so NETWORK SERVICE is not added" }
+                elseif ($member) { 'No change (NETWORK SERVICE is already in Event Log Readers)' }
+                else { "Add NETWORK SERVICE ($($script:NetworkServiceSid)) to Event Log Readers ($($script:EventLogReadersSid))" }
+            }
+
+            $winrm = Get-ServiceFact -Name 'WinRM'
+            $winrmText = if ($winrm.Found) { "WinRM service StartType=$($winrm.StartType) Status=$($winrm.Status)" } else { "WinRM service could not be read ($($winrm.Reason))" }
+            $winrmOk = $winrm.Found -and $winrm.Status -eq 'Running'
+            New-ReportOnlyItem -Setting 'WinRM service' -Current $(if ($winrm.Found) { $winrm.Status } else { 'unknown' }) `
+                -Text "$winrmText; source-initiated forwarding needs it running, and this script does not change WinRM$(if (-not $winrmOk) { ' (it is not confirmed running, so this is not a pass)' })"
+        }
+        'AzureMonitorAgent' {
+            $ama = Get-ServiceFact -Name $script:AmaServiceName
+            $amaText = if ($ama.Found) { "service '$($script:AmaServiceName)' is present, Status=$($ama.Status)" } else { "service '$($script:AmaServiceName)' was not found or could not be read" }
+            New-ReportOnlyItem -Setting 'Azure Monitor Agent' -Current $(if ($ama.Found) { $ama.Status } else { 'absent' }) `
+                -Text "Azure Monitor Agent: $amaText (service name unverified; the agent and its data collection rule are installed and assigned in Azure, not by this script, so delivery is not confirmed)"
+        }
+        'Share' {
+            New-ReportOnlyItem -Setting 'Share destination' -Current 'configured' `
+                -Text "write-only share destination configured ($($dest.SharePath)); a scheduled export to it is not built, so no log is forwarded"
+        }
+        default {
+            New-ReportOnlyItem -Setting 'Event destination' -Current 'unknown' -Text "Event destination: type '$($dest.Type)' is not handled by this script"
+        }
+    }
 }
 
 # Every control this script can record in a rollback file, one row per Category and Setting. The
@@ -351,6 +470,11 @@ $script:RollbackControls = @(
     @($script:EventLogTargets | ForEach-Object {
             [pscustomobject]@{ Category = 'EventLogSize'; Setting = $_.Name; Path = 'wevtutil.exe'; ValueType = 'bytes'; Kind = 'LogSize'; Desired = $null; Success = $false; Failure = $false }
         })
+    # Off-host rows. The subscription manager text is the organisation's, so it is checked by shape
+    # (Kind 'Wef') rather than against a fixed value. The report-only rows are not here: they change
+    # nothing and so are never recorded.
+    [pscustomobject]@{ Category = 'EventForwarding'; Setting = $script:WefValueName; Path = $script:WefPolicyPath; ValueType = 'String'; Kind = 'Wef'; Desired = $null; Success = $false; Failure = $false }
+    [pscustomobject]@{ Category = 'EventLogReadersMember'; Setting = $script:NetworkServiceSid; Path = $script:EventLogReadersSid; ValueType = 'LocalGroupMember'; Kind = 'GroupMember'; Desired = $null; Success = $false; Failure = $false }
 )
 
 function Get-LatestRollbackFile {
@@ -425,6 +549,17 @@ function Get-RollbackEntryProblem {
             if (-not ($control.Success -and -not $hasSuccess) -and -not ($control.Failure -and -not $hasFailure)) {
                 return "PriorValue '$prior' already audits $wanted, so the forward plan would not have changed it"
             }
+        }
+        'Wef' {
+            # The text must be one Get-OpsOrgSettings would have accepted, so a hand-edited file cannot point the
+            # forwarder at a non-http source or smuggle in a second value.
+            if ($applied -isnot [string] -or $applied -cnotmatch '^Server=https?://[^\s,]+(,[^\s,]+)*$') { return "AppliedValue '$applied' is not a Server=http(s)://... subscription manager string" }
+            if ($prior -isnot [string] -and -not (Test-RollbackWhole $prior ([int]::MinValue) ([int]::MaxValue))) { return "PriorValue '$prior' is not 'absent' or the text or number the value held" }
+            if ("$prior" -ceq "$applied") { return "PriorValue '$prior' equals the applied value, so the forward plan would not have changed it" }
+        }
+        'GroupMember' {
+            if ($applied -isnot [string] -or $applied -cne 'Member') { return "AppliedValue '$applied' is not 'Member'" }
+            if ($prior -isnot [string] -or $prior -cne 'NotMember') { return "PriorValue '$prior' is not 'NotMember', the only state a forward run adds from" }
         }
         'LogSize' {
             # The forward plan rounds the size up to a multiple of 64 KB and only ever grows a log.
@@ -567,6 +702,8 @@ function Invoke-PlanItem {
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
     if ($Item.Action -like 'Skipped*') { return $Item.Action }
+    # A report-only row writes nothing and needs no elevation: it is a fact about the host, not a change.
+    if ($Item.Action -like 'ReportOnly*') { return 'ReportOnly' }
     if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
     if ($Item.Category -eq 'AuditPolicy' -and -not $script:AuditBackupPath -and -not $WhatIfPreference) {
         return 'Skipped: auditpol backup failed, so no audit policy is changed without a restore point'
@@ -590,6 +727,18 @@ function Invoke-PlanItem {
             'EventLogSize' {
                 $r = Invoke-Native -Exe 'wevtutil.exe' -ArgumentList @('sl', $Item.Setting, "/ms:$($Item.DesiredValue)")
                 if ($r.ExitCode -ne 0) { throw "wevtutil sl exited $($r.ExitCode): $($r.Output -join ' ')" }
+            }
+            'EventLogReadersMember' {
+                # Membership is read again at the moment of the change: a rollback removes NETWORK SERVICE only if it
+                # is still there, and a forward run adds it only if it is not. Neither records a change it did not make.
+                $present = Test-LocalGroupMemberSid -GroupSid $Item.Path -MemberSid $Item.Setting
+                if ($Rollback -or "$($Item.DesiredValue)" -eq 'NotMember') {
+                    if (-not $present) { return 'NoChange' }
+                    Remove-LocalGroupMember -SID $Item.Path -Member $Item.Setting -ErrorAction Stop
+                } else {
+                    if ($present) { return 'NoChange' }
+                    Add-LocalGroupMember -SID $Item.Path -Member $Item.Setting -ErrorAction Stop
+                }
             }
             default {
                 if ("$($Item.DesiredValue)" -eq 'absent') {
@@ -697,6 +846,28 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $rollbackPath -Encoding utf8 -WhatIf:$false
 }
 
+# Passed is true only when nothing is left undone or unknown: no item failed, was skipped or was merely
+# previewed, and (forward runs) the logs have a destination this script actually sets up. A missing or
+# invalid settings file, an AzureMonitorAgent or Share destination, and a WinRM service that is not
+# confirmed running each keep it false and say why, so a run whose local items all applied is still
+# not reported as forwarding logs off the host.
+$passedReasons = [System.Collections.Generic.List[string]]::new()
+if ($WhatIfPreference) { $passedReasons.Add('-WhatIf previews and changes nothing') }
+foreach ($bad in @($state | Where-Object { $_.Result -like 'Failed:*' -or $_.Result -like 'Skipped:*' -or $_.Result -eq 'Previewed' })) {
+    $passedReasons.Add("$($bad.Category) '$($bad.Setting)': $($bad.Result)")
+}
+if (-not $Rollback) {
+    $destination = $script:OrgSettings.EventDestination
+    if ($destination.Status -ne 'Configured') {
+        $passedReasons.Add("event destination is $($destination.Status): $($destination.Reason)")
+    } elseif ($destination.Type -ne 'WEF') {
+        $passedReasons.Add("event destination type $($destination.Type) is reported only, not set up, by this script")
+    } else {
+        $winrmRow = @($state | Where-Object { $_.Category -eq 'OffHostReport' -and $_.Setting -eq 'WinRM service' }) | Select-Object -First 1
+        if ($null -eq $winrmRow -or "$($winrmRow.CurrentValue)" -ne 'Running') { $passedReasons.Add('the WinRM service is not confirmed running') }
+    }
+}
+
 [pscustomobject]@{
     Operation = "WindowsAuditLogging ($mode)"
     IsElevated = (Test-IsAdministrator)
@@ -714,6 +885,15 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
     NoChangeCount = @($state | Where-Object Result -eq 'NoChange').Count
     SkippedCount = @($state | Where-Object { $_.Result -like 'Skipped:*' }).Count
     FailedCount = @($state | Where-Object { $_.Result -like 'Failed:*' }).Count
+    ReportOnlyCount = @($state | Where-Object Result -eq 'ReportOnly').Count
+    Passed = ($passedReasons.Count -eq 0)
+    PassedReasons = @($passedReasons)
+    OrgSettings = [pscustomobject]@{
+        Path = $script:OrgSettings.Path
+        FileState = $script:OrgSettings.FileState
+        EventDestination = [pscustomobject]@{ Status = $script:OrgSettings.EventDestination.Status; Type = $script:OrgSettings.EventDestination.Type; Reason = $script:OrgSettings.EventDestination.Reason }
+        BitLockerKeyBackup = [pscustomobject]@{ Status = $script:OrgSettings.BitLockerKeyBackup.Status; Type = $script:OrgSettings.BitLockerKeyBackup.Type; Reason = $script:OrgSettings.BitLockerKeyBackup.Reason }
+    }
     RebootRequired = $false
     Items = @($state)
 }

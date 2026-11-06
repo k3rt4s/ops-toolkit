@@ -15,6 +15,7 @@ $script:Kinds = @{
     Domain = @{ Join = 'Domain'; Fact = @{} }
     HybridMdm = @{ Join = 'Hybrid'; Fact = @{ Enrollments = @('MS DM Server') } }
     JoinUnread = @{ Join = 'Missing'; Fact = @{} }
+    EntraJoined = @{ Join = 'Entra'; Fact = @{} }
 }
 
 function Get-FakeHostFactText {
@@ -23,11 +24,11 @@ function Get-FakeHostFactText {
     Return the JSON text of the host fact table for one host kind.
 
     .PARAMETER Kind
-    Physical, Avd, AvdMarkerKeyOnly, AvdUnread, Domain, HybridMdm or JoinUnread.
+    Physical, Avd, AvdMarkerKeyOnly, AvdUnread, Domain, HybridMdm, JoinUnread or EntraJoined (Entra-joined physical host).
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param([Parameter(Mandatory = $true)][ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread')][string]$Kind)
+    param([Parameter(Mandatory = $true)][ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread', 'EntraJoined')][string]$Kind)
     $facts = [ordered]@{ RdInfraAgentKey = 'absent'; RdAgentService = 'absent'; Enrollments = 'absent'; Manufacturer = 'Dell Inc.'; Model = 'Latitude 5540' }
     foreach ($key in $script:Kinds[$Kind].Fact.Keys) { $facts[$key] = $script:Kinds[$Kind].Fact[$key] }
     $facts | ConvertTo-Json -Compress
@@ -77,13 +78,13 @@ function Get-FakeHostSetupText {
     The object from Use-FakeHostContext.
 
     .PARAMETER Kind
-    Physical, Avd, AvdMarkerKeyOnly, AvdUnread, Domain, HybridMdm or JoinUnread.
+    Physical, Avd, AvdMarkerKeyOnly, AvdUnread, Domain, HybridMdm, JoinUnread or EntraJoined (Entra-joined physical host).
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]$Fixture,
-        [Parameter(Mandatory = $true)][ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread')][string]$Kind
+        [Parameter(Mandatory = $true)][ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread', 'EntraJoined')][string]$Kind
     )
     $join = $script:Kinds[$Kind].Join
     "`n`$env:OPSTOOLKIT_TEST_DSREGCMD_PATH = '$($Fixture.Path[$join])'`n`$env:OPSTOOLKIT_TEST_HOSTFACTS = '$(Get-FakeHostFactText -Kind $Kind)'`n"
@@ -108,7 +109,7 @@ function Set-FakeHostEnvironment {
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory = $true)]$Fixture,
-        [ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread')][string]$Kind = 'Physical'
+        [ValidateSet('Physical', 'Avd', 'AvdMarkerKeyOnly', 'AvdUnread', 'Domain', 'HybridMdm', 'JoinUnread', 'EntraJoined')][string]$Kind = 'Physical'
     )
     $saved = [pscustomobject]@{
         Dsregcmd = $env:OPSTOOLKIT_TEST_DSREGCMD_PATH

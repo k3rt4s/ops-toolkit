@@ -4,15 +4,15 @@ This folder contains active endpoint and general IT operations scripts for the o
 
 ## Contents
 
-| Path                        | Purpose                                                                                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `networking\`               | Network adapter MAC address helpers.                                                                                                                                                  |
-| `performance\`              | Workstation performance posture helpers.                                                                                                                                              |
-| `printers\`                 | Windows printer connection helpers.                                                                                                                                                   |
-| `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                                      |
-| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                                         |
+| Path                        | Purpose                                                                                                                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `networking\`               | Network adapter MAC address helpers.                                                                                                                                                                                           |
+| `performance\`              | Workstation performance posture helpers.                                                                                                                                                                                       |
+| `printers\`                 | Windows printer connection helpers.                                                                                                                                                                                            |
+| `utilities\`                | General endpoint and admin utilities, CSV joins, folder comparison, and the retired-API scanner.                                                                                                                               |
+| `windows-file-cleanup\`     | File, temp-folder, and cache reclaim helpers.                                                                                                                                                                                  |
 | `windows-hardening\`        | Windows 11 hardening for a physical or VDI machine, standalone or joined (TLS, privacy, bloatware, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and its compliance check. |
-| `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                                        |
+| `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                                                                                 |
 
 ## Examples
 
@@ -189,6 +189,8 @@ pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacAuditPolicy.ps1 -Re
 pwsh -File .\scripts\it-operations\windows-hardening\Export-WdacAuditEvent.ps1 -Days 14
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WdacEnforcedPolicy.ps1 -Mode BuildAllowRules -ReportDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <folder off the system drive> -WhatIf
+# Without -RecoveryKeyDirectory the key destination comes from the organisation settings (BitLockerKeyBackup: Folder, EntraId or ActiveDirectory); with neither, the run refuses before any change.
+pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -WhatIf
 ```
 
 Check compliance against the hardening baselines above (registry state plus a live TLS handshake probe):

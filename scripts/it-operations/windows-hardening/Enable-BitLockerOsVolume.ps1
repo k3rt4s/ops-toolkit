@@ -6,7 +6,20 @@ Plan, apply, and roll back BitLocker encryption of the operating-system volume w
 Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON. The plan lists every
   precondition and the ordered steps.
-- -RecoveryKeyDirectory is mandatory and must be a directory that already exists on a volume
+- Where the recovery key goes is decided before anything changes, in this order: -RecoveryKeyDirectory
+  when given (it always wins; a Folder value in the organisation settings is then ignored and the
+  summary says so); otherwise the BitLockerKeyBackup section of the organisation settings
+  (Get-OpsOrgSettings, %ProgramData%\OpsToolkit\settings.json): Folder (the same directory rules
+  below), EntraId (BackupToAAD-BitLockerKeyProtector, needs an Entra joined or hybrid joined host
+  as read by Get-OpsHostContext) or ActiveDirectory (Backup-BitLockerKeyProtector, needs a domain
+  joined host). When no destination is usable the run is refused: the plan carries a
+  'Key backup: not configured' precondition, nothing is changed and a live run exits non-zero.
+  Encryption is never started unless this run's key backup succeeded: a failed Entra ID or
+  Active Directory backup removes the just-added recovery protector, exactly as a failed key file
+  write or read-back does, and stops without enabling. Reports record where the key went
+  (destination, folder path or 'Entra ID'/'Active Directory', protector ID), never the key. The
+  cmdlet names, their parameters and the join facts are unverified on a live machine.
+- A -RecoveryKeyDirectory (or a settings Folder) must be a directory that already exists on a volume
   OTHER than the operating-system volume, for example a removable drive or a network share
   you can reach when this machine will not boot. The script refuses, and changes nothing, if
   the directory is missing, is on the operating-system volume ($env:SystemDrive), or cannot be
@@ -128,6 +141,7 @@ order that cannot leave the machine encrypted with a recovery key that exists no
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <dir>      # elevated
+pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -WhatIf                          # key destination from the organisation settings
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -Rollback -WhatIf
 pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1' -ReportDirectory <dir> -RecoveryKeyDirectory <dir> -UseTpmAndPin -StartupPin (Read-Host 'Startup PIN' -AsSecureString) -WhatIf"
 
@@ -144,8 +158,8 @@ reports whether a recovery key exists after this has run.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High', DefaultParameterSetName = 'Enable')]
 param(
-    [Parameter(Mandatory = $true, ParameterSetName = 'Enable')]
-    [Parameter(Mandatory = $true, ParameterSetName = 'EnableTpmPin')]
+    [Parameter(ParameterSetName = 'Enable')]
+    [Parameter(ParameterSetName = 'EnableTpmPin')]
     [ValidateNotNullOrEmpty()]
     [string]$RecoveryKeyDirectory,
 
@@ -167,8 +181,13 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 
 $script:Prefix = 'bitlocker-enable'
+# Where this run's recovery key goes: set once in Main (Resolve-KeyBackupDestination), never in a rollback.
+$script:ParamKeyDirectory = if ($PSBoundParameters.ContainsKey('RecoveryKeyDirectory')) { $RecoveryKeyDirectory } else { $null }
+$script:KeyDest = [pscustomobject]@{ Type = 'None'; Location = ''; Source = 'None'; Reason = ''; IgnoredSettingsFolder = '' }
+$script:OrgSettings = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:StopReason = $null
 $script:AlreadyProtected = $false
@@ -323,6 +342,51 @@ function Resolve-RecoveryKeyDirectory {
     $resolved
 }
 
+# Decides where this run's recovery key goes: the parameter, else the organisation settings
+# (Folder, EntraId, ActiveDirectory), else nowhere. Pure apart from reading the settings file.
+# Type is Folder, EntraId, ActiveDirectory or NotConfigured; a settings file that is invalid or
+# silent is NotConfigured with the reason, never a guess.
+function Resolve-KeyBackupDestination {
+    $settings = $script:OrgSettings.BitLockerKeyBackup
+    $configured = ($settings.Status -eq 'Configured')
+    if ($null -ne $script:ParamKeyDirectory) {
+        $ignored = if ($configured -and $settings.Type -eq 'Folder') { [string]$settings.FolderPath } else { '' }
+        return [pscustomobject]@{ Type = 'Folder'; Location = $script:ParamKeyDirectory; Source = 'Parameter'; Reason = ''; IgnoredSettingsFolder = $ignored }
+    }
+    if (-not $configured) {
+        return [pscustomobject]@{ Type = 'NotConfigured'; Location = ''; Source = 'None'; Reason = [string]$settings.Reason; IgnoredSettingsFolder = '' }
+    }
+    switch ($settings.Type) {
+        'Folder' { return [pscustomobject]@{ Type = 'Folder'; Location = [string]$settings.FolderPath; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+        'EntraId' { return [pscustomobject]@{ Type = 'EntraId'; Location = 'Entra ID'; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+        'ActiveDirectory' { return [pscustomobject]@{ Type = 'ActiveDirectory'; Location = 'Active Directory'; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+    }
+    [pscustomobject]@{ Type = 'NotConfigured'; Location = ''; Source = 'None'; Reason = "BitLockerKeyBackup type '$($settings.Type)' is not handled by this script"; IgnoredSettingsFolder = '' }
+}
+
+# Where the key goes, as text for a plan row: the folder path, 'Entra ID', 'Active Directory' or a refusal.
+function Get-KeyDestinationText {
+    switch ($script:KeyDest.Type) {
+        'Folder' { return [string]$script:ResolvedKeyDirectory }
+        'EntraId' { return 'Entra ID' }
+        'ActiveDirectory' { return 'Active Directory' }
+    }
+    'no configured key backup destination'
+}
+
+# Escrows one recovery password protector to Entra ID or Active Directory. Throws on any failure; the
+# caller treats a throw as "no key backup" and never starts encryption. The key value is never touched here.
+function Invoke-ProtectorEscrow {
+    param([Parameter(Mandatory = $true)][string]$Mount, [Parameter(Mandatory = $true)][string]$ProtectorId)
+    if ($script:KeyDest.Type -eq 'EntraId') {
+        BackupToAAD-BitLockerKeyProtector -MountPoint $Mount -KeyProtectorId $ProtectorId -ErrorAction Stop | Out-Null
+    } elseif ($script:KeyDest.Type -eq 'ActiveDirectory') {
+        Backup-BitLockerKeyProtector -MountPoint $Mount -KeyProtectorId $ProtectorId -ErrorAction Stop | Out-Null
+    } else {
+        throw "no escrow destination of type $($script:KeyDest.Type)"
+    }
+}
+
 # The key file's text. Never log or print the result: it holds the recovery password in clear text.
 function Get-RecoveryKeyFileText {
     param([string]$Mount, [string]$ProtectorId, [string]$KeyValue)
@@ -425,7 +489,7 @@ function Get-VirtualMachineEvidence {
 function Get-ForwardPlan {
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
     $mount = [string]$env:SystemDrive
-    $keyDir = $script:ResolvedKeyDirectory
+    $keyDir = Get-KeyDestinationText
 
     $os = Get-OsVolumeState
     $volStatus = 'unknown'
@@ -459,12 +523,23 @@ function Get-ForwardPlan {
     $script:OsVolumeStatus = $volStatus
     $script:OsProtectionStatus = $protStatus
 
-    $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RecoveryKeyDirectory' -RequiresAdmin $false `
-                -CurrentValue $keyDir -DesiredValue 'existing directory off the OS volume' `
-                -Action "Precondition: recovery key directory $keyDir exists and is not on $mount"))
-    $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyDirectoryWritable' -RequiresAdmin $false `
-                -CurrentValue 'not tested under -WhatIf' -DesiredValue 'writable' `
-                -Action 'Precondition: recovery key directory is writable (a probe file is written and deleted on a live run)'))
+    if ($script:KeyDest.Type -eq 'Folder') {
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RecoveryKeyDirectory' -RequiresAdmin $false `
+                    -CurrentValue $keyDir -DesiredValue 'existing directory off the OS volume' `
+                    -Action "Precondition: recovery key directory $keyDir exists and is not on $mount"))
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyDirectoryWritable' -RequiresAdmin $false `
+                    -CurrentValue 'not tested under -WhatIf' -DesiredValue 'writable' `
+                    -Action 'Precondition: recovery key directory is writable (a probe file is written and deleted on a live run)'))
+    } else {
+        $keyAction = switch ($script:KeyDest.Type) {
+            'EntraId' { 'Precondition: Key backup: Entra ID (host is Entra joined or hybrid joined, so BackupToAAD-BitLockerKeyProtector can escrow the recovery password)' }
+            'ActiveDirectory' { 'Precondition: Key backup: Active Directory (host is domain joined, so Backup-BitLockerKeyProtector can escrow the recovery password)' }
+            default { "Precondition: Key backup: not configured ($($script:KeyDest.Reason)); pass -RecoveryKeyDirectory or set BitLockerKeyBackup in the organisation settings" }
+        }
+        $keyCurrent = if ($script:KeyDest.Type -eq 'NotConfigured') { 'not configured' } else { 'join state not read yet' }
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyBackup' -RequiresAdmin $false `
+                    -CurrentValue $keyCurrent -DesiredValue "key escrowed to $keyDir before encryption starts" -Action $keyAction))
+    }
     $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'Elevated' -RequiresAdmin $false `
                 -CurrentValue (Test-IsAdministrator) -DesiredValue 'True' -Action 'Precondition: session is elevated'))
     $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'Tpm' -RequiresAdmin $false `
@@ -496,14 +571,15 @@ function Get-ForwardPlan {
         }
     }
 
+    $saveText = if ($script:KeyDest.Type -eq 'Folder') { "save it to $keyDir, read it back" } else { "back it up to $keyDir (encryption is not started unless the backup succeeds)" }
     $action = if ($script:Decrypting) {
         "No change (OS volume $mount is being decrypted: $volStatus, protection $protStatus; this script does not enable or protect a volume mid-decryption, so nothing is planned until decryption finishes)"
     } elseif ($script:AlreadyProtected) {
         "No change (OS volume $mount is already encrypted or encrypting: $volStatus, protection $protStatus)"
     } elseif ($script:UsePin) {
-        "Protect ${mount}: add recovery password protector, save it to $keyDir, read it back, then enable BitLocker (TPM and startup PIN protector, $($script:EncryptionMethod), used space only)"
+        "Protect ${mount}: add recovery password protector, $saveText, then enable BitLocker (TPM and startup PIN protector, $($script:EncryptionMethod), used space only)"
     } else {
-        "Protect ${mount}: add recovery password protector, save it to $keyDir, read it back, then enable BitLocker (TPM protector, $($script:EncryptionMethod), used space only)"
+        "Protect ${mount}: add recovery password protector, $saveText, then enable BitLocker (TPM protector, $($script:EncryptionMethod), used space only)"
     }
     $desired = if ($script:UsePin) { "TPM and startup PIN protector plus recovery password, $($script:EncryptionMethod)" } else { "TPM protector plus recovery password, $($script:EncryptionMethod)" }
     $items.Add((Get-PlanItem -Category $script:EnableCategory -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
@@ -705,15 +781,32 @@ function Test-PreconditionItem {
 
     # An already-protected volume makes the whole run NoChange; the other checks are moot.
     if ($script:AlreadyProtected -and $Item.Setting -in @('Tpm', 'SecureBoot')) { return 'NoChange' }
-    if ($script:AlreadyProtected -and -not $script:BackupPlanned -and $Item.Setting -eq 'KeyDirectoryWritable') { return 'NoChange' }
+    if ($script:AlreadyProtected -and -not $script:BackupPlanned -and $Item.Setting -in @('KeyDirectoryWritable', 'KeyBackup')) { return 'NoChange' }
     # A volume mid-decryption stops the run on its own row; the checks that only matter for an enable are
     # reported as not evaluated (not met, not failed), and nothing is written, not even the write probe.
-    if ($script:Decrypting -and $Item.Setting -in @('Tpm', 'SecureBoot', 'KeyDirectoryWritable')) {
+    if ($script:Decrypting -and $Item.Setting -in @('Tpm', 'SecureBoot', 'KeyDirectoryWritable', 'KeyBackup')) {
         return 'Skipped: not evaluated (OS volume is being decrypted)'
     }
 
     switch ($Item.Setting) {
         'RecoveryKeyDirectory' { return 'Met' }
+        'KeyBackup' {
+            if ($script:KeyDest.Type -eq 'NotConfigured') {
+                $script:StopReason = "Key backup: not configured ($($script:KeyDest.Reason)); nothing was changed. Pass -RecoveryKeyDirectory or set BitLockerKeyBackup in the organisation settings"
+                return "Failed: $($script:StopReason)"
+            }
+            # The join facts are read, never assumed: $null (not determined) is as unmet as $false.
+            try { $ctx = Get-OpsHostContext } catch { $ctx = $null }
+            $factName = if ($script:KeyDest.Type -eq 'EntraId') { 'AzureAdJoined' } else { 'DomainJoined' }
+            $fact = if ($null -ne $ctx) { Get-OpsPropertyValue -InputObject $ctx -Name $factName } else { $null }
+            $Item.CurrentValue = "$factName=$(if ($null -eq $fact) { 'unknown' } else { $fact })"
+            if ($fact -ne $true) {
+                $need = if ($script:KeyDest.Type -eq 'EntraId') { 'an Entra joined or hybrid joined host' } else { 'a domain joined host' }
+                $script:StopReason = "Key backup: $($script:KeyDest.Location) needs $need ($($Item.CurrentValue)); nothing was changed"
+                return "Failed: $($script:StopReason)"
+            }
+            return 'Met'
+        }
         'KeyDirectoryWritable' {
             if ($WhatIfPreference) { return 'Previewed' }
             $probe = Join-Path $script:ResolvedKeyDirectory (".ops-write-probe-" + [guid]::NewGuid().ToString('N'))
@@ -895,16 +988,21 @@ function Invoke-EnableOsVolume {
         if (-not $new) { throw 'Add-BitLockerKeyProtector did not return a new recovery password protector.' }
         $protectorId = [string]$new.KeyProtectorId
         $password = [string](Get-OpsPropertyValue -InputObject $new -Name 'RecoveryPassword')
-        if ([string]::IsNullOrWhiteSpace($password)) { throw 'The new recovery password protector carried no recovery password.' }
+        if ($script:KeyDest.Type -eq 'Folder') {
+            if ([string]::IsNullOrWhiteSpace($password)) { throw 'The new recovery password protector carried no recovery password.' }
 
-        # Step 2: write the key file, then Step 3: read it back. Neither message may contain the password.
-        $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
-        if (Test-Path -LiteralPath $keyFile) { throw "Key file $keyFile already exists; refusing to overwrite it." }
-        $content = Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password
-        Set-Content -LiteralPath $keyFile -Value $content -Encoding ascii -ErrorAction Stop
-        $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
-        if ($null -eq $readBack -or -not $readBack.Contains($password)) {
-            throw "Key file $keyFile was written but reading it back did not show the recovery password."
+            # Step 2: write the key file, then Step 3: read it back. Neither message may contain the password.
+            $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
+            if (Test-Path -LiteralPath $keyFile) { throw "Key file $keyFile already exists; refusing to overwrite it." }
+            $content = Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password
+            Set-Content -LiteralPath $keyFile -Value $content -Encoding ascii -ErrorAction Stop
+            $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
+            if ($null -eq $readBack -or -not $readBack.Contains($password)) {
+                throw "Key file $keyFile was written but reading it back did not show the recovery password."
+            }
+        } else {
+            # Steps 2 and 3 for an escrow destination: the backup must succeed (it throws otherwise) before encryption starts.
+            Invoke-ProtectorEscrow -Mount $mount -ProtectorId $protectorId
         }
 
         # Step 4: only now start encryption.
@@ -931,12 +1029,13 @@ function Invoke-EnableOsVolume {
         }
         $cleanup += (Undo-FvePolicyChange)
         $script:StopReason = "enable failed: $message"
+        if ($script:KeyDest.Type -ne 'Folder') { $script:StopReason = "enable failed (key backup to $($script:KeyDest.Location) or a later step): $message" }
         return "Failed: $message$cleanup BitLocker was not enabled."
     } finally {
         $password = $null
     }
 
-    $Item.Detail = "ProtectorId=$protectorId;KeyFile=$keyFile"
+    $Item.Detail = if ($script:KeyDest.Type -eq 'Folder') { "ProtectorId=$protectorId;KeyFile=$keyFile" } else { "ProtectorId=$protectorId;KeyBackup=$($script:KeyDest.Type);KeyBackupLocation=$($script:KeyDest.Location)" }
     [void]$script:ChangedSettings.Add([pscustomobject]@{
             Category = $script:EnableCategory; MountPoint = $mount; ProtectorId = $protectorId
             ScriptEnabledBitLocker = $true; EncryptionMethod = $script:EncryptionMethod
@@ -951,6 +1050,16 @@ function Invoke-BackupRecoveryProtector {
     $mount = [string]$script:ResolvedBackupVolume
     $protectorId = [string]$Item.Setting
     $password = $null
+    if ($script:KeyDest.Type -ne 'Folder') {
+        try {
+            Invoke-ProtectorEscrow -Mount $mount -ProtectorId $protectorId
+        } catch {
+            $script:StopReason = "recovery protector backup failed: $($_.Exception.Message)"
+            return "Failed: $($script:StopReason)"
+        }
+        $Item.Detail = "Volume=$mount;ProtectorId=$protectorId;KeyBackup=$($script:KeyDest.Type);KeyBackupLocation=$($script:KeyDest.Location)"
+        return 'Applied'
+    }
     $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
     try {
         $volume = @(Get-BitLockerVolume -MountPoint $mount -ErrorAction Stop | Select-Object -First 1)
@@ -1024,7 +1133,12 @@ function Invoke-PlanItem {
 # ---------------------------------------------------------------------------
 
 if (-not $Rollback) {
-    $script:ResolvedKeyDirectory = Resolve-RecoveryKeyDirectory -Path $RecoveryKeyDirectory
+    $script:OrgSettings = Get-OpsOrgSettings
+    $script:KeyDest = Resolve-KeyBackupDestination
+    # A folder (the parameter or the settings value) gets the same validation; a bad one refuses before any change.
+    if ($script:KeyDest.Type -eq 'Folder') {
+        $script:ResolvedKeyDirectory = Resolve-RecoveryKeyDirectory -Path $script:KeyDest.Location
+    }
 }
 
 $script:ResolvedBackupVolume = ([string]$env:SystemDrive).TrimEnd('\')
@@ -1099,6 +1213,11 @@ $summary = [pscustomobject]@{
     IsElevated = (Test-IsAdministrator)
     UseTpmAndPin = [bool]$script:UsePin
     RecoveryKeyDirectory = $script:ResolvedKeyDirectory
+    KeyBackupDestination = $script:KeyDest.Type
+    KeyBackupLocation = if ($script:KeyDest.Type -eq 'Folder') { $script:ResolvedKeyDirectory } else { $script:KeyDest.Location }
+    KeyBackupSource = $script:KeyDest.Source
+    KeyBackupNote = if ($script:KeyDest.IgnoredSettingsFolder) { "-RecoveryKeyDirectory was given, so the Folder value in the organisation settings ($($script:KeyDest.IgnoredSettingsFolder)) was ignored." } else { $null }
+    KeyBackupProtectorIds = @($state | Where-Object { $_.Result -eq 'Applied' -and $_.Detail -match 'ProtectorId=' } | ForEach-Object { if ($_.Detail -match 'ProtectorId=(\{[0-9a-fA-F-]+\})') { $Matches[1] } })
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

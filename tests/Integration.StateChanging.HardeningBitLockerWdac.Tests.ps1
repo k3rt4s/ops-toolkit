@@ -45,6 +45,10 @@ BeforeAll {
 `$env:OPSTOOLKIT_TEST_BL_PROTECTORID = '{AAAAAAAA-0000-4000-8000-000000000001}'
 "@
 
+    # The organisation settings file is never the real ProgramData one: every pair run points the hook at a file
+    # that does not exist, so a run without a -RecoveryKeyDirectory is "not configured" unless a test writes one.
+    $script:noOrgSettingsEnv = "`$env:OPSTOOLKIT_TEST_ORGSETTINGS_PATH = '$(Join-Path $script:workRoot 'no-such-settings.json')'`n"
+
     $script:uncShadow = @'
 function Test-Path {
     param($Path, $LiteralPath, $PathType)
@@ -77,7 +81,7 @@ function Resolve-Path {
     function Invoke-Pair {
         param([string]$RelativePath, [hashtable]$Argument, [string]$Tag, [string]$FixtureEnvironment, [string]$ExtraSetup = '')
         Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
-            -RelativePath $RelativePath -Argument $Argument -Tag $Tag -FixtureEnvironment ($FixtureEnvironment + "`n") -ExtraSetup $ExtraSetup
+            -RelativePath $RelativePath -Argument $Argument -Tag $Tag -FixtureEnvironment ($script:noOrgSettingsEnv + $FixtureEnvironment + "`n") -ExtraSetup $ExtraSetup
     }
 
     function Get-StateItem {
@@ -472,6 +476,8 @@ Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
                 "`$script:ResolvedKeyDirectory = '$KeyDirectory'"
                 "`$script:ResolvedBackupVolume = 'Q:'"
                 '$script:StopReason = $null'
+                # The script sets this at the top; a lifted function reads its Type to choose between a key file and an escrow call.
+                "`$script:KeyDest = [pscustomobject]@{ Type = 'Folder'; Location = '$KeyDirectory'; Source = 'Parameter'; Reason = ''; IgnoredSettingsFolder = '' }"
                 ($functions -join "`n")
                 "`$item = [pscustomobject]@{ Setting = '$($script:encProtectorId)'; Detail = '' }"
                 '$result = Invoke-BackupRecoveryProtector -Item $item'

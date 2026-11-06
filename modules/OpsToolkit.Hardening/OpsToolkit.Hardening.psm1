@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Shared host-context detection (join state, VDI session host, MDM management) for the windows-hardening scripts.
+Shared host-context detection (join state, VDI session host, MDM management) and org settings file reader for the windows-hardening scripts.
 
 .DESCRIPTION
 Instructions:
@@ -22,11 +22,15 @@ Instructions:
                                  Enrollments (array of ProviderID strings, 'absent' or 'error'),
                                  Manufacturer and Model (strings) or ComputerSystem ('error').
                                  A property left out falls through to the real probe.
+  OPSTOOLKIT_TEST_ORGSETTINGS_PATH  path of a stand-in for %ProgramData%\OpsToolkit\settings.json,
+                                 read by Get-OpsOrgSettings when -Path is not bound. A test never
+                                 reads the real ProgramData file.
 
 Purpose:
 Twenty scripts need the same answers to the same questions: how is this host joined, is it a
 VDI session host, is it MDM managed. Separate copies drift, so the detection lives here once and
-each script imports it.
+each script imports it. The org settings reader sits here for the same reason: the off-host
+destinations (event forwarding, BitLocker key backup) are named once in one file, never per script.
 
 Detection facts NOT verified on a real host (the module is tested only with stand-ins; copy this
 list into the VDI run sheet and tick each one on a real session host):
@@ -330,6 +334,164 @@ function Get-OpsHostContext {
     }
 }
 
+# One section of the org settings result. Carries only the type's own field, so a stray property
+# in the file (a secret typed in the wrong place) is never copied into a report.
+function New-OpsOrgSection {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('Configured', 'NotConfigured', 'Invalid')][string]$Status,
+        [string]$Type, [string]$Reason, [hashtable]$Field = @{}, [Parameter(Mandatory = $true)][string[]]$FieldName
+    )
+    $o = [ordered]@{ Status = $Status; Type = if ($Type) { $Type } else { $null } }
+    foreach ($name in $FieldName) { $o[$name] = if ($Field.ContainsKey($name)) { $Field[$name] } else { $null } }
+    $o['Reason'] = $Reason
+    [pscustomobject]$o
+}
+
+# Returns the section object for one section of the parsed settings file. Never throws and never
+# echoes a value from the file: a reason names the field, not what it held.
+function ConvertTo-OpsOrgSection {
+    param($Root, [Parameter(Mandatory = $true)][string]$Section, [Parameter(Mandatory = $true)][string[]]$FieldName)
+
+    if (-not $Root.PSObject.Properties[$Section] -or $null -eq $Root.PSObject.Properties[$Section].Value) {
+        return New-OpsOrgSection -Status NotConfigured -Reason "not configured: $Section section is missing" -FieldName $FieldName
+    }
+    $node = $Root.PSObject.Properties[$Section].Value
+    if ($node -isnot [pscustomobject]) {
+        return New-OpsOrgSection -Status Invalid -Reason "$Section is not a JSON object" -FieldName $FieldName
+    }
+    $typeProp = $node.PSObject.Properties['Type']
+    if (-not $typeProp -or $null -eq $typeProp.Value) {
+        return New-OpsOrgSection -Status Invalid -Reason "$Section has no Type" -FieldName $FieldName
+    }
+    $type = $typeProp.Value
+    $valid = if ($Section -eq 'EventDestination') { @('WEF', 'AzureMonitorAgent', 'Share') } else { @('EntraId', 'ActiveDirectory', 'Folder') }
+    # Exact, case-sensitive match: a near-miss spelling is never guessed into a real type.
+    if ($type -isnot [string] -or $type -cnotin $valid) {
+        return New-OpsOrgSection -Status Invalid -Reason "$Section Type is not one of $($valid -join ', ')" -FieldName $FieldName
+    }
+
+    # The one extra field a type needs, and the rule it must meet.
+    $need = switch ($type) {
+        'WEF' { @{ Name = 'SubscriptionManager'; Pattern = '^Server=https?://[^\s,]+(,[^\s,]+)*$'; Rule = 'a Server=http(s)://... subscription manager string' } }
+        'Share' { @{ Name = 'SharePath'; Pattern = '^\\\\[^\\\s]+\\[^\\\s]+'; Rule = 'a UNC path such as \\server\share' } }
+        'Folder' { @{ Name = 'FolderPath'; Pattern = $null; Rule = 'a rooted path' } }
+        default { $null }
+    }
+    if ($null -eq $need) {
+        return New-OpsOrgSection -Status Configured -Type $type -Reason '' -FieldName $FieldName
+    }
+    $prop = $node.PSObject.Properties[$need.Name]
+    $text = if ($prop) { $prop.Value } else { $null }
+    if ($text -isnot [string] -or [string]::IsNullOrWhiteSpace($text)) {
+        return New-OpsOrgSection -Status Invalid -Type $type -Reason "$Section Type $type needs a non-empty $($need.Name)" -FieldName $FieldName
+    }
+    if ($text.Length -gt 1024 -or $text -match '[\x00-\x1F]') {
+        return New-OpsOrgSection -Status Invalid -Type $type -Reason "$($need.Name) is too long or holds control characters" -FieldName $FieldName
+    }
+    $ok = if ($need.Pattern) { $text -match $need.Pattern } else { [System.IO.Path]::IsPathRooted($text) }
+    if (-not $ok) {
+        return New-OpsOrgSection -Status Invalid -Type $type -Reason "$($need.Name) is not $($need.Rule)" -FieldName $FieldName
+    }
+    New-OpsOrgSection -Status Configured -Type $type -Reason '' -Field @{ $need.Name = $text } -FieldName $FieldName
+}
+
+function Get-OpsOrgSettings {
+    <#
+    .SYNOPSIS
+    Read the org settings file that names the off-host destinations for event forwarding and BitLocker recovery key backup.
+
+    .DESCRIPTION
+    Reads %ProgramData%\OpsToolkit\settings.json, a file pushed once by Intune or Group Policy so
+    every operator's run uses the same destinations. Read-only and never throws for a bad file, and
+    never guesses: a missing file or section is NotConfigured, and malformed JSON, a wrong
+    SchemaVersion, an unknown Type or a missing field for the Type is Invalid with a reason. A reason
+    names the field and never repeats a value from the file. The file holds no secrets, and only the
+    fields below are copied out, so a stray property is never echoed.
+
+    Schema (SchemaVersion 1):
+    {
+      "SchemaVersion": 1,
+      "EventDestination": { "Type": "WEF" | "AzureMonitorAgent" | "Share",
+                            "SubscriptionManager": "Server=http://wec.example.com:5985/wsman/SubscriptionManager/WEC,Refresh=60",
+                            "SharePath": "\\server.example.com\logs" },
+      "BitLockerKeyBackup": { "Type": "EntraId" | "ActiveDirectory" | "Folder",
+                              "FolderPath": "\\server.example.com\keys" }
+    }
+    SubscriptionManager is required for WEF, SharePath for Share and FolderPath for Folder (written
+    with doubled backslashes in the JSON). AzureMonitorAgent, EntraId and ActiveDirectory need no
+    field on the host.
+
+    .PARAMETER Path
+    Settings file to read. Defaults to the OPSTOOLKIT_TEST_ORGSETTINGS_PATH environment variable
+    when set (a test hook, never set in production), otherwise %ProgramData%\OpsToolkit\settings.json.
+
+    .OUTPUTS
+    PSCustomObject with Path, FileState (Present, Missing, Unreadable, Invalid), EventDestination
+    (Status, Type, SubscriptionManager, SharePath, Reason) and BitLockerKeyBackup (Status, Type,
+    FolderPath, Reason). Status is Configured, NotConfigured or Invalid.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path
+    )
+
+    if (-not $PSBoundParameters.ContainsKey('Path')) {
+        $fromEnv = [string][System.Environment]::GetEnvironmentVariable('OPSTOOLKIT_TEST_ORGSETTINGS_PATH')
+        if ($fromEnv) {
+            $Path = $fromEnv
+        } else {
+            $base = [string][System.Environment]::GetEnvironmentVariable('ProgramData')
+            if (-not $base) { $base = [System.Environment]::GetFolderPath('CommonApplicationData') }
+            $Path = Join-Path $base 'OpsToolkit\settings.json'
+        }
+    }
+    $eventFields = @('SubscriptionManager', 'SharePath')
+    $keyFields = @('FolderPath')
+    $whole = {
+        param([string]$State, [string]$Status, [string]$Reason)
+        [pscustomobject]@{
+            Path = $Path
+            FileState = $State
+            EventDestination = New-OpsOrgSection -Status $Status -Reason $Reason -FieldName $eventFields
+            BitLockerKeyBackup = New-OpsOrgSection -Status $Status -Reason $Reason -FieldName $keyFields
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return (& $whole 'Missing' 'NotConfigured' 'not configured: the org settings file does not exist')
+    }
+    try {
+        $text = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    } catch {
+        return (& $whole 'Unreadable' 'NotConfigured' 'not configured: the org settings file could not be read')
+    }
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return (& $whole 'Invalid' 'Invalid' 'the org settings file is empty')
+    }
+    try {
+        $root = $text | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return (& $whole 'Invalid' 'Invalid' 'the org settings file is not valid JSON')
+    }
+    if ($root -isnot [pscustomobject]) {
+        return (& $whole 'Invalid' 'Invalid' 'the org settings file is not a JSON object')
+    }
+    $version = if ($root.PSObject.Properties['SchemaVersion']) { $root.PSObject.Properties['SchemaVersion'].Value } else { $null }
+    if (($version -isnot [int] -and $version -isnot [long]) -or $version -ne 1) {
+        return (& $whole 'Invalid' 'Invalid' 'SchemaVersion is missing or is not 1')
+    }
+
+    [pscustomobject]@{
+        Path = $Path
+        FileState = 'Present'
+        EventDestination = ConvertTo-OpsOrgSection -Root $root -Section 'EventDestination' -FieldName $eventFields
+        BitLockerKeyBackup = ConvertTo-OpsOrgSection -Root $root -Section 'BitLockerKeyBackup' -FieldName $keyFields
+    }
+}
+
 function Get-OpsPolicyOverrideNote {
     <#
     .SYNOPSIS
@@ -372,5 +534,6 @@ function Get-OpsPolicyOverrideNote {
 
 Export-ModuleMember -Function @(
     'Get-OpsHostContext'
+    'Get-OpsOrgSettings'
     'Get-OpsPolicyOverrideNote'
 )

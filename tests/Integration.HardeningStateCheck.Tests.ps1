@@ -33,6 +33,12 @@ BeforeAll {
     New-Item -ItemType Directory -Path (Join-Path $script:fakeRoot 'modules') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Reporting') `
         -Destination (Join-Path $script:fakeRoot 'modules') -Recurse -Force
+    # The checker imports OpsToolkit.Hardening for the organisation settings reader.
+    Copy-Item -LiteralPath (Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Hardening') `
+        -Destination (Join-Path $script:fakeRoot 'modules') -Recurse -Force
+    # No checker run reads the real organisation settings file: the hook names a file that does not exist
+    # unless a test sets it. Invoke-Checker restores the variable it replaces.
+    $script:noSettingsPath = Join-Path $script:workRoot 'no-such-settings.json'
     Copy-Item -LiteralPath (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1') `
         -Destination $script:fakeFolder -Force
     $script:fakeChecker = Join-Path $script:fakeFolder 'Test-WindowsHardeningState.ps1'
@@ -105,6 +111,10 @@ if ($env:OPSTOOLKIT_TEST_FAKE_LEGACY_CSV) {
         if ($FailOnDrift) { $arguments += '-FailOnDrift' }
         if ($ExtraArgument.Count) { $arguments += $ExtraArgument }
 
+        if (-not $Environment.ContainsKey('OPSTOOLKIT_TEST_ORGSETTINGS_PATH')) {
+            $Environment = $Environment.Clone()
+            $Environment['OPSTOOLKIT_TEST_ORGSETTINGS_PATH'] = $script:noSettingsPath
+        }
         $saved = @{}
         foreach ($key in $Environment.Keys) {
             $saved[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -167,6 +177,22 @@ Describe 'Get-HardeningStateVerdict' {
     ) {
         $item = New-StateItem -Category $Category -Result $Result -Action $Action -CurrentValue $Current
         (Get-HardeningStateVerdict -Item $item).State | Should -Be $State
+    }
+
+    It 'reads an off-host report row as Unread, except WinRM confirmed running, which is ReportOnly' {
+        $running = New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -Action 'ReportOnly: WinRM' -CurrentValue 'Running'
+        (Get-HardeningStateVerdict -Item $running).State | Should -Be 'ReportOnly'
+        foreach ($item in @(
+                (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -CurrentValue 'Stopped')
+                (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -CurrentValue 'unknown')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Azure Monitor Agent' -Result 'ReportOnly' -CurrentValue 'Running')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Share destination' -Result 'ReportOnly' -CurrentValue 'configured')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Event destination' -Result 'ReportOnly' -CurrentValue 'NotConfigured')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Event destination' -Result 'ReportOnly' -CurrentValue 'Invalid')
+            )) {
+            $v = Get-HardeningStateVerdict -Item $item
+            $v.State | Should -Be 'Unread' -Because "$($item.Setting) / $($item.CurrentValue) does not establish that logs leave the host"
+        }
     }
 
     It 'never calls a skipped or undetermined result compliant' {
@@ -441,6 +467,59 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
         }
     }
 
+    Context 'AuditLogging off-host rows end to end' {
+        BeforeAll {
+            # The fake tree has no audit script, which an earlier test relies on, so this context adds one and removes it.
+            $script:alFake = Join-Path $script:fakeFolder 'Set-WindowsAuditLogging.ps1'
+            Set-Content -LiteralPath $script:alFake -Value $stateTemplate.Replace('__PREFIX__', 'audit-logging') -Encoding ascii
+            function New-AlWef {
+                param([string]$Result = 'NoChange', [string]$Winrm = 'Running')
+                @(
+                    (New-StateItem -Category 'EventForwarding' -Setting '1' -Result $Result -Action 'Set EventForwarding' -CurrentValue 'absent')
+                    (New-StateItem -Category 'EventLogReadersMember' -Setting 'S-1-5-20' -Result 'NoChange' -Action 'No change (member)' -CurrentValue 'Member')
+                    (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -Action 'ReportOnly: WinRM' -CurrentValue $Winrm)
+                )
+            }
+        }
+        AfterAll { Remove-Item -LiteralPath $script:alFake -Force -ErrorAction SilentlyContinue }
+
+        It 'is compliant with the WinRM report listed, not counted, and Passed true, when the value and membership hold' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -Item (New-AlWef)
+            $run.ExitCode | Should -Be 0 -Because (Get-Content -LiteralPath "$($run.Log).err" -Raw -ErrorAction SilentlyContinue)
+            ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'ReportOnly'
+            $run.Summary.CompliantCount | Should -Be 2
+            $run.Summary.ItemsChecked | Should -Be 2
+            $run.Summary.ReportOnlyCount | Should -Be 1
+            $run.Summary.Passed | Should -BeTrue
+        }
+
+        It 'is Drifted, not passed, when the value is still to be set' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item (New-AlWef -Result 'Previewed')
+            ($run.Records | Where-Object Category -eq 'EventForwarding').State | Should -Be 'Drifted'
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'is Unread, and fails the gate, when WinRM is not confirmed running' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item (New-AlWef -Winrm 'Stopped')
+            ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'Unread'
+            $run.Summary.UnreadCount | Should -Be 1
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'is Unread, never a pass, for every destination the audit script only reports' {
+            foreach ($setting in 'Event destination', 'Azure Monitor Agent', 'Share destination') {
+                $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item @(
+                    (New-StateItem -Category 'OffHostReport' -Setting $setting -Result 'ReportOnly' -Action 'ReportOnly: x' -CurrentValue 'NotConfigured')
+                    (New-StateItem -Category 'ScriptBlockLogging' -Setting 'EnableScriptBlockLogging' -Result 'NoChange' -Action 'No change' -CurrentValue '1'))
+                ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'Unread' -Because $setting
+                $run.Summary.Passed | Should -BeFalse -Because $setting
+                $run.ExitCode | Should -Be 1 -Because $setting
+            }
+        }
+    }
+
     Context 'a remote machine' {
         It 'does not read new-schema items remotely and says so' {
             $run = Invoke-FakeChecker -Target 'Defender' -ComputerName 'REMOTE-HOST-NOT-HERE' -Item @(New-StateItem -Result 'NoChange')
@@ -468,12 +547,13 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         $script:recoveryId = '{FEEDFACE-9999-4888-8777-0123456789AB}'
 
         function Invoke-BitLockerChecker {
-            param([string]$VolumeJson, [switch]$ReadError, [switch]$FailOnDrift)
+            param([string]$VolumeJson, [switch]$ReadError, [switch]$FailOnDrift, [string]$Settings = $script:noSettingsPath)
             $environment = @{
                 PSModulePath = "$script:systemModulePath;$env:PSModulePath"
                 SystemDrive = 'Q:'
                 OPSTOOLKIT_TEST_BL_VOLUMES_JSON = $VolumeJson
                 OPSTOOLKIT_TEST_BL_READERROR = $(if ($ReadError) { '1' } else { $null })
+                OPSTOOLKIT_TEST_ORGSETTINGS_PATH = $Settings
             }
             Invoke-Checker -Script $script:realChecker -Target 'BitLocker' -Environment $environment -FailOnDrift:$FailOnDrift
         }
@@ -515,7 +595,7 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         @{ Status = 'DecryptionInProgress'; Protection = 'On'; Reason = 'not fully encrypted' }
     ) {
         $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status $Status -Protection $Protection) -FailOnDrift
-        @($run.Records).Count | Should -Be 1
+        @($run.Records | Where-Object Category -eq 'OsVolume').Count | Should -Be 1
         @($run.Records)[0].State | Should -Be 'Drifted'
         @($run.Records)[0].Reason | Should -Match $Reason
         $run.Summary.CompliantCount | Should -Be 0
@@ -525,7 +605,7 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
 
     It 'is unread, never compliant, when the protection status is not On or Off' -ForEach @('Unknown', '') {
         $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status 'FullyEncrypted' -Protection $_)
-        @($run.Records).Count | Should -Be 1
+        @($run.Records | Where-Object Category -eq 'OsVolume').Count | Should -Be 1
         @($run.Records)[0].State | Should -Be 'Unread'
         $run.Summary.CompliantCount | Should -Be 0
     }
@@ -561,6 +641,47 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
     It 'fails -FailOnDrift for an unread volume rather than passing it' {
         $script:blReadErrorGate.ExitCode | Should -Be 1
         $script:blReadErrorGate.Summary.Passed | Should -BeFalse
+    }
+
+    It 'adds a ReportOnly key backup row naming the configured destination, outside the checked items and the verdict' {
+        $path = Join-Path $script:workRoot 'bl-settings-folder.json'
+        $folder = Join-Path $script:workRoot 'escrow'
+        [ordered]@{ SchemaVersion = 1; BitLockerKeyBackup = @{ Type = 'Folder'; FolderPath = $folder } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+        $run = Invoke-BitLockerChecker -VolumeJson $protected -Settings $path -FailOnDrift
+        $row = @($run.Records | Where-Object Category -eq 'KeyBackup')
+        $row.Count | Should -Be 1
+        $row[0].State | Should -Be 'ReportOnly'
+        $row[0].Item | Should -Be 'BitLockerKeyBackup'
+        $row[0].CurrentValue | Should -Be 'Status=Configured;Type=Folder'
+        $row[0].Reason | Should -Match 'Whether a key reached it is not checked'
+        $run.Summary.ItemsChecked | Should -Be 1 -Because 'a ReportOnly row is not an item with a verdict'
+        $run.Summary.CompliantCount | Should -Be 1
+        $run.Summary.Passed | Should -BeTrue
+        $run.ExitCode | Should -Be 0
+    }
+
+    It 'reports a missing, malformed or invalid settings file as a ReportOnly row, never as configured, and never fails the run' {
+        $bad = Join-Path $script:workRoot 'bl-settings-bad.json'
+        Set-Content -LiteralPath $bad -Value 'this is { not json' -Encoding utf8
+        $badType = Join-Path $script:workRoot 'bl-settings-badtype.json'
+        [ordered]@{ SchemaVersion = 1; BitLockerKeyBackup = @{ Type = 'Dropbox' } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $badType -Encoding utf8
+        foreach ($case in @(
+                @{ Name = 'missing'; Path = $script:noSettingsPath; Status = 'NotConfigured' }
+                @{ Name = 'malformed'; Path = $bad; Status = 'NotConfigured' }
+                @{ Name = 'invalid type'; Path = $badType; Status = 'Invalid' }
+            )) {
+            $run = Invoke-BitLockerChecker -VolumeJson $protected -Settings $case.Path -FailOnDrift
+            $row = @($run.Records | Where-Object Category -eq 'KeyBackup')
+            $row.Count | Should -Be 1 -Because $case.Name
+            $row[0].State | Should -Be 'ReportOnly' -Because $case.Name
+            $row[0].CurrentValue | Should -Not -Match 'Status=Configured' -Because $case.Name
+            $row[0].CurrentValue | Should -Match 'Status=' -Because $case.Name
+            $run.ExitCode | Should -Be 0 -Because "$($case.Name): the run itself is not failed by an absent destination"
+        }
+    }
+
+    It 'still reports the key backup row when the volume read fails' {
+        @($script:blReadError.Records | Where-Object Category -eq 'KeyBackup').Count | Should -Be 1 -Because 'the settings are read independently of the volume'
     }
 
     It 'writes no key protector id into any report or log' {

@@ -8,8 +8,8 @@
 #      the real one changes nothing. One that the real cmdlet does not support takes no -WhatIf at all.
 #   3. Read fakes narrow their results by the filter parameters the real cmdlet has, wildcards included.
 # Each case runs in a child process with the staged fakes first on PSModulePath, so nothing here can reach
-# a real module or the real machine. BitLocker and Microsoft.PowerShell.LocalAccounts are staged but not
-# asserted here (another lane owns them).
+# a real module or the real machine. The recorder source rule covers every fake, BitLocker and
+# Microsoft.PowerShell.LocalAccounts included.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
@@ -50,9 +50,8 @@ AfterAll {
 
 Describe 'recorder source rule' {
     It 'every fake recorder and fixture writer passes -WhatIf:$false to Add-Content and Set-Content' {
-        $owned = @(Get-ChildItem -LiteralPath $script:fixtures -Filter '*.psm1' -Recurse -File |
-                Where-Object { $_.Name -notin 'BitLocker.psm1', 'Microsoft.PowerShell.LocalAccounts.psm1' })
-        $owned.Count | Should -BeGreaterThan 8
+        $owned = @(Get-ChildItem -LiteralPath $script:fixtures -Filter '*.psm1' -Recurse -File)
+        $owned.Count | Should -BeGreaterThan 10
         $bad = foreach ($f in $owned) {
             $n = 0
             foreach ($line in Get-Content -LiteralPath $f.FullName) {

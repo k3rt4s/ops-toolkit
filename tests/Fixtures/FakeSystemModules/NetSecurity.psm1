@@ -38,7 +38,7 @@ function Write-FakeFirewallMutation {
     param([string]$Command, [string]$Target, [string]$Detail = '')
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -112,7 +112,7 @@ function Get-NetFirewallProfile {
     $wanted = @(@($Name) + @($Profile) | Where-Object { $_ })
     foreach ($p in $source) {
         $n = [string](Get-FakeFirewallField $p 'Name' '')
-        if ($wanted.Count -and $n -notin $wanted) { continue }
+        if ($wanted.Count -and -not ($wanted | Where-Object { $n -like $_ })) { continue }
         [pscustomobject]@{
             Name                    = $n
             Enabled                 = [string](Get-FakeFirewallField $p 'Enabled' 'True')
@@ -128,7 +128,7 @@ function Get-NetFirewallProfile {
 }
 
 function Set-NetFirewallProfile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0)][string[]]$Name,
         [string[]]$Profile,
@@ -149,8 +149,10 @@ function Set-NetFirewallProfile {
     $skip = 'Name', 'Profile', 'PolicyStore', 'ErrorAction', 'WhatIf', 'Confirm', 'Verbose', 'Debug'
     $detail = (@($PSBoundParameters.Keys | Where-Object { $_ -notin $skip } | Sort-Object |
                 ForEach-Object { "$_=$($PSBoundParameters[$_])" })) -join ';'
-    Write-FakeFirewallMutation -Command 'Set-NetFirewallProfile' `
-        -Target ((@($Name) + @($Profile) | Where-Object { $_ }) -join ',') -Detail $detail
+    $target = (@($Name) + @($Profile) | Where-Object { $_ }) -join ','
+    if ($PSCmdlet.ShouldProcess($target, 'Set-NetFirewallProfile')) {
+        Write-FakeFirewallMutation -Command 'Set-NetFirewallProfile' -Target $target -Detail $detail
+    }
 }
 
 function Get-NetFirewallRule {
@@ -234,7 +236,7 @@ function Get-NetFirewallPortFilter {
 }
 
 function Set-NetFirewallRule {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)][string[]]$Name,
         [string[]]$DisplayName,
@@ -254,13 +256,15 @@ function Set-NetFirewallRule {
             if ($PSBoundParameters.ContainsKey('Action')) { "Action=$Action" }
         ) -join ';'
         foreach ($n in @(@($Name) + @($DisplayName) | Where-Object { $_ })) {
-            Write-FakeFirewallMutation -Command 'Set-NetFirewallRule' -Target $n -Detail $detail
+            if ($PSCmdlet.ShouldProcess($n, 'Set-NetFirewallRule')) {
+                Write-FakeFirewallMutation -Command 'Set-NetFirewallRule' -Target $n -Detail $detail
+            }
         }
     }
 }
 
 function Enable-NetFirewallRule {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)][string[]]$Name,
         [string[]]$DisplayName,
@@ -269,13 +273,15 @@ function Enable-NetFirewallRule {
     )
     process {
         foreach ($n in @(@($Name) + @($DisplayName) + @($Group) | Where-Object { $_ })) {
-            Write-FakeFirewallMutation -Command 'Enable-NetFirewallRule' -Target $n
+            if ($PSCmdlet.ShouldProcess($n, 'Enable-NetFirewallRule')) {
+                Write-FakeFirewallMutation -Command 'Enable-NetFirewallRule' -Target $n
+            }
         }
     }
 }
 
 function Disable-NetFirewallRule {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Position = 0, ValueFromPipelineByPropertyName = $true)][string[]]$Name,
         [string[]]$DisplayName,
@@ -284,7 +290,9 @@ function Disable-NetFirewallRule {
     )
     process {
         foreach ($n in @(@($Name) + @($DisplayName) + @($Group) | Where-Object { $_ })) {
-            Write-FakeFirewallMutation -Command 'Disable-NetFirewallRule' -Target $n
+            if ($PSCmdlet.ShouldProcess($n, 'Disable-NetFirewallRule')) {
+                Write-FakeFirewallMutation -Command 'Disable-NetFirewallRule' -Target $n
+            }
         }
     }
 }

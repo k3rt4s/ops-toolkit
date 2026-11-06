@@ -32,7 +32,7 @@ function Write-FakeSmbMutation {
     param([string]$Command, [string]$Target, [string]$Detail)
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -78,7 +78,9 @@ function Set-SmbServerConfiguration {
 
     $detail = (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('Force', 'Confirm', 'WhatIf') } |
                 Sort-Object | ForEach-Object { "$_=$($PSBoundParameters[$_])" })) -join ';'
-    Write-FakeSmbMutation -Command 'Set-SmbServerConfiguration' -Target 'SmbServer' -Detail $detail
+    if ($PSCmdlet.ShouldProcess('SmbServer', 'Set-SmbServerConfiguration')) {
+        Write-FakeSmbMutation -Command 'Set-SmbServerConfiguration' -Target 'SmbServer' -Detail $detail
+    }
 }
 
 function Set-SmbClientConfiguration {
@@ -92,7 +94,9 @@ function Set-SmbClientConfiguration {
 
     $detail = (@($PSBoundParameters.Keys | Where-Object { $_ -notin @('Force', 'Confirm', 'WhatIf') } |
                 Sort-Object | ForEach-Object { "$_=$($PSBoundParameters[$_])" })) -join ';'
-    Write-FakeSmbMutation -Command 'Set-SmbClientConfiguration' -Target 'SmbClient' -Detail $detail
+    if ($PSCmdlet.ShouldProcess('SmbClient', 'Set-SmbClientConfiguration')) {
+        Write-FakeSmbMutation -Command 'Set-SmbClientConfiguration' -Target 'SmbClient' -Detail $detail
+    }
 }
 
 Export-ModuleMember -Function 'Get-SmbServerConfiguration', 'Get-SmbClientConfiguration', 'Set-SmbServerConfiguration', 'Set-SmbClientConfiguration'

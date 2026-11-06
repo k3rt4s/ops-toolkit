@@ -76,7 +76,7 @@ function Write-FakeIisMutation {
         [string]$Value
     }
 
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command
             Site    = $siteName
             Filter  = $Filter

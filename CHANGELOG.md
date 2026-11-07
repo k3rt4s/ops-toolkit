@@ -5,7 +5,66 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-06
+
+### Added: the VDI run sheet
+
+`scripts\it-operations\windows-hardening\VDI_RUN_SHEET.md` lists every behaviour the suite verified only against
+the fake system modules, section by section, with the command that confirms each one on a VDI or test machine and an
+empty result column. It covers cmdlet output shapes, registry value types, SID handling, the BitLocker escrow failure
+path, the per-change prompt and the unelevated `-WhatIf` preview. It has not been run on a real host yet.
+
+### Changed: a live hardening run prompts per change, and an unelevated -WhatIf previews what it could read
+
+Every `Invoke-PlanItem` in the fourteen plan-based scripts (thirteen hardening scripts and
+`Set-WorkstationPerformance.ps1`) now declares its script's `ConfirmImpact = 'High'`. Before, it took the default,
+Medium, so its `ShouldProcess` never prompted. A live run now asks once per change unless `-Confirm:$false` is passed;
+`-WhatIf` is unchanged. Under `-WhatIf` only, an unelevated item that needs admin goes through `ShouldProcess` and
+returns `Previewed` when its current value was read, or `Skipped: requires elevation (not read)` when it was not. A
+live unelevated run still returns `Skipped: requires elevation` and changes nothing. `Test-WindowsHardeningState.ps1`
+already maps `Previewed` to Drifted and any other `Skipped:` to Unread, so no verdict changed. Unelevated
+`Get-MpPreference` hides exclusions, so `Set-WorkstationPerformance.ps1` now reports them as unknown, where it
+previously reported none. New tests: `HardeningPlanItem.Contract` (AST: each `Invoke-PlanItem` matches its script),
+`HardeningConfirmPrompt` (a `-NonInteractive` live run without `-Confirm:$false` changes nothing) and
+`HardeningUnelevatedWhatIf` (three scripts).
+
+### Added: organisation settings, off-host event forwarding and BitLocker key escrow
+
+`Get-OpsOrgSettings` (`modules\OpsToolkit.Hardening`) reads `%ProgramData%\OpsToolkit\settings.json`. It never throws:
+a missing file is NotConfigured, and a bad file or section is Invalid with a reason. With a WEF destination,
+`Set-WindowsAuditLogging.ps1` plans the EventForwarding SubscriptionManager value and NETWORK SERVICE membership of
+Event Log Readers, both with rollback. It reports an Azure Monitor Agent or Share destination and WinRM state but does
+not build them. `Enable-BitLockerOsVolume.ps1` takes its key destination from `-RecoveryKeyDirectory`, then the
+settings Folder, Entra ID or Active Directory. It refuses before any change when none is usable, and it escrows every
+new recovery password protector before `Enable-BitLocker`. A failed escrow removes the protector and stops with
+BitLocker not enabled.
+
+### Fixed: the test fakes follow the cmdlets they stand in for
+
+Every mutating fake declares `SupportsShouldProcess` only where the real cmdlet does and records only inside
+`ShouldProcess`; every recorder writes with `-WhatIf:$false`. Read fakes honour their filters (`-Name`, `-Group`,
+`-SID`, wildcards). `FakeSystemModules.Contract.Tests.ps1` checks the recorder rule across every fake module.
+
+## 2026-11-04
+
+### Added: host context for VDI and joined machines, session-host safety gates and NTLM auditing
+
+New module `modules\OpsToolkit.Hardening`: `Get-OpsHostContext` returns the join type, AVD session host, MDM and VM
+facts from `dsregcmd /status`, the RD agent key and service, the Enrollments key and `Win32_ComputerSystem`. A failed
+probe leaves its field null and listed in Unread. On a session host, or when that answer is unread, the scripts skip
+anything that would cut off other users: Remote Desktop stays on, the inbound firewall rule controls are skipped, and
+Administrator Protection and outgoing NTLM denial are not written. NTLM auditing is on by default, with denial of
+outgoing NTLM behind `-RestrictOutgoingNtlm`. A domain, hybrid or MDM host gets a note that policy may override local
+writes.
+
 ## 2026-11-03
+
+### Added: an LSA protection preflight in Set-WindowsCredentialProtection.ps1
+
+Before LSA protection is planned, the script lists every LSA authentication, security and notification package and
+Winsock name-space provider DLL that is not validly signed by Microsoft (ThirdParty, Unsigned, InvalidSignature), or
+whose file or signature cannot be read (Unread, never safe). It writes `credential-protection-lsa-preflight-*.csv`
+and `.json`. The preflight is a report only and does not block the change.
 
 ### Added: a reviewed WDAC enforce path, a BitLocker startup PIN, four ASR rules and opt-in WPAD off
 

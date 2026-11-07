@@ -1,4 +1,4 @@
-﻿# ops-toolkit Future Features
+# ops-toolkit Future Features
 
 Backlog for the ops-toolkit. Items flow from here onto the work board when picked up,
 and off the board into the repository history when done. Shipped work and its
@@ -39,22 +39,10 @@ facts the scripts assume but nobody has checked on a real machine, is under "Ing
 2026-10-29: standalone Windows 11 hardening follow-ups" below.
 
 - **hard-elevated-run** Run every hardening spec elevated on a disposable Windows 11 VM, then run each script for real there and check the unverified facts listed below. `score: kind=prevent gain=2/6/20 p=0.5 hours=2/4/8 risk=0.1x2 rev=two-way conf=assessed flags=security id=hard-elevated-run` `return: likelihood the scripts are applied to at least one real machine soon, p 0.5 that one of the 22 unverified facts is wrong in a way that matters, estimated, nothing run; impact a wrong registry value, cmdlet shape or event field means a control reads compliant when it is not, or a rollback that does not restore, about 2 to 20 hours to find and repair on a live machine; evidence the elevated It blocks in tests\Integration.StateChanging.Hardening*.Tests.ps1 are skipped on the unelevated runner on 2026-10-29, and the unverified list below`
-  - `worker: sonnet 2/4/8 h, on a VM the developer provides`
-
-- **hard-offhost** Off-host copies of what the scripts produce on the machine: forward the new audit and Code Integrity events, and record where the BitLocker recovery key was moved. `score: kind=prevent gain=1/3/10 p=0.2 hours=3/6/12 rev=two-way conf=opinion flags=security id=hard-offhost` `return: likelihood an incident on a hardened machine, p 0.2 a year, opinion; impact logs that live only on the compromised machine can be cleared, and a key file nobody can find makes recovery a rebuild, several hours either way; evidence Set-WindowsAuditLogging.ps1 sizes local logs only and Enable-BitLockerOsVolume.ps1 writes one key file to the operator's folder`
-  - `worker: sonnet 3/6/12 h`
-
-- **hard-whatif-unelevated** Let an unelevated `-WhatIf` show each planned change as `Previewed` instead of `Skipped: requires elevation`, by reading what can be read unelevated and marking the rest unread. `score: kind=feature gain=0.25/0.5/2 p=0.5 hours=1/2/4 rev=two-way conf=opinion id=hard-whatif-unelevated` `return: likelihood the bootstrap's phase 8 preview runs unelevated, p 0.5, opinion; impact the preview lists skips rather than the planned changes, so the operator learns less before applying; evidence elevation is checked before ShouldProcess in the hardening scripts, the same order as the five older ones, on 2026-10-29`
-  - `worker: sonnet 1/2/4 h`
-
-- **hard-confirm-impact** Make `ConfirmImpact = 'High'` prompt as declared: `Invoke-PlanItem` calls `ShouldProcess` at its own Medium default, so the declared impact never raises a prompt. `score: kind=debt gain=0.1/0.25/1 p=0.3 hours=0.5/1/2 rev=two-way conf=assessed id=hard-confirm-impact` `return: likelihood an operator relies on a confirmation prompt, p 0.3, estimated; impact a High-impact change applies without the prompt the attribute promises, minutes of surprise each time; evidence the hardening scripts declare High and route through Invoke-PlanItem, the same pattern as the existing ones, on 2026-10-29`
-  - `worker: sonnet 0.5/1/2 h`
+  - `worker: sonnet 2/4/8 h, on a VM the developer provides; work through scripts\it-operations\windows-hardening\VDI_RUN_SHEET.md, which lists every check with its command (2026-11-06)`
 
 - **file-comma-validateset** Fix the `pwsh -File` examples that pass a comma list to a `ValidateSet` parameter, which `-File` passes as one string and the set rejects: `Invoke-DiskSpaceReclaim.ps1` lines 46, 51 and 105 (`-Target`), `New-AzKeyVaultServicePrincipal.ps1` lines 23 and 105 (`-CertificatePermissions`), and `Invoke-RepoValidation.ps1` line 24 (`-Gate`). `score: kind=debt gain=0.1/0.25/0.5 p=0.6 hours=0.25/0.5/1 rev=two-way conf=assessed id=file-comma-validateset` `return: likelihood someone copies an example, p 0.6, estimated; impact the copied command fails with a validation error, a few minutes to rewrite it; evidence pwsh -File with -T Aa,Bb rejected by ValidateSet in both pwsh and powershell.exe on 2026-10-29, and the hardening README examples moved to the -Command form the same day`
   - `worker: haiku 0.25/0.5/1 h`
-
-- **fake-contracts** Make the test fake modules behave like the cmdlets they stand in for: a consistent `ShouldProcess` rule across the fakes (the Defender fake's `Write-FakeMpMutation` `Add-Content` lacks `-WhatIf:$false`), and read fakes that honour their filter parameters instead of returning everything. `score: kind=debt gain=0.25/1/3 p=0.3 hours=1.5/3/6 rev=two-way conf=opinion id=fake-contracts` `return: likelihood a test passes against a fake that a real cmdlet would fail, p 0.3, opinion; impact a defect ships behind a green suite, an hour or more to find on a machine; evidence the fakes under tests handle ShouldProcess differently from one another and the read fakes ignore filters, found in the 2026-10-29 review`
-  - `worker: sonnet 1.5/3/6 h`
 
 Seven of the items above shipped on 2026-11-03 (wdac-enforce, bitlocker-tpm-pin, pack-unread,
 hard-omitted-settings, legacy-undetermined-pass, bitlocker-decrypting-volume,
@@ -62,15 +50,6 @@ elevated-whatif-restore-tests; see CHANGELOG.md). The developer decided the same
 scripts must run on physical and VDI (Azure Virtual Desktop, Entra-joined) Windows 11 machines,
 joined machines included, with off-host destinations read from an org settings file; that
 brings hard-domain back from `BOARD_DEFERRED_2026.md` and adds the items below.
-
-- **hard-vdi-joined** Make every hardening script aware of where it runs: join state (Entra, hybrid, AD, workgroup, read the way `Export-BitLockerEscrowStatus` reads dsregcmd), an Azure Virtual Desktop session host, and MDM management. Never disable RDP on a session host, report Administrator Protection as unwanted there (Microsoft's AVD security recommendations say not to enable it), and change help that says standalone to physical or VDI. Includes hard-domain from `BOARD_DEFERRED_2026.md`. `score: kind=feature gain=2/6/16 p=0.7 hours=6/12/24 risk=0.2x4 rev=two-way conf=assessed flags=security id=hard-vdi-joined` `return: likelihood the scripts run on AVD session hosts, p 0.7, from the developer's 2026-11-03 decision; impact a standalone-only assumption on a session host can lock out remote users or fight Intune, hours per host; evidence help across scripts\it-operations\windows-hardening says standalone, on 2026-11-03`
-  - `worker: sonnet 6/12/24 h`
-
-- **hard-org-settings** Read off-host destinations from one org settings file, `%ProgramData%\OpsToolkit\settings.json`, so the same command works for anyone who runs it: event forwarding target (WEF, Azure Monitor Agent, or a share) and BitLocker key backup (Entra ID, AD, or a folder). hard-offhost builds on it. `score: kind=feature gain=1/3/8 p=0.6 hours=2/4/8 rev=two-way conf=opinion flags=security id=hard-org-settings` `return: likelihood more than one person runs the scripts, p 0.6, opinion; impact today each operator picks a key folder by hand, and a key nobody can find makes recovery a rebuild; evidence the developer's 2026-11-03 decision for a standard location`
-  - `worker: sonnet 2/4/8 h`
-
-- **hard-lsa-preflight** Before `Set-WindowsCredentialProtection.ps1` turns on LSA protection, list the non-Microsoft-signed modules LSA would block (for example Bonjour's mdnsNSP.dll) and report them, so the operator sees the event 3033 cause in advance. `score: kind=prevent gain=0.25/1/3 p=0.5 hours=1/2/4 rev=two-way conf=assessed id=hard-lsa-preflight` `return: likelihood a machine carries a third-party LSA or name-service module, p 0.5, seen on the developer's machine 2026-11-03; impact a blocked-module warning the operator cannot explain, under an hour each; evidence the Bonjour mdnsNSP.dll block on 2026-11-03`
-  - `worker: sonnet 1/2/4 h`
 
 - **checker-unread-followups** `Test-WindowsHardeningState.ps1` never passes -IncludeServices, so Privacy service rows are always Unread and a Missing row is Unread too; read services live so Privacy can pass, and give estate-scope CFG-01 a way to reach Met, since remote machines report NotCheckedRemotely. `score: kind=feature gain=0.5/2/6 p=0.4 hours=2/4/8 rev=two-way conf=assessed flags=security id=checker-unread-followups` `return: likelihood the pack is run at estate scope, p 0.4, estimated; impact CFG-01 reads NotAssessed or Partial forever there; evidence the A1 landing review on 2026-11-03`
   - `worker: sonnet 2/4/8 h`
@@ -87,6 +66,26 @@ brings hard-domain back from `BOARD_DEFERRED_2026.md` and adds the items below.
 The remaining unverified facts now include the FVE startup-authentication value codes (A2), CiTool
 and New-CIPolicy behaviour for the enforce path (A3), and the Administrator Protection registry
 name, which Microsoft does not document; hard-elevated-run checks them on a VDI test host.
+
+Seven more shipped from 2026-11-04 to 2026-11-06 under PC-401 (hard-vdi-joined, hard-org-settings,
+hard-offhost, hard-lsa-preflight, hard-whatif-unelevated, hard-confirm-impact, fake-contracts; see
+CHANGELOG.md), and the scripts were copied to the infosec repo's `windows_hardening\`. The lanes
+deferred the items below; none has been started.
+
+- **hard-gpo-delivery** Export the hardening settings, and the org settings file, as GPO or Intune policy so joined machines get them centrally, and detect a per-setting conflict with an existing domain policy instead of reporting only that a policy exists. `score: kind=feature gain=1/3/8 p=0.4 hours=4/8/16 rev=two-way conf=opinion flags=security id=hard-gpo-delivery` `return: likelihood joined machines are hardened centrally rather than by script, p 0.4, opinion; impact a local write a domain policy overwrites at the next refresh reads as applied; evidence the B1 and B2 lane reports, 2026-11-04 and 2026-11-05`
+  - `worker: sonnet 4/8/16 h`
+
+- **hard-ntlm-incoming** Add incoming NTLM restriction after the audit phase, and a Windows LAPS variant for joined machines. `score: kind=feature gain=0.5/2/6 p=0.3 hours=2/4/8 rev=one-way conf=opinion flags=security id=hard-ntlm-incoming` `return: likelihood NTLM audit data shows the restriction is safe, p 0.3, opinion; impact NTLM relay surface stays open until then; evidence the B1 lane report on 2026-11-04`
+  - `worker: sonnet 2/4/8 h, after a NTLM audit period on a real host`
+
+- **hard-offhost-followups** Ship a scheduled export task, an Azure Monitor Agent data collection rule for the forwarded events, and a guard-break test for the A8 off-host path. `score: kind=feature gain=0.5/1/4 p=0.4 hours=2/4/8 rev=two-way conf=assessed flags=security id=hard-offhost-followups` `return: likelihood off-host forwarding is turned on, p 0.4, estimated; impact events are forwarded only when someone runs the export; evidence the B2 lane report on 2026-11-05`
+  - `worker: sonnet 2/4/8 h`
+
+- **hard-read-followups** Read the Winsock `Enabled` value in the LSA preflight instead of inferring it, probe real wildcard behaviour where the C1 fakes assumed it, and read the ActiveDirectory and WebAdministration cmdlets' `-WhatIf` metadata so their fakes match. `score: kind=debt gain=0.25/1/3 p=0.4 hours=1/2/4 rev=two-way conf=assessed id=hard-read-followups` `return: likelihood a fake differs from the real cmdlet in a way a test relies on, p 0.4, estimated; impact a test passes against behaviour the real host lacks; evidence the B3 and C1 lane reports, 2026-11-04 and 2026-11-06`
+  - `worker: sonnet 1/2/4 h, needs the modules installed`
+
+- **hard-nested-shouldprocess** Check the nested ShouldProcess helpers in `Set-Windows11PrivacyHardening.ps1`, `Set-WindowsSchannelTlsHardening.ps1` and `Remove-WindowsProvisionedBloatwareApps.ps1` prompt once per change under the new `ConfirmImpact = 'High'`, not twice, and decide whether `windows-hardening\` needs its own README. `score: kind=debt gain=0.1/0.5/1 p=0.4 hours=0.5/1/2 rev=two-way conf=assessed id=hard-nested-shouldprocess` `return: likelihood an operator runs these live without -Confirm:$false, p 0.4, estimated; impact a doubled prompt per change; evidence the B4 lane report on 2026-11-06`
+  - `worker: haiku 0.5/1/2 h`
 
 ## Moved to the work board
 

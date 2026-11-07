@@ -4,8 +4,8 @@
 # Both scripts set $script:WhatIfPreference = $false around Import-Module so ConfigDefender and ConfigCI
 # load under `pwsh -File script -WhatIf`, and restore it in finally. If the restore broke, every later
 # `-WhatIf:$WhatIfPreference` would be false and a preview would apply real changes. The ordinary suite
-# cannot see that when unelevated, because 'Skipped: requires elevation' is returned before ShouldProcess
-# is reached. Every run here starts pwsh -File directly (the runner-script route never reproduces the
+# cannot see that for items whose value was not read unelevated, which return 'Skipped: requires elevation
+# (not read)' before ShouldProcess is reached (an item whose value was read does reach it under -WhatIf). Every run here starts pwsh -File directly (the runner-script route never reproduces the
 # fault), with the fake Defender and ConfigCI modules staged ahead of the real ones and a stand-in
 # CiTool, and always with -WhatIf, so no real Defender or code integrity setting can be touched.
 #

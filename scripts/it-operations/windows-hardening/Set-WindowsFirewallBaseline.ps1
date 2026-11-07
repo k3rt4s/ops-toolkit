@@ -3,6 +3,10 @@
 Plan, apply, and roll back a Windows Firewall baseline: pinned profile defaults, dropped-packet logging, and opt-in cleanup of risky inbound allow rules.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Run elevated. Every control needs administrator rights, and so does the firewall backup this
   script takes first.
@@ -575,15 +579,34 @@ function Get-RollbackPlan {
 # Apply one plan item. Records what changed into $script:ChangedSettings.
 # ---------------------------------------------------------------------------
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    if ("$($Item.CurrentProfile)" -eq 'unknown' -or "$($Item.CurrentRemoteAddress)" -eq 'unknown') { return $true }
+    $false
+}
+
 function Invoke-PlanItem {
     [OutputType([string])]
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
     if ($Item.Action -like 'Skipped:*') { return $Item.Action }
     if ($Item.Category -eq 'Unreadable') { return "Failed: $($Item.CurrentValue)" }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if (-not $Rollback) {
         # A change whose prior value could not be read could not be rolled back, so it is not made.
         if ("$($Item.CurrentValue)" -eq 'unknown' -or "$($Item.CurrentProfile)" -eq 'unknown' -or "$($Item.CurrentRemoteAddress)" -eq 'unknown') {

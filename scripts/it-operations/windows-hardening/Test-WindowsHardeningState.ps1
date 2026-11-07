@@ -10,7 +10,9 @@ Instructions:
 - Runs unelevated. The hardening scripts refuse to apply without elevation but
   will always produce a plan, which is all this needs. Some current values cannot be
   read without elevation; those items are reported as Unread, never as compliant, and
-  an elevated run reads them.
+  an elevated run reads them. Run unelevated under -WhatIf, a plan item whose value was read is
+  'Previewed' (Drifted here) and one whose value was not read is 'Skipped: requires elevation
+  (not read)' (Unread here).
 - -Target selects what to verify. SchannelTls and Privacy are read from the older
   plan CSV (Action: NoChange, CreateValue, SetValue, DeleteValue, Skipped). A local row of
   that plan the checker cannot classify is Unread, not drift and not a pass: a Skipped
@@ -34,7 +36,11 @@ Instructions:
   Unread (the value could not be read, for example because the item needs elevation
   to read, or the read failed) and NotCheckedRemotely. Unread and NotCheckedRemotely are
   undetermined: never counted compliant, and any one of them makes Passed false.
-- A newer-schema item whose result is exactly 'Skipped: requires elevation' is
+- 'Previewed' is Drifted. 'Skipped: requires elevation (not read)', which the scripts return
+  for an unelevated -WhatIf item whose current value was not read, is Unread like any other
+  'Skipped:*' result.
+- A state file from an older run can still carry the exact result 'Skipped: requires elevation'
+  (an unelevated item before the scripts previewed under -WhatIf). Such an item is
   reported as Drifted, because every one of those scripts decides 'No change' before it
   checks elevation, so reaching the elevation check means the value was read and is not
   the desired one. Where the item itself says its current value was unreadable, it is
@@ -290,7 +296,9 @@ function Get-HardeningStateVerdict {
     } elseif ($result -like 'Failed:*') {
         $state = 'Failed'; $reason = 'The script reported a failure; counted as drift.'
     } elseif ($result -eq 'Skipped: requires elevation') {
-        # Every newer script returns NoChange before it checks elevation, so an item that
+        # The exact result now comes only from older state files and live unelevated runs (an unelevated
+        # -WhatIf run returns Previewed or 'Skipped: requires elevation (not read)'). Every script
+        # returns NoChange before it checks elevation, so an item that
         # reaches this result was read and is not already the desired value. The exceptions
         # are items whose own text says the read failed: Set-WindowsNetworkProtocolHardening
         # and Set-WindowsFirewallBaseline check elevation before their unreadable test.

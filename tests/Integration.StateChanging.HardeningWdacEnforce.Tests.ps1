@@ -581,7 +581,7 @@ Describe 'Set-WdacEnforcedPolicy -Mode Enforce' {
         @($calls | Where-Object { $_ -match '--update-policy|--remove-policy' }).Count | Should -Be 0
         (Get-StateItem -ReportDirectory $reports -Setting 'ConfigCI').Result | Should -Be 'Met'
         (Get-StateItem -ReportDirectory $reports -Setting 'EnforcedPolicyBuilt').Result | Should -Be 'Met'
-        $expected = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        $expected = 'Previewed'  # the stand-in CiTool lists policies, so the row was read unelevated too
         (Get-StateByCategory -ReportDirectory $reports -Category 'EnforceBasePolicy').Result | Should -Be $expected
     }
 }

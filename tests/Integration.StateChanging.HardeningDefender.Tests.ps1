@@ -211,9 +211,9 @@ Describe 'Set-WindowsDefenderHardening -WhatIf reads real Defender values' {
 
     It 'stays a preview: the state records Previewed and the Defender commands attempted nothing' {
         $script:wi.State.Count | Should -BeGreaterThan 18
-        # Elevated, a setting that would change is Previewed; unelevated it is skipped before the preview
-        # is reached. Either way nothing is Applied, Reverted or Failed.
-        $changing = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        # A setting that would change is Previewed, elevated or not: unelevated -WhatIf still previews an item
+        # whose value was read. Nothing is Applied, Reverted or Failed.
+        $changing = 'Previewed'
         @($script:wi.State | Where-Object { "$($_.Result)" -eq $changing }).Count | Should -BeGreaterThan 0
         @($script:wi.State | Where-Object { "$($_.Result)" -notin @($changing, 'NoChange', 'ReportOnly') }).Count | Should -Be 0
         # Assert-OpsNoChangeUnderWhatIf takes the pair shape the runner returns; this run has the same two fields.

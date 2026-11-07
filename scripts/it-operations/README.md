@@ -14,6 +14,10 @@ This folder contains active endpoint and general IT operations scripts for the o
 | `windows-hardening\`        | Windows 11 hardening for a physical or VDI machine, standalone or joined (TLS, privacy, bloatware, Defender, credentials, protocols, logging, firewall, WDAC audit, BitLocker), workstation posture, and its compliance check. |
 | `..\..\data\it-operations\` | Example non-secret input data.                                                                                                                                                                                                 |
 
+Before trusting the hardening scripts on a real host, work through
+[windows-hardening/VDI_RUN_SHEET.md](windows-hardening/VDI_RUN_SHEET.md): it lists every behaviour the
+tests could only check against fakes, with the command to confirm each one on a VDI or test machine.
+
 ## Examples
 
 Preview randomizing the MAC address of every physical adapter:

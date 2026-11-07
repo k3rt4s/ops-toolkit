@@ -843,7 +843,7 @@ function CiTool.exe {
         $deploy = @($plan | Where-Object Category -eq 'DeployAuditPolicy')
         $deploy.Count | Should -Be 1
         $deploy[0].Action | Should -Not -Match '\(not built\)'
-        $expected = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        $expected = 'Previewed'  # the stand-in CiTool lists policies, so the row was read unelevated too
         ($state | Where-Object Category -eq 'DeployAuditPolicy').Result | Should -Be $expected
     }
 

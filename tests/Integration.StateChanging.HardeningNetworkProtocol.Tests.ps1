@@ -9,7 +9,8 @@
 # this machine's current values and are only asserted on their targets and desired values.
 #
 # Every control needs administrator rights. The suite is normally run unelevated, where the
-# script marks each item 'Skipped: requires elevation' and the mutation assertions are
+# script previews each item whose value was read under -WhatIf (an unread one is 'Skipped: requires
+# elevation (not read)', a live run 'Skipped: requires elevation') and the mutation assertions are
 # skipped; the plan JSON assertions still run because an unelevated run writes the plan.
 
 BeforeAll {

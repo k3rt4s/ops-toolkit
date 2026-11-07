@@ -3,6 +3,10 @@
 Build reviewable allow rules from Windows Defender Application Control audit events, then enforce the toolkit's audit-mode base policy with them through a supplemental policy, or roll that back to audit mode; built and tested against fakes only.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - WARNING: this script was built and tested against fakes only. It has never been run on a real
   machine. A wrong enforced application control policy can stop a machine from starting normally
@@ -806,8 +810,26 @@ function Add-ChangedSetting {
         })
 }
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    # The deploy rows' current value is assumed; what was read is the active policy list, and a precondition
+    # that skipped because that list needs elevation means the row was not read.
+    foreach ($entry in $script:PreconditionResult.GetEnumerator()) {
+        if ($entry.Key -ne 'Elevated' -and "$($entry.Value)" -like 'Skipped:*') { return $true }
+    }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Category -eq 'Precondition') {
@@ -816,7 +838,12 @@ function Invoke-PlanItem {
         return $r
     }
     if ($Item.Action -like 'No change*') { return 'NoChange' }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if ($script:StopReason) { return "Skipped: precondition failed ($($script:StopReason))" }
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
 

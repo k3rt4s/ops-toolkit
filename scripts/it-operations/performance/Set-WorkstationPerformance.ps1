@@ -3,6 +3,10 @@
 Plan, apply, and roll back workstation performance settings: active power plan and Defender exclusions.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Read the root README.md and the IT operations README.md before running this script.
 - Run with -WhatIf first and review the generated plan CSV/JSON.
@@ -174,12 +178,15 @@ function Get-ForwardPlan {
         try { $current = Get-MpPreference -ErrorAction Stop } catch { $current = $null }
         $existingPaths = @(if ($current) { $current.ExclusionPath })
         $existingProcs = @(if ($current) { $current.ExclusionProcess })
+        # Get-MpPreference only lists the exclusions to an administrator, so an unelevated or failed read says nothing
+        # about what is excluded: the rows are 'unknown' (unread) rather than a false 'absent'.
+        $exclusionsRead = ($null -ne $current) -and (Test-IsAdministrator)
 
         foreach ($p in $DefenderPathExclusion) {
             $already = $existingPaths -contains $p
             $items.Add([pscustomobject]@{
                     Category = 'DefenderPathExclusion'; Setting = $p
-                    CurrentValue = if ($already) { 'present' } else { 'absent' }
+                    CurrentValue = if (-not $exclusionsRead) { 'unknown' } elseif ($already) { 'present' } else { 'absent' }
                     DesiredValue = 'present'; RequiresAdmin = $true
                     Action = if ($already) { 'No change (already excluded)' } else { "Add Defender path exclusion: $p" }
                 })
@@ -188,7 +195,7 @@ function Get-ForwardPlan {
             $already = $existingProcs -contains $proc
             $items.Add([pscustomobject]@{
                     Category = 'DefenderProcessExclusion'; Setting = $proc
-                    CurrentValue = if ($already) { 'present' } else { 'absent' }
+                    CurrentValue = if (-not $exclusionsRead) { 'unknown' } elseif ($already) { 'present' } else { 'absent' }
                     DesiredValue = 'present'; RequiresAdmin = $true
                     Action = if ($already) { 'No change (already excluded)' } else { "Add Defender process exclusion: $proc" }
                 })
@@ -235,12 +242,30 @@ function Get-RollbackPlan {
 # Apply one plan item. Records what actually changed (for the rollback file).
 # ---------------------------------------------------------------------------
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
 
     try {

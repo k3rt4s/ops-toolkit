@@ -3,6 +3,10 @@
 Plan, apply, and roll back local credential-protection registry settings on a physical or VDI Windows 11 machine, standalone or joined, and list the modules LSA protection would stop loading.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON. The plan also lists report-only
   rows (is virtualization-based security running, are Secure Boot and a TPM present) that are read
@@ -661,15 +665,33 @@ function Get-RollbackPlan {
 # Apply one plan item. Records what changed into $script:ChangedSettings.
 # ---------------------------------------------------------------------------
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     [OutputType([string])]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Category -eq 'Report') { return 'ReportOnly' }
     if ($Item.Action -like 'No change*') { return 'NoChange' }
     if ($Item.PSObject.Properties['Precondition'] -and -not [string]::IsNullOrEmpty([string]$Item.Precondition)) { return [string]$Item.Precondition }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if (-not $PSCmdlet.ShouldProcess("$($Item.RegistryPath)\$($Item.Setting)", $Item.Action)) { return 'Previewed' }
 
     try {

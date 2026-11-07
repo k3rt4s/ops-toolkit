@@ -174,7 +174,7 @@ pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBl
 pwsh -File .\scripts\it-operations\windows-hardening\Remove-WindowsProvisionedBloatwareApps.ps1 -Rollback -RollbackStatePath .\reports\windows-hardening\windows11-appx-removal-state-YYYYMMDD_HHMMSS.csv -WhatIf
 ```
 
-Preview the Windows hardening scripts (physical or VDI, standalone or joined). Each state-changing one needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`; `Export-WdacAuditEvent.ps1` only reads. The repository README lists what each one changes by default and what is opt-in:
+Preview the Windows hardening scripts (physical or VDI, standalone or joined). Each state-changing one needs `-ReportDirectory`, applies only elevated, and rolls back with `-Rollback`. A live run (no `-WhatIf`) prompts for each change unless `-Confirm:$false` is passed. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires elevation'; unelevated `-WhatIf` previews the items whose current value could be read and marks the rest 'Skipped: requires elevation (not read)'; `Export-WdacAuditEvent.ps1` only reads. The repository README lists what each one changes by default and what is opt-in:
 
 ```powershell
 pwsh -File .\scripts\it-operations\windows-hardening\Set-WindowsDefenderHardening.ps1 -ReportDirectory <dir> -WhatIf

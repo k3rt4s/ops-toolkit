@@ -28,9 +28,6 @@ talk") and two from the `pack-fanout-bind` landing review (see "Shipped 2026-09-
 evidence-pack estate fan-out"). The declined empty-split wording item is a record, not
 work, and is not indexed.
 
-- **split-list-outputs** Fold the script-local `ConvertTo-OpsSplitList` in `Export-CloudIncidentReadiness.ps1` onto the `OpsToolkit.Reporting` copy and make its `.OUTPUTS` match what it returns. See "Shipped 2026-09-29: evidence-pack estate fan-out". `score: kind=debt gain=0.25/0.5/2 p=0.5 freq=1 hours=0.5/1/2 risk=0.1x1 rev=two-way conf=assessed id=split-list-outputs` `return: likelihood the function is touched about once a year, p 0.5, estimated, nothing counted; impact each touch costs about half an hour keeping two copies and an AST-lifting test in step, and a caller that skips the @() idiom hits a StrictMode error on an empty list; evidence the module copy and scripts\entra\Export-CloudIncidentReadiness.ps1 line 946, tests\Export-SecurityControlEvidencePack.Tests.ps1 lines 248-251 lift it from the script AST`
-  - `worker: sonnet 1.5/3/5 h`
-
 Six items were filed on 2026-10-29 when the standalone Windows 11 hardening scripts landed.
 Five are below; the sixth, domain-joined variants (hard-domain, score 0.0), went to
 `BOARD_DEFERRED_2026.md` beside the board. pack-unread and the seven items after
@@ -40,9 +37,6 @@ facts the scripts assume but nobody has checked on a real machine, is under "Ing
 
 - **hard-elevated-run** Run every hardening spec elevated on a disposable Windows 11 VM, then run each script for real there and check the unverified facts listed below. `score: kind=prevent gain=2/6/20 p=0.5 hours=2/4/8 risk=0.1x2 rev=two-way conf=assessed flags=security id=hard-elevated-run` `return: likelihood the scripts are applied to at least one real machine soon, p 0.5 that one of the 22 unverified facts is wrong in a way that matters, estimated, nothing run; impact a wrong registry value, cmdlet shape or event field means a control reads compliant when it is not, or a rollback that does not restore, about 2 to 20 hours to find and repair on a live machine; evidence the elevated It blocks in tests\Integration.StateChanging.Hardening*.Tests.ps1 are skipped on the unelevated runner on 2026-10-29, and the unverified list below`
   - `worker: sonnet 2/4/8 h, on a VM the developer provides; work through scripts\it-operations\windows-hardening\VDI_RUN_SHEET.md, which lists every check with its command (2026-11-06)`
-
-- **file-comma-validateset** Fix the `pwsh -File` examples that pass a comma list to a `ValidateSet` parameter, which `-File` passes as one string and the set rejects: `Invoke-DiskSpaceReclaim.ps1` lines 46, 51 and 105 (`-Target`), `New-AzKeyVaultServicePrincipal.ps1` lines 23 and 105 (`-CertificatePermissions`), and `Invoke-RepoValidation.ps1` line 24 (`-Gate`). `score: kind=debt gain=0.1/0.25/0.5 p=0.6 hours=0.25/0.5/1 rev=two-way conf=assessed id=file-comma-validateset` `return: likelihood someone copies an example, p 0.6, estimated; impact the copied command fails with a validation error, a few minutes to rewrite it; evidence pwsh -File with -T Aa,Bb rejected by ValidateSet in both pwsh and powershell.exe on 2026-10-29, and the hardening README examples moved to the -Command form the same day`
-  - `worker: haiku 0.25/0.5/1 h`
 
 Seven of the items above shipped on 2026-11-03 (wdac-enforce, bitlocker-tpm-pin, pack-unread,
 hard-omitted-settings, legacy-undetermined-pass, bitlocker-decrypting-volume,
@@ -59,9 +53,6 @@ brings hard-domain back from `BOARD_DEFERRED_2026.md` and adds the items below.
 
 - **wdac-audit-rollback-guard** Make `Set-WdacAuditPolicy.ps1 -Rollback` refuse while a toolkit supplemental policy from `Set-WdacEnforcedPolicy.ps1` is active; today only the help says to roll the enforce script back first, and the reverse order leaves an orphan supplemental. `score: kind=prevent gain=0.25/1/3 p=0.2 hours=0.5/1/2 rev=two-way conf=assessed flags=security id=wdac-audit-rollback-guard` `return: likelihood rollbacks run out of order, p 0.2, estimated; impact an orphan supplemental policy, an hour to clean up; evidence the A3 lane report on 2026-11-03`
   - `worker: sonnet 0.5/1/2 h`
-
-- **validation-outputdir-empty-message** `Invoke-RepoValidation.ps1` with several gates and `-OutputDirectory` threw "Cannot bind argument to parameter 'Message' because it is an empty string"; the same run without `-OutputDirectory` is clean. Not investigated. `score: kind=debt gain=0.1/0.25/1 p=0.5 hours=0.25/0.5/1 rev=two-way conf=assessed id=validation-outputdir-empty-message` `return: likelihood a lane passes -OutputDirectory, p 0.5, estimated; impact a gate run that dies before its report; evidence the A2 lane report on 2026-11-03`
-  - `worker: haiku 0.25/0.5/1 h`
 
 The remaining unverified facts now include the FVE startup-authentication value codes (A2), CiTool
 and New-CIPolicy behaviour for the enforce path (A3), and the Administrator Protection registry
@@ -81,11 +72,7 @@ deferred the items below; none has been started.
 - **hard-offhost-followups** Ship a scheduled export task, an Azure Monitor Agent data collection rule for the forwarded events, and a guard-break test for the A8 off-host path. `score: kind=feature gain=0.5/1/4 p=0.4 hours=2/4/8 rev=two-way conf=assessed flags=security id=hard-offhost-followups` `return: likelihood off-host forwarding is turned on, p 0.4, estimated; impact events are forwarded only when someone runs the export; evidence the B2 lane report on 2026-11-05`
   - `worker: sonnet 2/4/8 h`
 
-- **hard-read-followups** Read the Winsock `Enabled` value in the LSA preflight instead of inferring it, probe real wildcard behaviour where the C1 fakes assumed it, and read the ActiveDirectory and WebAdministration cmdlets' `-WhatIf` metadata so their fakes match. `score: kind=debt gain=0.25/1/3 p=0.4 hours=1/2/4 rev=two-way conf=assessed id=hard-read-followups` `return: likelihood a fake differs from the real cmdlet in a way a test relies on, p 0.4, estimated; impact a test passes against behaviour the real host lacks; evidence the B3 and C1 lane reports, 2026-11-04 and 2026-11-06`
-  - `worker: sonnet 1/2/4 h, needs the modules installed`
-
-- **hard-nested-shouldprocess** Check the nested ShouldProcess helpers in `Set-Windows11PrivacyHardening.ps1`, `Set-WindowsSchannelTlsHardening.ps1` and `Remove-WindowsProvisionedBloatwareApps.ps1` prompt once per change under the new `ConfirmImpact = 'High'`, not twice, and decide whether `windows-hardening\` needs its own README. `score: kind=debt gain=0.1/0.5/1 p=0.4 hours=0.5/1/2 rev=two-way conf=assessed id=hard-nested-shouldprocess` `return: likelihood an operator runs these live without -Confirm:$false, p 0.4, estimated; impact a doubled prompt per change; evidence the B4 lane report on 2026-11-06`
-  - `worker: haiku 0.5/1/2 h`
+Five debt items scored 0.1 to 0.2 left this index for `BOARD_DEFERRED_2026.md` on 2026-11-09 on the developer's decision (split-list-outputs, file-comma-validateset, validation-outputdir-empty-message, hard-read-followups, hard-nested-shouldprocess). The security items above stay for the developer's call.
 
 ## Moved to the work board
 

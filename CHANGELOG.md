@@ -5,6 +5,17 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-09
+
+### Changed: dependency bump and backlog trim
+
+- `blake3` 1.0.9 to 1.0.11 in `scripts\it-operations\utilities\requirements.txt` (Dependabot PR #1). Verified before
+  merge on a venv rebuilt from both pinned files: the BLAKE3 test vector for `abc` matched, and `compare_folders.py`
+  and `export_emails_to_parquet.py` ran clean on synthetic input.
+- Five debt items scored 0.1 to 0.2 moved from FUTURE_FEATURES.md to `BOARD_DEFERRED_2026.md` beside the board:
+  split-list-outputs, file-comma-validateset, validation-outputdir-empty-message, hard-read-followups and
+  hard-nested-shouldprocess. The seven security items stay in the scored index.
+
 ## 2026-11-06
 
 ### Added: the VDI run sheet

@@ -55,6 +55,11 @@ reported as Met, and the summary counts NotAssessed separately from NotMet, beca
 an evidence pack that quietly converts "we did not check" into "we are fine" is
 worse than no pack at all.
 
+CFG-01 (hardening) runs the hardening verifier against every target it supports and
+reads its UnreadCount and Passed: it is NotAssessed when nothing was checked, Partial
+while any item is unread or unchecked, and Met only when the verifier passed with
+nothing unread.
+
 Required syntax:
 pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1
 pwsh -File .\scripts\reporting\Export-SecurityControlEvidencePack.ps1 -IncludeEntra -IncludeActiveDirectory
@@ -1107,7 +1112,55 @@ if ($null -eq $lifecycle) {
 # ---------------------------------------------------------------------------
 # Transport security and hardening.
 # ---------------------------------------------------------------------------
-$hardeningRun = Invoke-Collector -Name 'hardening' -RelativePath 'it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
+function Get-OpsHardeningControlStatus {
+    <#
+    .SYNOPSIS
+    Grade CFG-01 from the hardening verifier's summary counts.
+
+    .DESCRIPTION
+    NotAssessed when nothing was checked. Known drift decides NotMet (nothing compliant) or Partial.
+    Without drift, Met needs the verifier's own Passed and nothing unread; anything undetermined
+    (unread, unchecked remotely, an unchecked target) is Partial, never Met.
+
+    .PARAMETER ItemsChecked
+    Items with a verdict.
+
+    .PARAMETER TotalDrift
+    Items not in the desired state.
+
+    .PARAMETER CompliantCount
+    Items in the desired state.
+
+    .PARAMETER UnreadCount
+    Items the verifier could not read.
+
+    .PARAMETER Passed
+    The verifier's own Passed flag.
+
+    .OUTPUTS
+    String: Met, NotMet, Partial, or NotAssessed.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)][int]$ItemsChecked,
+        [Parameter(Mandatory = $true)][int]$TotalDrift,
+        [Parameter(Mandatory = $true)][int]$CompliantCount,
+        [Parameter(Mandatory = $true)][int]$UnreadCount,
+        [Parameter(Mandatory = $true)][bool]$Passed
+    )
+
+    if ($ItemsChecked -eq 0) { return 'NotAssessed' }
+    if ($TotalDrift -gt 0) { if ($CompliantCount -gt 0) { return 'Partial' } else { return 'NotMet' } }
+    if ($UnreadCount -gt 0 -or -not $Passed) { return 'Partial' }
+    return 'Met'
+}
+
+# The verifier's own default stays SchannelTls and Privacy. The pack names every target explicitly, as one
+# comma-joined value (Start-Process hands the verifier one literal string, which it splits itself), and reads
+# UnreadCount and Passed below so an item the verifier could not read never turns into a Met control.
+$hardeningTargetArgument = 'SchannelTls,Privacy,Defender,CredentialProtection,NetworkProtocol,ExploitMitigation,AuditLogging,RemoteAccess,LocalAccount,Firewall,WdacAudit,BitLocker'
+$hardeningRun = Invoke-Collector -Name 'hardening' -RelativePath 'it-operations\windows-hardening\Test-WindowsHardeningState.ps1' -Argument @('-Target', $hardeningTargetArgument)
 $hardening = Get-CollectorSummary -Run $hardeningRun
 if ($null -eq $hardening) {
     Add-Control -Id 'CFG-01' -Question 'Are systems hardened to a documented configuration standard?' `
@@ -1116,10 +1169,17 @@ if ($null -eq $hardening) {
     $drift = [int](Get-OpsPropertyValue -InputObject $hardening -Name 'TotalDrift')
     $checked = [int](Get-OpsPropertyValue -InputObject $hardening -Name 'ItemsChecked')
     $compliant = [int](Get-OpsPropertyValue -InputObject $hardening -Name 'CompliantCount')
+    $unread = [int](Get-OpsPropertyValue -InputObject $hardening -Name 'UnreadCount')
+    $notCheckedRemotely = [int](Get-OpsPropertyValue -InputObject $hardening -Name 'NotCheckedRemotelyCount')
+    # A summary without Passed (an older verifier) is not a pass.
+    $hardeningPassed = ((Get-OpsPropertyValue -InputObject $hardening -Name 'Passed') -eq $true)
+
+    $hardeningStatus = Get-OpsHardeningControlStatus -ItemsChecked $checked -TotalDrift $drift -CompliantCount $compliant `
+        -UnreadCount $unread -Passed $hardeningPassed
 
     Add-Control -Id 'CFG-01' -Question 'Are systems hardened to a documented configuration standard?' `
-        -Status $(if ($checked -eq 0) { 'NotAssessed' } elseif ($drift -eq 0) { 'Met' } elseif ($compliant -gt 0) { 'Partial' } else { 'NotMet' }) `
-        -Finding "$compliant of $checked hardening items are in the desired state. Items not in the desired state: $drift." `
+        -Status $hardeningStatus `
+        -Finding "$compliant of $checked hardening items are in the desired state. Items not in the desired state: $drift. Items that could not be read: $unread. Items not checked remotely: $notCheckedRemotely. Unread and unchecked items are never counted as compliant." `
         -Evidence $hardeningRun.RelativeOutputPath -Collector 'Test-WindowsHardeningState.ps1'
 }
 

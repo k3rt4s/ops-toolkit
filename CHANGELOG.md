@@ -15,6 +15,114 @@ driver ages, external-drive roles, the developer's own scheduled tasks), the tri
 run on 2026-11-16, the PowerShell 5.1 and registry pitfalls that run hit, the shape of the user-scope and elevated fix
 scripts with per-value backups, and the post-reboot verification commands.
 
+## 2026-11-09
+
+### Changed: dependency bump and backlog trim
+
+- `blake3` 1.0.9 to 1.0.11 in `scripts\it-operations\utilities\requirements.txt` (Dependabot PR #1). Verified before
+  merge on a venv rebuilt from both pinned files: the BLAKE3 test vector for `abc` matched, and `compare_folders.py`
+  and `export_emails_to_parquet.py` ran clean on synthetic input.
+- Five debt items scored 0.1 to 0.2 moved from FUTURE_FEATURES.md to `BOARD_DEFERRED_2026.md` beside the board:
+  split-list-outputs, file-comma-validateset, validation-outputdir-empty-message, hard-read-followups and
+  hard-nested-shouldprocess. The seven security items stay in the scored index.
+
+## 2026-11-06
+
+### Added: the VDI run sheet
+
+`scripts\it-operations\windows-hardening\VDI_RUN_SHEET.md` lists every behaviour the suite verified only against
+the fake system modules, section by section, with the command that confirms each one on a VDI or test machine and an
+empty result column. It covers cmdlet output shapes, registry value types, SID handling, the BitLocker escrow failure
+path, the per-change prompt and the unelevated `-WhatIf` preview. It has not been run on a real host yet.
+
+### Changed: a live hardening run prompts per change, and an unelevated -WhatIf previews what it could read
+
+Every `Invoke-PlanItem` in the fourteen plan-based scripts (thirteen hardening scripts and
+`Set-WorkstationPerformance.ps1`) now declares its script's `ConfirmImpact = 'High'`. Before, it took the default,
+Medium, so its `ShouldProcess` never prompted. A live run now asks once per change unless `-Confirm:$false` is passed;
+`-WhatIf` is unchanged. Under `-WhatIf` only, an unelevated item that needs admin goes through `ShouldProcess` and
+returns `Previewed` when its current value was read, or `Skipped: requires elevation (not read)` when it was not. A
+live unelevated run still returns `Skipped: requires elevation` and changes nothing. `Test-WindowsHardeningState.ps1`
+already maps `Previewed` to Drifted and any other `Skipped:` to Unread, so no verdict changed. Unelevated
+`Get-MpPreference` hides exclusions, so `Set-WorkstationPerformance.ps1` now reports them as unknown, where it
+previously reported none. New tests: `HardeningPlanItem.Contract` (AST: each `Invoke-PlanItem` matches its script),
+`HardeningConfirmPrompt` (a `-NonInteractive` live run without `-Confirm:$false` changes nothing) and
+`HardeningUnelevatedWhatIf` (three scripts).
+
+### Added: organisation settings, off-host event forwarding and BitLocker key escrow
+
+`Get-OpsOrgSettings` (`modules\OpsToolkit.Hardening`) reads `%ProgramData%\OpsToolkit\settings.json`. It never throws:
+a missing file is NotConfigured, and a bad file or section is Invalid with a reason. With a WEF destination,
+`Set-WindowsAuditLogging.ps1` plans the EventForwarding SubscriptionManager value and NETWORK SERVICE membership of
+Event Log Readers, both with rollback. It reports an Azure Monitor Agent or Share destination and WinRM state but does
+not build them. `Enable-BitLockerOsVolume.ps1` takes its key destination from `-RecoveryKeyDirectory`, then the
+settings Folder, Entra ID or Active Directory. It refuses before any change when none is usable, and it escrows every
+new recovery password protector before `Enable-BitLocker`. A failed escrow removes the protector and stops with
+BitLocker not enabled.
+
+### Fixed: the test fakes follow the cmdlets they stand in for
+
+Every mutating fake declares `SupportsShouldProcess` only where the real cmdlet does and records only inside
+`ShouldProcess`; every recorder writes with `-WhatIf:$false`. Read fakes honour their filters (`-Name`, `-Group`,
+`-SID`, wildcards). `FakeSystemModules.Contract.Tests.ps1` checks the recorder rule across every fake module.
+
+## 2026-11-04
+
+### Added: host context for VDI and joined machines, session-host safety gates and NTLM auditing
+
+New module `modules\OpsToolkit.Hardening`: `Get-OpsHostContext` returns the join type, AVD session host, MDM and VM
+facts from `dsregcmd /status`, the RD agent key and service, the Enrollments key and `Win32_ComputerSystem`. A failed
+probe leaves its field null and listed in Unread. On a session host, or when that answer is unread, the scripts skip
+anything that would cut off other users: Remote Desktop stays on, the inbound firewall rule controls are skipped, and
+Administrator Protection and outgoing NTLM denial are not written. NTLM auditing is on by default, with denial of
+outgoing NTLM behind `-RestrictOutgoingNtlm`. A domain, hybrid or MDM host gets a note that policy may override local
+writes.
+
+## 2026-11-03
+
+### Added: an LSA protection preflight in Set-WindowsCredentialProtection.ps1
+
+Before LSA protection is planned, the script lists every LSA authentication, security and notification package and
+Winsock name-space provider DLL that is not validly signed by Microsoft (ThirdParty, Unsigned, InvalidSignature), or
+whose file or signature cannot be read (Unread, never safe). It writes `credential-protection-lsa-preflight-*.csv`
+and `.json`. The preflight is a report only and does not block the change.
+
+### Added: a reviewed WDAC enforce path, a BitLocker startup PIN, four ASR rules and opt-in WPAD off
+
+`Set-WdacEnforcedPolicy.ps1` is a separate, reviewed path from the audit-only WDAC policy to an enforced one.
+`-Mode BuildAllowRules` builds a supplemental allow-rules XML from the Code Integrity audit events into the report
+directory and deploys nothing. `-Mode Enforce` takes the operator-reviewed XML. It refuses unless the toolkit audit
+base is active, not already enforced, and carries options 9, 10 and 17. It deploys the supplemental, then redeploys
+the base with option 3 removed under the same ID. `-Rollback` restores audit mode and removes that supplemental. It
+validates the whole rollback file first and consumes it only after a clean run. `Set-WdacAuditPolicy.ps1` now carries
+options 9, 10 and 17 and still has no enforce switch. The enforce path is tested against fakes only and has never run
+on a real machine. A wrong enforced policy can stop a machine starting normally, so test it in a disposable VM first.
+
+`Enable-BitLockerOsVolume.ps1` gains an opt-in TPM plus startup PIN protector: `-UseTpmAndPin` with a SecureString
+`-StartupPin`, numeric, 6 to 20 digits. The PIN is never logged or written to any report, plan, state or rollback
+file. The FVE startup-authentication policy values are planned as rows, and their prior values go into the rollback
+file. They are undone if the enable fails and restored on rollback. The PIN is refused on a virtual machine, or where
+the model cannot be read, because nobody can type a pre-boot PIN on a VDI guest. A volume in DecryptionInProgress or
+DecryptionPaused now stops the run with no changes. The FVE value codes come from the Learn reference and are
+unverified on a live machine.
+
+`Set-WindowsDefenderHardening.ps1` plans 18 ASR rules, up from 14. The new four are Adobe Reader child processes,
+Win32 API calls from Office macros, rebooting in Safe Mode, and copied or impersonated system tools. The last reaches
+Block only when named in `-AsrRuleId`, because Microsoft documents heuristic false positives. The Exchange-only
+Webshell rule stays out. `Set-WindowsNetworkProtocolHardening.ps1` gains an opt-in, rollback-aware `-DisableWpad`,
+which turns off WinHTTP WPAD discovery only. `Set-WindowsLocalAccountPolicy.ps1` help names the documented
+Administrator Protection route, the Policy CSP or GPO, and the cases where Microsoft says not to enable it, including
+Azure Virtual Desktop session hosts. Its registry value is undocumented, so no script writes it.
+
+### Fixed: unclassifiable checker rows count as unread, and the evidence pack grades every hardening target
+
+`Test-WindowsHardeningState.ps1` counts a local legacy-plan row it cannot classify (Skipped, a service, Missing, an
+unknown action) as Unread instead of folding it into a pass, and compares scheduled-task rows. `-Target` splits a
+comma-joined value. `Export-SecurityControlEvidencePack.ps1` grades CFG-01 from the checker's `UnreadCount` and `Passed`
+through `Get-OpsHardeningControlStatus`, and passes all twelve targets. New tests prove `Set-WindowsDefenderHardening.ps1`
+and `Set-WdacAuditPolicy.ps1` restore `$WhatIfPreference` after loading their modules. Two of them run unelevated and
+fail without the restore.
+
 ## 2026-11-02
 
 ### Fixed: privacy hardening carries on past a refused setting, and exploit mitigation no longer reports unstored values as applied

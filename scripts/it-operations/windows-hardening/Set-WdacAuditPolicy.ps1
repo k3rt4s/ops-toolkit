@@ -3,6 +3,10 @@
 Plan, apply, and roll back a Windows Defender Application Control base policy in audit mode only, built from a Microsoft in-box example policy, so would-be blocks are logged and nothing is blocked.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON. Under -WhatIf the script still
   builds the policy files (XML and binary) in the report directory so you can inspect exactly
@@ -21,9 +25,17 @@ Instructions:
   %windir%\schemas\CodeIntegrity\ExamplePolicies (override the folder with
   -ExamplePolicyDirectory). -BasePolicy DefaultWindows (the default) starts from
   DefaultWindows_Audit.xml; AllowMicrosoft starts from AllowMicrosoft.xml. Either way the copy
-  gets a new policy ID, the name 'ops-toolkit WDAC audit', and two rule options forced on
-  before it is converted to a binary policy: Audit Mode (Set-RuleOption -Option 3) and Unsigned
-  System Integrity Policy (Set-RuleOption -Option 6, because the policy is deployed unsigned).
+  gets a new policy ID, the name 'ops-toolkit WDAC audit', and five rule options forced on
+  before it is converted to a binary policy: Audit Mode (Set-RuleOption -Option 3), Unsigned
+  System Integrity Policy (-Option 6, because the policy is deployed unsigned), and three that
+  only matter for a later move to enforcement, none of which blocks anything in audit mode:
+  Advanced Boot Options Menu (-Option 9) and Boot Audit on Failure (-Option 10), which keep a
+  machine startable if an enforced policy blocks a boot driver, and Allow Supplemental Policies
+  (-Option 17), which lets Set-WdacEnforcedPolicy.ps1 add reviewed allow rules as a supplemental
+  policy instead of replacing this base. Option 17 does let another supplemental policy attach to
+  the base, but deploying any policy already needs administrator rights, which can replace the
+  base outright. A base deployed by an earlier version of this script lacks 9, 10 and 17:
+  Set-WdacEnforcedPolicy.ps1 refuses it, so roll it back here and deploy it again.
 - -CiToolPath names the CiTool program the script runs (default CiTool.exe, resolved from the
   path as before). Point it at another executable or script to run the plan against a stand-in
   that never touches the machine's policies; the script still reads and changes policy only
@@ -36,7 +48,10 @@ Instructions:
   would have blocked to the Microsoft-Windows-CodeIntegrity/Operational log (Export-WdacAuditEvent.ps1
   reads those events). Enforcement is a later, separate decision to take only after reviewing
   audit events for a representative period, because an enforced policy that misses a needed
-  driver or tool can stop the machine from booting or an application from running.
+  driver or tool can stop the machine from booting or an application from running. The reviewed
+  path to enforcement is its own script, Set-WdacEnforcedPolicy.ps1, which has its own rollback
+  and refuses to run without an operator-reviewed allow-rules file. Roll that script back before
+  rolling this one back, or its supplemental policy is left active with no base.
 - Report-only: Smart App Control state when the registry value is readable, and how many
   enforced policies are already active. Neither is changed.
 - -Rollback runs CiTool.exe --remove-policy <PolicyID> for the policy ID in the newest unconsumed
@@ -198,6 +213,14 @@ function Initialize-AuditPolicyArtifact {
     $null = Set-CIPolicyIdInfo -FilePath $xmlPath -PolicyName $script:PolicyName -ResetPolicyID
     $null = Set-RuleOption -FilePath $xmlPath -Option 3
     $null = Set-RuleOption -FilePath $xmlPath -Option 6
+    # Options a later, reviewed move to enforcement (Set-WdacEnforcedPolicy.ps1) needs already in the
+    # policy that is active: 9 Advanced Boot Options Menu and 10 Boot Audit on Failure keep a machine
+    # startable if an enforced policy blocks a boot driver, and 17 Allow Supplemental Policies lets the
+    # reviewed allow rules be added as a supplemental policy without replacing this base. None of them
+    # blocks anything while the policy is in audit mode.
+    $null = Set-RuleOption -FilePath $xmlPath -Option 9
+    $null = Set-RuleOption -FilePath $xmlPath -Option 10
+    $null = Set-RuleOption -FilePath $xmlPath -Option 17
 
     $doc = New-Object System.Xml.XmlDocument
     $doc.Load($xmlPath)
@@ -207,6 +230,9 @@ function Initialize-AuditPolicyArtifact {
     if ($options -notcontains 'Enabled:Audit Mode') { throw 'The generated policy does not carry the Enabled:Audit Mode rule option; refusing to continue.' }
     # The policy is deployed unsigned; one without this option expects a signature it does not have.
     if ($options -notcontains 'Enabled:Unsigned System Integrity Policy') { throw 'The generated policy does not carry the Enabled:Unsigned System Integrity Policy rule option (6) and would be deployed unsigned; refusing to continue.' }
+    foreach ($required in @(@{ Text = 'Enabled:Advanced Boot Options Menu'; Number = 9 }, @{ Text = 'Enabled:Boot Audit on Failure'; Number = 10 }, @{ Text = 'Enabled:Allow Supplemental Policies'; Number = 17 })) {
+        if ($options -notcontains $required.Text) { throw "The generated policy does not carry the $($required.Text) rule option ($($required.Number)), which the reviewed move to enforcement needs in the active audit policy; refusing to continue." }
+    }
 
     $cipPath = Join-Path $Directory ("{0}.cip" -f (ConvertTo-BarePolicyId $policyId))
     ConvertFrom-CIPolicy -XmlFilePath $xmlPath -BinaryFilePath $cipPath | Out-Null
@@ -451,8 +477,26 @@ function Invoke-CiToolJson {
     [pscustomobject]@{ Ok = $true; Message = '' }
 }
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    # The deploy row's current value is assumed ('not deployed'); what was read is the active policy list, and a
+    # precondition that skipped because that list needs elevation means the row was not read.
+    foreach ($entry in $script:PreconditionResult.GetEnumerator()) {
+        if ($entry.Key -ne 'Elevated' -and "$($entry.Value)" -like 'Skipped:*') { return $true }
+    }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Category -eq 'Precondition') {
@@ -461,7 +505,12 @@ function Invoke-PlanItem {
         return $r
     }
     if ($Item.Action -like 'No change*') { return 'NoChange' }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if ($script:StopReason) { return "Skipped: precondition failed ($($script:StopReason))" }
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
 

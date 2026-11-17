@@ -17,7 +17,7 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     Import-ReportingModule
     Import-ScriptFunction -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1' `
-        -FunctionName 'Get-HardeningStateVerdict', 'Get-WdacDeployVerdict'
+        -FunctionName 'Get-HardeningStateVerdict', 'Get-WdacDeployVerdict', 'Get-LegacyRowState'
 
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-hstate-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
@@ -33,6 +33,12 @@ BeforeAll {
     New-Item -ItemType Directory -Path (Join-Path $script:fakeRoot 'modules') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Reporting') `
         -Destination (Join-Path $script:fakeRoot 'modules') -Recurse -Force
+    # The checker imports OpsToolkit.Hardening for the organisation settings reader.
+    Copy-Item -LiteralPath (Join-Path (Get-RepositoryRoot) 'modules\OpsToolkit.Hardening') `
+        -Destination (Join-Path $script:fakeRoot 'modules') -Recurse -Force
+    # No checker run reads the real organisation settings file: the hook names a file that does not exist
+    # unless a test sets it. Invoke-Checker restores the variable it replaces.
+    $script:noSettingsPath = Join-Path $script:workRoot 'no-such-settings.json'
     Copy-Item -LiteralPath (Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1') `
         -Destination $script:fakeFolder -Force
     $script:fakeChecker = Join-Path $script:fakeFolder 'Test-WindowsHardeningState.ps1'
@@ -67,6 +73,10 @@ param(
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+if ($env:OPSTOOLKIT_TEST_FAKE_LEGACY_CSV) {
+    Copy-Item -LiteralPath $env:OPSTOOLKIT_TEST_FAKE_LEGACY_CSV -Destination (Join-Path $ReportDirectory "fake-privacy-plan-$stamp.csv") -WhatIf:$false
+    return
+}
 @(
     [pscustomobject]@{ Action = 'NoChange'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\One'; CurrentValue = '0'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'already' }
     [pscustomobject]@{ Action = 'SetValue'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\Two'; CurrentValue = '1'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'wrong' }
@@ -101,6 +111,10 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
         if ($FailOnDrift) { $arguments += '-FailOnDrift' }
         if ($ExtraArgument.Count) { $arguments += $ExtraArgument }
 
+        if (-not $Environment.ContainsKey('OPSTOOLKIT_TEST_ORGSETTINGS_PATH')) {
+            $Environment = $Environment.Clone()
+            $Environment['OPSTOOLKIT_TEST_ORGSETTINGS_PATH'] = $script:noSettingsPath
+        }
         $saved = @{}
         foreach ($key in $Environment.Keys) {
             $saved[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -163,6 +177,22 @@ Describe 'Get-HardeningStateVerdict' {
     ) {
         $item = New-StateItem -Category $Category -Result $Result -Action $Action -CurrentValue $Current
         (Get-HardeningStateVerdict -Item $item).State | Should -Be $State
+    }
+
+    It 'reads an off-host report row as Unread, except WinRM confirmed running, which is ReportOnly' {
+        $running = New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -Action 'ReportOnly: WinRM' -CurrentValue 'Running'
+        (Get-HardeningStateVerdict -Item $running).State | Should -Be 'ReportOnly'
+        foreach ($item in @(
+                (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -CurrentValue 'Stopped')
+                (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -CurrentValue 'unknown')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Azure Monitor Agent' -Result 'ReportOnly' -CurrentValue 'Running')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Share destination' -Result 'ReportOnly' -CurrentValue 'configured')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Event destination' -Result 'ReportOnly' -CurrentValue 'NotConfigured')
+                (New-StateItem -Category 'OffHostReport' -Setting 'Event destination' -Result 'ReportOnly' -CurrentValue 'Invalid')
+            )) {
+            $v = Get-HardeningStateVerdict -Item $item
+            $v.State | Should -Be 'Unread' -Because "$($item.Setting) / $($item.CurrentValue) does not establish that logs leave the host"
+        }
     }
 
     It 'never calls a skipped or undetermined result compliant' {
@@ -298,12 +328,63 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
             $byItem['HKLM\A\One'] | Should -Be 'Compliant'
             $byItem['HKLM\A\Two'] | Should -Be 'Drifted'
             $byItem['HKLM\A\Three'] | Should -Be 'NotConfigured'
-            $byItem['svc'] | Should -Be 'Skipped'
+            $byItem['svc'] | Should -Be 'Unread' -Because 'a Skipped legacy row is undetermined, not a state of its own'
         }
 
         It 'keeps the older drift count: Drifted plus NotConfigured' {
             $script:legacy.Results[0].DriftCount | Should -Be 2
             $script:legacy.Summary.TotalDrift | Should -Be 2
+        }
+
+        It 'counts the unclassified legacy row as unread and not as drift' {
+            $script:legacy.Summary.UnreadCount | Should -Be 1
+            $script:legacy.Summary.TotalDrift | Should -Be 2
+            @($script:legacy.Summary.UnreadTargets) | Should -Contain 'Privacy:1'
+            $script:legacy.Summary.ItemsChecked | Should -Be 3 -Because 'the unread row is outside the items checked'
+        }
+    }
+
+    Context 'an older-schema plan with no drift and one row the checker cannot classify' {
+        BeforeAll {
+            $csv = Join-Path $script:workRoot 'legacy-undetermined.csv'
+            @(
+                [pscustomobject]@{ Action = 'NoChange'; Category = 'Telemetry'; ItemType = 'Registry'; Target = 'HKLM\A\One'; CurrentValue = '0'; DesiredValue = '0'; DesiredState = 'off'; Reason = 'already' }
+                [pscustomobject]@{ Action = 'DisableService'; Category = 'Service'; ItemType = 'Service'; Target = 'DiagTrack'; CurrentValue = 'Running; startup type evaluated during apply'; DesiredValue = 'Stopped; Disabled'; DesiredState = 'Disabled'; Reason = 'telemetry' }
+                [pscustomobject]@{ Action = 'DisableScheduledTask'; Category = 'ScheduledTask'; ItemType = 'ScheduledTask'; Target = '\T\Off'; CurrentValue = 'Disabled'; DesiredValue = 'Disabled'; DesiredState = 'Disabled'; Reason = 'telemetry' }
+            ) | Export-Csv -LiteralPath $csv -NoTypeInformation -Encoding utf8
+            $script:legacyUndetermined = Invoke-Checker -Target 'Privacy' -Environment @{ OPSTOOLKIT_TEST_FAKE_LEGACY_CSV = $csv } -FailOnDrift
+        }
+
+        It 'never passes: the unclassified row is Unread, so Passed stays false and -FailOnDrift exits 1' {
+            $run = $script:legacyUndetermined
+            $run.Summary.TotalDrift | Should -Be 0
+            $run.Summary.UnreadCount | Should -Be 1
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'classifies the scheduled-task row that carries enough to compare, and counts only the other as unread' {
+            $byItem = @{}
+            foreach ($r in $script:legacyUndetermined.Records) { $byItem[$r.Item] = $r.State }
+            $byItem['DiagTrack'] | Should -Be 'Unread'
+            $byItem['\T\Off'] | Should -Be 'Compliant'
+            $script:legacyUndetermined.Summary.CompliantCount | Should -Be 2
+        }
+    }
+
+    Context '-Target as one comma-joined value, the form the evidence pack sends' {
+        It 'accepts several newer targets in one value and checks each' {
+            $run = Invoke-FakeChecker -Target 'Defender,Firewall' -Item @(New-StateItem -Result 'NoChange')
+            $run.ExitCode | Should -Be 0
+            @($run.Results | ForEach-Object { $_.Target } | Sort-Object -Unique) | Should -Be @('Defender', 'Firewall')
+            $run.Summary.UnreadCount | Should -Be 0
+            $run.Summary.Passed | Should -BeTrue
+        }
+
+        It 'still rejects a name that is not a target' {
+            $run = Invoke-Checker -Target 'Defender,NotATarget'
+            $run.ExitCode | Should -Not -Be 0
+            $run.Summary | Should -BeNullOrEmpty
         }
     }
 
@@ -386,6 +467,59 @@ Describe 'Test-WindowsHardeningState run against fake hardening scripts' {
         }
     }
 
+    Context 'AuditLogging off-host rows end to end' {
+        BeforeAll {
+            # The fake tree has no audit script, which an earlier test relies on, so this context adds one and removes it.
+            $script:alFake = Join-Path $script:fakeFolder 'Set-WindowsAuditLogging.ps1'
+            Set-Content -LiteralPath $script:alFake -Value $stateTemplate.Replace('__PREFIX__', 'audit-logging') -Encoding ascii
+            function New-AlWef {
+                param([string]$Result = 'NoChange', [string]$Winrm = 'Running')
+                @(
+                    (New-StateItem -Category 'EventForwarding' -Setting '1' -Result $Result -Action 'Set EventForwarding' -CurrentValue 'absent')
+                    (New-StateItem -Category 'EventLogReadersMember' -Setting 'S-1-5-20' -Result 'NoChange' -Action 'No change (member)' -CurrentValue 'Member')
+                    (New-StateItem -Category 'OffHostReport' -Setting 'WinRM service' -Result 'ReportOnly' -Action 'ReportOnly: WinRM' -CurrentValue $Winrm)
+                )
+            }
+        }
+        AfterAll { Remove-Item -LiteralPath $script:alFake -Force -ErrorAction SilentlyContinue }
+
+        It 'is compliant with the WinRM report listed, not counted, and Passed true, when the value and membership hold' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -Item (New-AlWef)
+            $run.ExitCode | Should -Be 0 -Because (Get-Content -LiteralPath "$($run.Log).err" -Raw -ErrorAction SilentlyContinue)
+            ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'ReportOnly'
+            $run.Summary.CompliantCount | Should -Be 2
+            $run.Summary.ItemsChecked | Should -Be 2
+            $run.Summary.ReportOnlyCount | Should -Be 1
+            $run.Summary.Passed | Should -BeTrue
+        }
+
+        It 'is Drifted, not passed, when the value is still to be set' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item (New-AlWef -Result 'Previewed')
+            ($run.Records | Where-Object Category -eq 'EventForwarding').State | Should -Be 'Drifted'
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'is Unread, and fails the gate, when WinRM is not confirmed running' {
+            $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item (New-AlWef -Winrm 'Stopped')
+            ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'Unread'
+            $run.Summary.UnreadCount | Should -Be 1
+            $run.Summary.Passed | Should -BeFalse
+            $run.ExitCode | Should -Be 1
+        }
+
+        It 'is Unread, never a pass, for every destination the audit script only reports' {
+            foreach ($setting in 'Event destination', 'Azure Monitor Agent', 'Share destination') {
+                $run = Invoke-FakeChecker -Target 'AuditLogging' -FailOnDrift -Item @(
+                    (New-StateItem -Category 'OffHostReport' -Setting $setting -Result 'ReportOnly' -Action 'ReportOnly: x' -CurrentValue 'NotConfigured')
+                    (New-StateItem -Category 'ScriptBlockLogging' -Setting 'EnableScriptBlockLogging' -Result 'NoChange' -Action 'No change' -CurrentValue '1'))
+                ($run.Records | Where-Object Category -eq 'OffHostReport').State | Should -Be 'Unread' -Because $setting
+                $run.Summary.Passed | Should -BeFalse -Because $setting
+                $run.ExitCode | Should -Be 1 -Because $setting
+            }
+        }
+    }
+
     Context 'a remote machine' {
         It 'does not read new-schema items remotely and says so' {
             $run = Invoke-FakeChecker -Target 'Defender' -ComputerName 'REMOTE-HOST-NOT-HERE' -Item @(New-StateItem -Result 'NoChange')
@@ -413,12 +547,13 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         $script:recoveryId = '{FEEDFACE-9999-4888-8777-0123456789AB}'
 
         function Invoke-BitLockerChecker {
-            param([string]$VolumeJson, [switch]$ReadError, [switch]$FailOnDrift)
+            param([string]$VolumeJson, [switch]$ReadError, [switch]$FailOnDrift, [string]$Settings = $script:noSettingsPath)
             $environment = @{
                 PSModulePath = "$script:systemModulePath;$env:PSModulePath"
                 SystemDrive = 'Q:'
                 OPSTOOLKIT_TEST_BL_VOLUMES_JSON = $VolumeJson
                 OPSTOOLKIT_TEST_BL_READERROR = $(if ($ReadError) { '1' } else { $null })
+                OPSTOOLKIT_TEST_ORGSETTINGS_PATH = $Settings
             }
             Invoke-Checker -Script $script:realChecker -Target 'BitLocker' -Environment $environment -FailOnDrift:$FailOnDrift
         }
@@ -460,7 +595,7 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
         @{ Status = 'DecryptionInProgress'; Protection = 'On'; Reason = 'not fully encrypted' }
     ) {
         $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status $Status -Protection $Protection) -FailOnDrift
-        @($run.Records).Count | Should -Be 1
+        @($run.Records | Where-Object Category -eq 'OsVolume').Count | Should -Be 1
         @($run.Records)[0].State | Should -Be 'Drifted'
         @($run.Records)[0].Reason | Should -Match $Reason
         $run.Summary.CompliantCount | Should -Be 0
@@ -470,7 +605,7 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
 
     It 'is unread, never compliant, when the protection status is not On or Off' -ForEach @('Unknown', '') {
         $run = Invoke-BitLockerChecker -VolumeJson (New-VolumeJson -Status 'FullyEncrypted' -Protection $_)
-        @($run.Records).Count | Should -Be 1
+        @($run.Records | Where-Object Category -eq 'OsVolume').Count | Should -Be 1
         @($run.Records)[0].State | Should -Be 'Unread'
         $run.Summary.CompliantCount | Should -Be 0
     }
@@ -506,6 +641,47 @@ Describe 'Test-WindowsHardeningState BitLocker target' {
     It 'fails -FailOnDrift for an unread volume rather than passing it' {
         $script:blReadErrorGate.ExitCode | Should -Be 1
         $script:blReadErrorGate.Summary.Passed | Should -BeFalse
+    }
+
+    It 'adds a ReportOnly key backup row naming the configured destination, outside the checked items and the verdict' {
+        $path = Join-Path $script:workRoot 'bl-settings-folder.json'
+        $folder = Join-Path $script:workRoot 'escrow'
+        [ordered]@{ SchemaVersion = 1; BitLockerKeyBackup = @{ Type = 'Folder'; FolderPath = $folder } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+        $run = Invoke-BitLockerChecker -VolumeJson $protected -Settings $path -FailOnDrift
+        $row = @($run.Records | Where-Object Category -eq 'KeyBackup')
+        $row.Count | Should -Be 1
+        $row[0].State | Should -Be 'ReportOnly'
+        $row[0].Item | Should -Be 'BitLockerKeyBackup'
+        $row[0].CurrentValue | Should -Be 'Status=Configured;Type=Folder'
+        $row[0].Reason | Should -Match 'Whether a key reached it is not checked'
+        $run.Summary.ItemsChecked | Should -Be 1 -Because 'a ReportOnly row is not an item with a verdict'
+        $run.Summary.CompliantCount | Should -Be 1
+        $run.Summary.Passed | Should -BeTrue
+        $run.ExitCode | Should -Be 0
+    }
+
+    It 'reports a missing, malformed or invalid settings file as a ReportOnly row, never as configured, and never fails the run' {
+        $bad = Join-Path $script:workRoot 'bl-settings-bad.json'
+        Set-Content -LiteralPath $bad -Value 'this is { not json' -Encoding utf8
+        $badType = Join-Path $script:workRoot 'bl-settings-badtype.json'
+        [ordered]@{ SchemaVersion = 1; BitLockerKeyBackup = @{ Type = 'Dropbox' } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $badType -Encoding utf8
+        foreach ($case in @(
+                @{ Name = 'missing'; Path = $script:noSettingsPath; Status = 'NotConfigured' }
+                @{ Name = 'malformed'; Path = $bad; Status = 'NotConfigured' }
+                @{ Name = 'invalid type'; Path = $badType; Status = 'Invalid' }
+            )) {
+            $run = Invoke-BitLockerChecker -VolumeJson $protected -Settings $case.Path -FailOnDrift
+            $row = @($run.Records | Where-Object Category -eq 'KeyBackup')
+            $row.Count | Should -Be 1 -Because $case.Name
+            $row[0].State | Should -Be 'ReportOnly' -Because $case.Name
+            $row[0].CurrentValue | Should -Not -Match 'Status=Configured' -Because $case.Name
+            $row[0].CurrentValue | Should -Match 'Status=' -Because $case.Name
+            $run.ExitCode | Should -Be 0 -Because "$($case.Name): the run itself is not failed by an absent destination"
+        }
+    }
+
+    It 'still reports the key backup row when the volume read fails' {
+        @($script:blReadError.Records | Where-Object Category -eq 'KeyBackup').Count | Should -Be 1 -Because 'the settings are read independently of the volume'
     }
 
     It 'writes no key protector id into any report or log' {
@@ -551,9 +727,9 @@ Describe 'Test-WindowsHardeningState Defender target against the real script' {
         $maps[0].State | Should -Be 'Drifted'
     }
 
-    It 'plans all 14 ASR rules as drifted on a machine with none configured' {
+    It 'plans all 18 ASR rules as drifted on a machine with none configured' {
         $asr = @($script:defRun.Records | Where-Object Category -eq 'AsrRule')
-        $asr.Count | Should -Be 14
+        $asr.Count | Should -Be 18
         @($asr | Where-Object State -ne 'Drifted').Count | Should -Be 0
     }
 }
@@ -629,10 +805,46 @@ Describe 'Test-WindowsHardeningState Credential Guard' {
     }
 }
 
+Describe 'Get-LegacyRowState' {
+    # A local row of the older plan the checker cannot classify is Unread: not drift (it is not known to be
+    # wrong) and never a pass. A row that carries enough to compare is classified instead.
+    BeforeAll {
+        function New-LegacyRow { param([string]$Action, [string]$Current = '', [string]$Desired = '')
+            [pscustomobject]@{ Action = $Action; CurrentValue = $Current; DesiredValue = $Desired } }
+    }
+
+    It 'maps the registry actions as before' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'NoChange')).State | Should -Be 'Compliant'
+        (Get-LegacyRowState -Item (New-LegacyRow 'CreateValue')).State | Should -Be 'NotConfigured'
+        (Get-LegacyRowState -Item (New-LegacyRow 'SetValue')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DeleteValue')).State | Should -Be 'Drifted'
+    }
+
+    It 'maps a Skipped row, a service row, a Missing row, an unknown action and no action to Unread' {
+        foreach ($action in 'Skipped', 'DisableService', 'EnableService', 'Missing', 'SomethingNew', '') {
+            $state = (Get-LegacyRowState -Item (New-LegacyRow $action 'Running; startup type evaluated during apply' 'Stopped; Disabled')).State
+            $state | Should -Be 'Unread' -Because "action '$action' cannot be classified"
+        }
+    }
+
+    It 'compares a scheduled-task row against its desired state' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Ready' 'Disabled')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Disabled' 'Disabled')).State | Should -Be 'Compliant'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Disabled' 'Enabled')).State | Should -Be 'Drifted'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Ready' 'Enabled')).State | Should -Be 'Compliant'
+    }
+
+    It 'keeps a scheduled-task row whose state could not be compared Unread' {
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' 'Unknown' 'Disabled')).State | Should -Be 'Unread'
+        (Get-LegacyRowState -Item (New-LegacyRow 'DisableScheduledTask' '' 'Disabled')).State | Should -Be 'Unread'
+        (Get-LegacyRowState -Item (New-LegacyRow 'EnableScheduledTask' 'Ready' '')).State | Should -Be 'Unread'
+    }
+}
+
 Describe 'Test-WindowsHardeningState default targets' {
-    # The evidence pack runs the checker with no -Target and reads TotalDrift, ItemsChecked and
-    # CompliantCount, not UnreadCount. Widening the default would let unread items in the newer
-    # targets vanish from those counts and read as a met control, so the newer targets stay opt-in.
+    # The checker's own default stays SchannelTls and Privacy so a bare run keeps its old scope. The
+    # evidence pack names every target itself and reads UnreadCount and Passed, so the newer targets are
+    # opt-in here but no longer invisible to CFG-01.
     It 'defaults to SchannelTls and Privacy only' {
         $path = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$null)

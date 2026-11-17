@@ -1,8 +1,12 @@
 <#
 .SYNOPSIS
-Plan, apply, and roll back local account lockout, Guest, built-in Administrator, and UAC policy on a standalone Windows 11 machine.
+Plan, apply, and roll back local account lockout, Guest, built-in Administrator, and UAC policy on a Windows 11 machine, physical or VDI, standalone or joined.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON.
 - Run elevated to apply: every change is a machine-wide account, policy, or registry change.
@@ -30,9 +34,21 @@ Instructions:
   finding; use a separate standard account for daily work.
 - UAC changes take effect for new sessions; a change to EnableLUA requires a reboot and is
   flagged RequiresReboot. Anything that cannot be read is reported as 'unknown', never as compliant.
-- The 24H2 Administrator Protection setting is deliberately not covered: its registry value name and
-  data were not verified against Microsoft documentation, so it is left out rather than guessed.
-- Windows Hello enrollment, LAPS, and domain policy are out of scope for a standalone machine.
+- Administrator Protection is deliberately not covered and this script never writes a registry value
+  for it. Microsoft documents it only through the Policy CSP setting
+  LocalPoliciesSecurityOptions/UserAccountControl_TypeOfAdminApprovalMode (1 = legacy Admin
+  Approval Mode, 2 = Administrator protection; restart required) and the Group Policy setting
+  "User Account Control: Configure type of Admin Approval Mode"; the registry value behind them is
+  not documented. Use the Group Policy or CSP route. Microsoft says not to enable it on Azure
+  Virtual Desktop session hosts, Windows 365 Cloud PCs, LAPS-managed devices or devices that
+  require Hyper-V, and the October 2026 Windows security baselines turn it on.
+  On an Azure Virtual Desktop session host the plan carries a report-only item (category
+  AdministratorProtection) stating that Administrator Protection is unwanted there; it is also
+  listed, with the reason that the check could not be read, when the session host check is
+  undetermined. Nothing is ever written for it.
+- Windows Hello enrollment, LAPS, and domain policy are out of scope. On a domain, hybrid or MDM
+  managed host a Group Policy or MDM setting may overwrite the local values; the summary carries
+  HostContext and HostNote saying so.
 - Use -Rollback to restore the exact values this script changed from the newest unconsumed rollback
   file in the report directory. Each executing -Rollback that restores everything marks its file
   consumed, so running -Rollback again undoes the run before it, newest first.
@@ -76,7 +92,8 @@ object with the report paths, result counts, RebootRequired, and the per-item re
 
 .NOTES
 Status:
-Active script in the ops-toolkit repo. Part of the Windows 11 standalone hardening baseline.
+Active script in the ops-toolkit repo. Part of the Windows 11 hardening baseline (physical or VDI, standalone or joined).
+Host detection comes from modules\OpsToolkit.Hardening (Get-OpsHostContext).
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
@@ -108,6 +125,8 @@ param(
 )
 
 Set-StrictMode -Version 3.0
+
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 $ErrorActionPreference = 'Stop'
 
 if (-not $Rollback -and $LockoutObservationWindowMinutes -gt $LockoutDurationMinutes) {
@@ -418,6 +437,18 @@ function Get-ForwardPlan {
                 -Label 'UAC secure desktop prompt'))
     $items.Add((Get-RegistryPlanEntry -Category 'BlankPasswordLimit' -Desired 1 `
                 -Label 'blank-password network logon restriction'))
+
+    # Report-only: Administrator Protection is unwanted on an AVD session host. This script never writes it.
+    if ($script:HostContext.IsAvdSessionHost -eq $true) {
+        $items.Add((Get-PlanEntry -Category 'AdministratorProtection' -Setting 'Administrator Protection' -Kind 'Report' -RequiresAdmin $false `
+                    -CurrentValue 'not read (this script never reads or writes it)' -DesiredValue 'not enabled' `
+                    -Action 'Report only: Administrator Protection is unwanted on an AVD session host and is never enabled by this script (not changed)'))
+    } elseif ($null -eq $script:HostContext.IsAvdSessionHost) {
+        $items.Add((Get-PlanEntry -Category 'AdministratorProtection' -Setting 'Administrator Protection' -Kind 'Report' -RequiresAdmin $false `
+                    -CurrentValue 'not read (this script never reads or writes it)' -DesiredValue 'not enabled on a session host' `
+                    -Action 'Report only: could not determine whether this is an AVD session host; Administrator Protection is unwanted on one and is never enabled by this script (not changed)'))
+    }
+
     $items
 }
 
@@ -578,14 +609,32 @@ function Get-RollbackPlan {
     $items
 }
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Action -like 'No change*') { return 'NoChange' }
     if ($Item.Action -like 'Report only*') { return 'ReportOnly' }
     if ($Item.Action -like 'Skipped:*') { return $Item.Action }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
     if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
 
     try {
@@ -634,6 +683,8 @@ New-Item -ItemType Directory -Path $ReportDirectory -Force -WhatIf:$false | Out-
 $resolvedReportDirectory = (Resolve-Path -LiteralPath $ReportDirectory).Path
 
 $mode = if ($Rollback) { 'rollback' } else { 'apply' }
+$script:HostContext = Get-OpsHostContext
+$hostNote = Get-OpsPolicyOverrideNote -HostContext $script:HostContext
 $plan = @(if ($Rollback) {
         Get-RollbackPlan
     } else {
@@ -695,6 +746,8 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
 [pscustomobject]@{
     Operation = "WindowsLocalAccountPolicy ($mode)"
     IsElevated = (Test-IsAdministrator)
+    HostContext = $script:HostContext
+    HostNote = $hostNote
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

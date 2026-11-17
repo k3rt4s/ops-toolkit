@@ -22,6 +22,12 @@ Instructions:
 - The by-file and by-publisher reports are the review surface: a publisher that signs many
   audit events is a candidate for a rule, an unsigned path that keeps appearing is the thing to
   investigate.
+- This is the human review step before Set-WdacEnforcedPolicy.ps1. That script builds its allow
+  rules with New-CIPolicy -Audit straight from the Code Integrity events, because only the
+  operating system's own event reader yields the hash and signer detail a rule needs; this
+  report carries paths and publisher names, which cannot be turned into a valid rule. Use it to
+  judge the generated rules file: an unexpected publisher or an unsigned path in that file
+  should match a row here, and an unfamiliar one is a reason not to enforce.
 
 Purpose:
 Enforcing an application control policy blind blocks things people need. Audit mode records what
@@ -38,7 +44,7 @@ summary object.
 
 .NOTES
 Status:
-Active script kept in the reorganized ops-toolkit repo. Companion to Set-WdacAuditPolicy.ps1.
+Active script kept in the reorganized ops-toolkit repo. Companion to Set-WdacAuditPolicy.ps1 and Set-WdacEnforcedPolicy.ps1.
 #>
 [CmdletBinding()]
 param(

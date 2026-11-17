@@ -17,7 +17,10 @@ Instructions:
 - Set OPSTOOLKIT_TEST_MUTATION_LOG to record each call.
 - Set OPSTOOLKIT_TEST_CI_UNAVAILABLE to any value to make the import fail, as on a host without the module.
 - Set OPSTOOLKIT_TEST_CI_IGNORE_OPTION to a rule option number to make Set-RuleOption accept that option
-  and write nothing.
+  and write nothing (add or delete).
+- New-CIPolicy writes a base-format policy with OPSTOOLKIT_TEST_CI_ALLOW_COUNT allow rules (default 2).
+  OPSTOOLKIT_TEST_CI_NEWPOLICY_FAIL makes it throw; OPSTOOLKIT_TEST_CI_NEWPOLICY_AUDIT_OPTION writes the
+  Audit Mode rule option into what it builds.
 
 Purpose:
 Policy authoring is file work, but a fake still keeps the test from depending on whether the
@@ -57,18 +60,24 @@ function Set-CIPolicyIdInfo {
         [Parameter(Position = 0)][string]$FilePath,
         [string]$PolicyName,
         [string]$PolicyId,
+        [string]$SupplementsBasePolicyID,
         [switch]$ResetPolicyID
     )
     $newId = '{' + [guid]::NewGuid().ToString().ToUpperInvariant() + '}'
     if ($env:OPSTOOLKIT_TEST_CI_POLICYID) { $newId = $env:OPSTOOLKIT_TEST_CI_POLICYID }
     $xml = New-Object System.Xml.XmlDocument
     $xml.Load($FilePath)
-    if ($ResetPolicyID) {
+    if ($SupplementsBasePolicyID) {
+        # A supplemental policy keeps its own PolicyID and names the base it supplements.
+        $xml.SiPolicy.SetAttribute('PolicyType', 'Supplemental Policy')
+        $xml.SiPolicy.BasePolicyID = $SupplementsBasePolicyID
+        if ($ResetPolicyID) { $xml.SiPolicy.PolicyID = $newId }
+    } elseif ($ResetPolicyID) {
         $xml.SiPolicy.PolicyID = $newId
         $xml.SiPolicy.BasePolicyID = $newId
     }
     $xml.Save($FilePath)
-    Write-FakeCiMutation -Command 'Set-CIPolicyIdInfo' -Target $FilePath -Detail "name=$PolicyName;reset=$([bool]$ResetPolicyID)"
+    Write-FakeCiMutation -Command 'Set-CIPolicyIdInfo' -Target $FilePath -Detail "name=$PolicyName;reset=$([bool]$ResetPolicyID);supplements=$SupplementsBasePolicyID"
     # The real cmdlet writes the new ID to the pipeline as one string (checked on Windows PowerShell
     # 5.1, 2026-11-02), so a caller that does not discard it returns that string as well.
     if ($ResetPolicyID) { "PolicyID = $newId" }
@@ -81,7 +90,10 @@ function Set-RuleOption {
         [int]$Option,
         [switch]$Delete
     )
-    $names = @{ 3 = 'Enabled:Audit Mode'; 6 = 'Enabled:Unsigned System Integrity Policy'; 0 = 'Enabled:UMCI' }
+    $names = @{
+        3 = 'Enabled:Audit Mode'; 6 = 'Enabled:Unsigned System Integrity Policy'; 0 = 'Enabled:UMCI'
+        9 = 'Enabled:Advanced Boot Options Menu'; 10 = 'Enabled:Boot Audit on Failure'; 17 = 'Enabled:Allow Supplemental Policies'
+    }
     # Simulates a cmdlet that reports success without writing the option, so a script's own check can be tested.
     if ($env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION -and "$Option" -eq $env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION) {
         Write-FakeCiMutation -Command 'Set-RuleOption' -Target $FilePath -Detail "option=$Option;delete=$([bool]$Delete);ignored=True"
@@ -100,8 +112,40 @@ function Set-RuleOption {
         [void]$rule.AppendChild($optionNode)
         [void]$xml.SiPolicy.Rules.AppendChild($rule)
     }
+    if ($Delete) {
+        # Like the real cmdlet, -Delete removes the rule option when it is present.
+        foreach ($rule in @($xml.SiPolicy.Rules.Rule)) {
+            if ($rule.Option -eq $text) { [void]$xml.SiPolicy.Rules.RemoveChild($rule) }
+        }
+    }
     $xml.Save($FilePath)
     Write-FakeCiMutation -Command 'Set-RuleOption' -Target $FilePath -Detail "option=$Option;delete=$([bool]$Delete)"
+}
+
+function New-CIPolicy {
+    [CmdletBinding()]
+    param(
+        [string]$FilePath,
+        [string]$Level,
+        [string[]]$Fallback,
+        [switch]$UserPEs,
+        [switch]$Audit,
+        [switch]$MultiplePolicyFormat
+    )
+    # Stands in for building a policy from the Code Integrity audit events. The number of allow rules
+    # comes from OPSTOOLKIT_TEST_CI_ALLOW_COUNT (default 2); OPSTOOLKIT_TEST_CI_NEWPOLICY_FAIL makes the
+    # call throw, as the real cmdlet does when it finds nothing to build from; and
+    # OPSTOOLKIT_TEST_CI_NEWPOLICY_AUDIT_OPTION writes the Audit Mode rule option into the policy.
+    Write-FakeCiMutation -Command 'New-CIPolicy' -Target $FilePath -Detail "level=$Level;fallback=$($Fallback -join ',');audit=$([bool]$Audit);userpes=$([bool]$UserPEs);multi=$([bool]$MultiplePolicyFormat)"
+    if ($env:OPSTOOLKIT_TEST_CI_NEWPOLICY_FAIL) { throw 'New-CIPolicy found no audit events to build a policy from (fake, OPSTOOLKIT_TEST_CI_NEWPOLICY_FAIL).' }
+    $count = 2
+    if ($env:OPSTOOLKIT_TEST_CI_ALLOW_COUNT) { $count = [int]$env:OPSTOOLKIT_TEST_CI_ALLOW_COUNT }
+    $id = '{' + [guid]::NewGuid().ToString().ToUpperInvariant() + '}'
+    $auditRule = ''
+    if ($env:OPSTOOLKIT_TEST_CI_NEWPOLICY_AUDIT_OPTION) { $auditRule = '<Rule><Option>Enabled:Audit Mode</Option></Rule>' }
+    $allow = (@(if ($count -gt 0) { 1..$count }) | ForEach-Object { '<Allow ID="ID_ALLOW_A_' + $_ + '" FriendlyName="fake hash ' + $_ + '" Hash="00"/>' }) -join ''
+    $text = '<?xml version="1.0" encoding="utf-8"?><SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy" PolicyType="Base Policy"><VersionEx>10.0.0.0</VersionEx><PolicyID>' + $id + '</PolicyID><BasePolicyID>' + $id + '</BasePolicyID><Rules><Rule><Option>Enabled:UMCI</Option></Rule>' + $auditRule + '</Rules><FileRules>' + $allow + '</FileRules></SiPolicy>'
+    Set-Content -LiteralPath $FilePath -Value $text -Encoding utf8 -WhatIf:$false
 }
 
 function ConvertFrom-CIPolicy {
@@ -115,4 +159,4 @@ function ConvertFrom-CIPolicy {
     [pscustomobject]@{ BinaryFile = $BinaryFilePath }
 }
 
-Export-ModuleMember -Function 'Set-CIPolicyIdInfo', 'Set-RuleOption', 'ConvertFrom-CIPolicy'
+Export-ModuleMember -Function 'Set-CIPolicyIdInfo', 'Set-RuleOption', 'ConvertFrom-CIPolicy', 'New-CIPolicy'

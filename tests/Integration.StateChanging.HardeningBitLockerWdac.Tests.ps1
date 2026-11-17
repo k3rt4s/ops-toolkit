@@ -45,6 +45,10 @@ BeforeAll {
 `$env:OPSTOOLKIT_TEST_BL_PROTECTORID = '{AAAAAAAA-0000-4000-8000-000000000001}'
 "@
 
+    # The organisation settings file is never the real ProgramData one: every pair run points the hook at a file
+    # that does not exist, so a run without a -RecoveryKeyDirectory is "not configured" unless a test writes one.
+    $script:noOrgSettingsEnv = "`$env:OPSTOOLKIT_TEST_ORGSETTINGS_PATH = '$(Join-Path $script:workRoot 'no-such-settings.json')'`n"
+
     $script:uncShadow = @'
 function Test-Path {
     param($Path, $LiteralPath, $PathType)
@@ -77,7 +81,7 @@ function Resolve-Path {
     function Invoke-Pair {
         param([string]$RelativePath, [hashtable]$Argument, [string]$Tag, [string]$FixtureEnvironment, [string]$ExtraSetup = '')
         Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
-            -RelativePath $RelativePath -Argument $Argument -Tag $Tag -FixtureEnvironment ($FixtureEnvironment + "`n") -ExtraSetup $ExtraSetup
+            -RelativePath $RelativePath -Argument $Argument -Tag $Tag -FixtureEnvironment ($script:noOrgSettingsEnv + $FixtureEnvironment + "`n") -ExtraSetup $ExtraSetup
     }
 
     function Get-StateItem {
@@ -472,6 +476,8 @@ Describe 'Enable-BitLockerOsVolume device-encrypted volume' {
                 "`$script:ResolvedKeyDirectory = '$KeyDirectory'"
                 "`$script:ResolvedBackupVolume = 'Q:'"
                 '$script:StopReason = $null'
+                # The script sets this at the top; a lifted function reads its Type to choose between a key file and an escrow call.
+                "`$script:KeyDest = [pscustomobject]@{ Type = 'Folder'; Location = '$KeyDirectory'; Source = 'Parameter'; Reason = ''; IgnoredSettingsFolder = '' }"
                 ($functions -join "`n")
                 "`$item = [pscustomobject]@{ Setting = '$($script:encProtectorId)'; Detail = '' }"
                 '$result = Invoke-BackupRecoveryProtector -Item $item'
@@ -837,7 +843,7 @@ function CiTool.exe {
         $deploy = @($plan | Where-Object Category -eq 'DeployAuditPolicy')
         $deploy.Count | Should -Be 1
         $deploy[0].Action | Should -Not -Match '\(not built\)'
-        $expected = if ($script:isElevated) { 'Previewed' } else { 'Skipped: requires elevation' }
+        $expected = 'Previewed'  # the stand-in CiTool lists policies, so the row was read unelevated too
         ($state | Where-Object Category -eq 'DeployAuditPolicy').Result | Should -Be $expected
     }
 
@@ -935,6 +941,30 @@ function CiTool.exe {
             Should -Match '^Failed: building the audit policy failed: .*Unsigned System Integrity Policy'
         $pair.Execute.Summary.PolicyBinaryPath | Should -BeNullOrEmpty
         @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0
+    }
+
+    It 'forces the boot safety options 9 and 10 and the supplemental-policy option 17 on, so a later reviewed enforcement is safe' {
+        $xml = [xml](Get-Content -LiteralPath $script:wdac.WhatIf.Summary.PolicyXmlPath -Raw)
+        $opts = @($xml.SiPolicy.Rules.Rule | ForEach-Object { $_.Option })
+        $opts | Should -Contain 'Enabled:Advanced Boot Options Menu'
+        $opts | Should -Contain 'Enabled:Boot Audit on Failure'
+        $opts | Should -Contain 'Enabled:Allow Supplemental Policies'
+        $opts | Should -Contain 'Enabled:Audit Mode'
+        $calls = @(Get-OpsMutationRecord -Path $script:wdac.WhatIfLog | Where-Object { $_.Command -eq 'Set-RuleOption' })
+        foreach ($n in 3, 6, 9, 10, 17) { @($calls | Where-Object { $_.Detail -match "option=$n;delete=False" }).Count | Should -Be 1 -Because "option $n" }
+    }
+
+    It 'still refuses when Set-RuleOption does not write option 9, 10 or 17' {
+        foreach ($n in 9, 10, 17) {
+            $reports = Join-Path $script:workRoot "wdac-ignore$n-reports"
+            $pair = Invoke-Pair -Tag "wdac-ignore$n" -RelativePath $script:wdacScript `
+                -Argument @{ ReportDirectory = $reports; ExamplePolicyDirectory = $script:exampleDir } `
+                -FixtureEnvironment ($script:wdacEnv + "`n`$env:OPSTOOLKIT_TEST_CI_IGNORE_OPTION = '$n'") -ExtraSetup $script:ciStub
+            $pair.Execute.ExitCode | Should -Not -Be 0 -Because "option $n"
+            (Get-StateItem -ReportDirectory $reports -Mode 'apply' -Setting 'BasePolicyFile').Result |
+                Should -Match '^Failed: building the audit policy failed: .*reviewed move to enforcement' -Because "option $n"
+            @(Get-OpsMutationRecord -Path $pair.ExecuteLog | Where-Object { $_.Command -eq 'CiTool.exe' }).Count | Should -Be 0
+        }
     }
 
     It 'has no enforce switch' {

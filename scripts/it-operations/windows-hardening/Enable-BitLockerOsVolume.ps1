@@ -3,10 +3,27 @@
 Plan, apply, and roll back BitLocker encryption of the operating-system volume with a TPM protector, saving a recovery password to a directory the operator names before encryption starts.
 
 .DESCRIPTION
+- A live run (no -WhatIf) prompts before each change unless -Confirm:$false is passed; answer Yes to All
+  to accept the rest. Unelevated, a live run changes nothing and marks each admin item 'Skipped: requires
+  elevation'. Unelevated -WhatIf previews each admin item whose current value could be read and marks the
+  rest 'Skipped: requires elevation (not read)'.
 Instructions:
 - Run with -WhatIf first and review the generated plan CSV/JSON. The plan lists every
   precondition and the ordered steps.
-- -RecoveryKeyDirectory is mandatory and must be a directory that already exists on a volume
+- Where the recovery key goes is decided before anything changes, in this order: -RecoveryKeyDirectory
+  when given (it always wins; a Folder value in the organisation settings is then ignored and the
+  summary says so); otherwise the BitLockerKeyBackup section of the organisation settings
+  (Get-OpsOrgSettings, %ProgramData%\OpsToolkit\settings.json): Folder (the same directory rules
+  below), EntraId (BackupToAAD-BitLockerKeyProtector, needs an Entra joined or hybrid joined host
+  as read by Get-OpsHostContext) or ActiveDirectory (Backup-BitLockerKeyProtector, needs a domain
+  joined host). When no destination is usable the run is refused: the plan carries a
+  'Key backup: not configured' precondition, nothing is changed and a live run exits non-zero.
+  Encryption is never started unless this run's key backup succeeded: a failed Entra ID or
+  Active Directory backup removes the just-added recovery protector, exactly as a failed key file
+  write or read-back does, and stops without enabling. Reports record where the key went
+  (destination, folder path or 'Entra ID'/'Active Directory', protector ID), never the key. The
+  cmdlet names, their parameters and the join facts are unverified on a live machine.
+- A -RecoveryKeyDirectory (or a settings Folder) must be a directory that already exists on a volume
   OTHER than the operating-system volume, for example a removable drive or a network share
   you can reach when this machine will not boot. The script refuses, and changes nothing, if
   the directory is missing, is on the operating-system volume ($env:SystemDrive), or cannot be
@@ -74,8 +91,51 @@ Instructions:
   that completed, the file is renamed bitlocker-enable-rollback-<timestamp>.consumed-<timestamp>.json
   and is no longer picked; under -WhatIf, or when the step failed or was skipped, it is left in
   place and the summary says so.
-- There is no PIN option in this build. TPM plus a pre-boot PIN is the stronger posture because
-  a TPM-only volume unlocks for anyone who can boot the machine; it is a later item.
+- A volume that is mid-decryption (VolumeStatus DecryptionInProgress or DecryptionPaused) is its
+  own case: the script reports that state, plans no enable and no policy write, and stops with
+  nothing changed ('Failed: OS volume is being decrypted ...' on the OsVolumeNotProtected row; a live
+  run exits non-zero, -WhatIf exits 0, like every other failed precondition). The TPM, Secure Boot
+  and key-directory rows are 'Skipped: not evaluated'. There is no override switch: wait for the
+  decryption to finish, or resume or finish it deliberately, then run this script again.
+- -UseTpmAndPin (opt-in, with -StartupPin <SecureString>, both required together) protects the
+  volume with a TPM plus a pre-boot PIN instead of a TPM alone, which is the stronger posture
+  because a TPM-only volume unlocks for anyone who can boot the machine. Without the switch the
+  script behaves exactly as before. The PIN is a SecureString only: a plain-text PIN is not
+  accepted, and a PIN is never written to a plan, state, summary, rollback or key file, the
+  console or an error message. It is read once to check the rules (numeric digits 0-9 only, 6 to
+  20 of them; the enhanced-PIN policy is not planned, so letters and symbols are refused) and
+  then handed to Enable-BitLocker as the SecureString. A PIN that breaks the rules stops the run
+  with nothing changed and a message that does not repeat it. Build the SecureString yourself
+  (Read-Host -AsSecureString) so it is never typed into a command line or a saved script.
+  With the switch the plan also carries:
+  - A NotVirtualMachine precondition. The script refuses a virtual machine (Win32_ComputerSystem
+    Model or Manufacturer naming Hyper-V 'Virtual Machine', VMware, VirtualBox, KVM or QEMU, Xen,
+    Parallels, Bochs, Amazon EC2, Google Compute Engine, OpenStack, Alibaba Cloud or Nutanix AHV)
+    because nobody can type a PIN at boot on a host such as an Azure Virtual Desktop session host,
+    and the host would never start. If the model cannot be read the run also stops: undetermined
+    is never a pass. The refusal is a recorded 'Failed:' precondition, so a live run exits
+    non-zero after writing its reports and -WhatIf exits 0.
+  - A StartupPin precondition that checks the PIN rules above without recording the value.
+  - Six FvePolicy rows writing the startup-authentication policy under
+    HKLM\SOFTWARE\Policies\Microsoft\FVE, applied before the enable because Enable-BitLocker
+    refuses a PIN protector until the policy allows one: UseAdvancedStartup 1, EnableBDEWithNoTPM 0,
+    UseTPM 0 (no TPM-only), UseTPMPIN 1 (require a startup PIN), UseTPMKey 0, UseTPMKeyPIN 0.
+    A value that already equals the target is NoChange. The key is created only when it is missing,
+    so an existing policy key and its other values are never replaced. The value names and codes
+    follow the BitLocker group policy settings reference, 'Require additional authentication at
+    startup' (https://learn.microsoft.com/windows/security/operating-system-security/data-protection/bitlocker/bitlocker-group-policy-settings).
+    The exact names and numbers (in particular that 0 is Do not allow and 1 is Require) have NOT been
+    verified on a live machine in this build; confirm them on a test machine before relying on them.
+  - The prior value of each policy value ('absent', a number, or 'unknown' when it could not be read)
+    goes in the rollback file as a record with only Category 'FvePolicy', Name and PriorValue; no
+    registry path is recorded. -Rollback validates those records against the same value table, then
+    restores each prior value (removes a value that was absent) after the decryption step. An
+    'unknown' prior is NoChange with a note, because it cannot be restored. If the enable fails or
+    is declined after policy values were written, the script restores them at once.
+  - The hardware test after the enable asks for the PIN at the next restart: restart only when
+    someone who knows the PIN is at the machine.
+  - A volume that is already protected is not converted: with -UseTpmAndPin the plan carries a
+    report-only row saying so, and no PIN, policy or protector change is made.
 
 Purpose:
 Without BitLocker, physical access to the machine or its drive gives full access to the data
@@ -85,12 +145,15 @@ order that cannot leave the machine encrypted with a recovery key that exists no
 Required syntax:
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <dir> -WhatIf
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -RecoveryKeyDirectory <dir>      # elevated
+pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -WhatIf                          # key destination from the organisation settings
 pwsh -File .\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1 -ReportDirectory <dir> -Rollback -WhatIf
+pwsh -NoProfile -Command "& '.\scripts\it-operations\windows-hardening\Enable-BitLockerOsVolume.ps1' -ReportDirectory <dir> -RecoveryKeyDirectory <dir> -UseTpmAndPin -StartupPin (Read-Host 'Startup PIN' -AsSecureString) -WhatIf"
 
 .OUTPUTS
 Writes plan and state CSV/JSON under the report directory, plus on a live run that enabled
-BitLocker a rollback JSON holding the volume and protector ID (never the password or a key file
-path). Returns a summary object.
+BitLocker a rollback JSON holding the volume and protector ID (never the password, the PIN or a key
+file path) and, with -UseTpmAndPin, the prior value of each FVE policy value it wrote. Returns a
+summary object.
 
 .NOTES
 Status:
@@ -99,9 +162,16 @@ reports whether a recovery key exists after this has run.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High', DefaultParameterSetName = 'Enable')]
 param(
-    [Parameter(Mandatory = $true, ParameterSetName = 'Enable')]
+    [Parameter(ParameterSetName = 'Enable')]
+    [Parameter(ParameterSetName = 'EnableTpmPin')]
     [ValidateNotNullOrEmpty()]
     [string]$RecoveryKeyDirectory,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'EnableTpmPin')]
+    [switch]$UseTpmAndPin,
+
+    [Parameter(Mandatory = $true, ParameterSetName = 'EnableTpmPin')]
+    [System.Security.SecureString]$StartupPin,
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -115,8 +185,13 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 
 $script:Prefix = 'bitlocker-enable'
+# Where this run's recovery key goes: set once in Main (Resolve-KeyBackupDestination), never in a rollback.
+$script:ParamKeyDirectory = if ($PSBoundParameters.ContainsKey('RecoveryKeyDirectory')) { $RecoveryKeyDirectory } else { $null }
+$script:KeyDest = [pscustomobject]@{ Type = 'None'; Location = ''; Source = 'None'; Reason = ''; IgnoredSettingsFolder = '' }
+$script:OrgSettings = $null
 $script:ChangedSettings = [System.Collections.Generic.List[pscustomobject]]::new()
 $script:StopReason = $null
 $script:AlreadyProtected = $false
@@ -132,6 +207,25 @@ $script:EnableCategory = 'EnableOsVolume'
 $script:EncryptionMethod = 'XtsAes256'
 $script:RollbackTopField = @('Timestamp', 'ComputerName', 'MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod', 'ChangedSettings')
 $script:RollbackEntryField = @('Category', 'MountPoint', 'ProtectorId', 'ScriptEnabledBitLocker', 'EncryptionMethod')
+# -UseTpmAndPin: the startup-authentication policy written before the enable, and the record of what it replaced.
+# Names and codes follow the BitLocker group policy settings reference (Learn); NOT verified on a live machine.
+$script:UsePin = (($PSCmdlet.ParameterSetName -eq 'EnableTpmPin') -and [bool]$UseTpmAndPin)
+# Held as a SecureString only, here and nowhere else; the helpers below read this variable, never a parameter.
+$script:StartupPin = $StartupPin
+$script:FveKey = 'HKLM:\SOFTWARE\Policies\Microsoft\FVE'
+$script:FveCategory = 'FvePolicy'
+$script:FveRestoreCategory = 'RestoreFvePolicy'
+$script:FveControl = @(
+    [pscustomobject]@{ Name = 'UseAdvancedStartup'; Value = 1 }
+    [pscustomobject]@{ Name = 'EnableBDEWithNoTPM'; Value = 0 }
+    [pscustomobject]@{ Name = 'UseTPM'; Value = 0 }
+    [pscustomobject]@{ Name = 'UseTPMPIN'; Value = 1 }
+    [pscustomobject]@{ Name = 'UseTPMKey'; Value = 0 }
+    [pscustomobject]@{ Name = 'UseTPMKeyPIN'; Value = 0 }
+)
+$script:FveRollbackField = @('Category', 'Name', 'PriorValue')
+$script:PolicyChanges = [System.Collections.Generic.List[pscustomobject]]::new()
+$script:Decrypting = $false
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -252,6 +346,51 @@ function Resolve-RecoveryKeyDirectory {
     $resolved
 }
 
+# Decides where this run's recovery key goes: the parameter, else the organisation settings
+# (Folder, EntraId, ActiveDirectory), else nowhere. Pure apart from reading the settings file.
+# Type is Folder, EntraId, ActiveDirectory or NotConfigured; a settings file that is invalid or
+# silent is NotConfigured with the reason, never a guess.
+function Resolve-KeyBackupDestination {
+    $settings = $script:OrgSettings.BitLockerKeyBackup
+    $configured = ($settings.Status -eq 'Configured')
+    if ($null -ne $script:ParamKeyDirectory) {
+        $ignored = if ($configured -and $settings.Type -eq 'Folder') { [string]$settings.FolderPath } else { '' }
+        return [pscustomobject]@{ Type = 'Folder'; Location = $script:ParamKeyDirectory; Source = 'Parameter'; Reason = ''; IgnoredSettingsFolder = $ignored }
+    }
+    if (-not $configured) {
+        return [pscustomobject]@{ Type = 'NotConfigured'; Location = ''; Source = 'None'; Reason = [string]$settings.Reason; IgnoredSettingsFolder = '' }
+    }
+    switch ($settings.Type) {
+        'Folder' { return [pscustomobject]@{ Type = 'Folder'; Location = [string]$settings.FolderPath; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+        'EntraId' { return [pscustomobject]@{ Type = 'EntraId'; Location = 'Entra ID'; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+        'ActiveDirectory' { return [pscustomobject]@{ Type = 'ActiveDirectory'; Location = 'Active Directory'; Source = 'Settings'; Reason = ''; IgnoredSettingsFolder = '' } }
+    }
+    [pscustomobject]@{ Type = 'NotConfigured'; Location = ''; Source = 'None'; Reason = "BitLockerKeyBackup type '$($settings.Type)' is not handled by this script"; IgnoredSettingsFolder = '' }
+}
+
+# Where the key goes, as text for a plan row: the folder path, 'Entra ID', 'Active Directory' or a refusal.
+function Get-KeyDestinationText {
+    switch ($script:KeyDest.Type) {
+        'Folder' { return [string]$script:ResolvedKeyDirectory }
+        'EntraId' { return 'Entra ID' }
+        'ActiveDirectory' { return 'Active Directory' }
+    }
+    'no configured key backup destination'
+}
+
+# Escrows one recovery password protector to Entra ID or Active Directory. Throws on any failure; the
+# caller treats a throw as "no key backup" and never starts encryption. The key value is never touched here.
+function Invoke-ProtectorEscrow {
+    param([Parameter(Mandatory = $true)][string]$Mount, [Parameter(Mandatory = $true)][string]$ProtectorId)
+    if ($script:KeyDest.Type -eq 'EntraId') {
+        BackupToAAD-BitLockerKeyProtector -MountPoint $Mount -KeyProtectorId $ProtectorId -ErrorAction Stop | Out-Null
+    } elseif ($script:KeyDest.Type -eq 'ActiveDirectory') {
+        Backup-BitLockerKeyProtector -MountPoint $Mount -KeyProtectorId $ProtectorId -ErrorAction Stop | Out-Null
+    } else {
+        throw "no escrow destination of type $($script:KeyDest.Type)"
+    }
+}
+
 # The key file's text. Never log or print the result: it holds the recovery password in clear text.
 function Get-RecoveryKeyFileText {
     param([string]$Mount, [string]$ProtectorId, [string]$KeyValue)
@@ -284,10 +423,77 @@ function Get-OsVolumeState {
     [pscustomobject]@{ Readable = $true; Reason = ''; Volume = $volume[0] }
 }
 
+# Returns the DWord value as text, 'absent' when the key or value is missing, or 'unknown' when it
+# cannot be read or is not a small non-negative integer. Never throws and never returns $null.
+function Get-FveValue {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    try {
+        $props = Get-ItemProperty -LiteralPath $script:FveKey -ErrorAction Stop
+    } catch {
+        if (-not (Test-Path -LiteralPath $script:FveKey)) { return 'absent' }
+        return 'unknown'
+    }
+    if ($null -eq $props -or -not $props.PSObject.Properties[$Name]) { return 'absent' }
+    $value = $props.PSObject.Properties[$Name].Value
+    if ($null -eq $value -or $value -isnot [int] -or $value -lt 0 -or $value -gt 999999999) { return 'unknown' }
+    "$value"
+}
+
+# Returns why the PIN is not acceptable, or $null when it is. The PIN is read once here and never
+# returned, logged or put in a message. Numeric only, 6 to 20 digits (the standard PIN rules).
+function Get-StartupPinProblem {
+    param([System.Security.SecureString]$Pin)
+    if ($null -eq $Pin -or $Pin.Length -eq 0) { return 'no startup PIN was supplied' }
+    $bstr = [IntPtr]::Zero
+    $plain = $null
+    try {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Pin)
+        $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        if ($plain -cnotmatch '^[0-9]{6,20}\z') {
+            return 'the startup PIN must be 6 to 20 digits (0-9 only); the value is not recorded'
+        }
+    } finally {
+        if ($bstr -ne [IntPtr]::Zero) { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $plain = $null
+    }
+    $null
+}
+
+# True when the model or manufacturer names a hypervisor guest. Pure.
+function Test-IsVirtualMachineIdentity {
+    param([string]$Manufacturer, [string]$Model)
+    if ($Model -match '(?i)virtual|vmware|kvm|qemu|bochs|hvm domu|xen|parallels|openstack|google compute engine|amazon ec2|\bAHV\b') { return $true }
+    if ($Manufacturer -match '(?i)vmware|qemu|xen|innotek|parallels|bochs|red hat|amazon ec2|alibaba cloud|nutanix') { return $true }
+    $false
+}
+
+# Returns Determined, IsVirtualMachine and Text. A failed read, or one with no model and no manufacturer, is
+# not determined, and the caller treats that as a stop, never a pass.
+function Get-VirtualMachineEvidence {
+    try {
+        $cs = @(Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop | Select-Object -First 1)
+    } catch {
+        return [pscustomobject]@{ Determined = $false; IsVirtualMachine = $false; Text = "unread ($($_.Exception.Message))" }
+    }
+    if ($cs.Count -eq 0 -or $null -eq $cs[0]) {
+        return [pscustomobject]@{ Determined = $false; IsVirtualMachine = $false; Text = 'unread (Win32_ComputerSystem returned nothing)' }
+    }
+    $model = [string](Get-OpsPropertyValue -InputObject $cs[0] -Name 'Model')
+    $maker = [string](Get-OpsPropertyValue -InputObject $cs[0] -Name 'Manufacturer')
+    if ([string]::IsNullOrWhiteSpace($model) -and [string]::IsNullOrWhiteSpace($maker)) {
+        return [pscustomobject]@{ Determined = $false; IsVirtualMachine = $false; Text = 'unread (no Model or Manufacturer)' }
+    }
+    [pscustomobject]@{
+        Determined = $true
+        IsVirtualMachine = (Test-IsVirtualMachineIdentity -Manufacturer $maker -Model $model)
+        Text = "Manufacturer=$maker;Model=$model"
+    }
+}
+
 function Get-ForwardPlan {
     $items = [System.Collections.Generic.List[pscustomobject]]::new()
     $mount = [string]$env:SystemDrive
-    $keyDir = $script:ResolvedKeyDirectory
+    $keyDir = Get-KeyDestinationText
 
     $os = Get-OsVolumeState
     $volStatus = 'unknown'
@@ -302,7 +508,11 @@ function Get-ForwardPlan {
         $tpmProtector = @(@(Get-OpsPropertyValue -InputObject $os.Volume -Name 'KeyProtector') |
                 Where-Object { $_ -and [string]$_.KeyProtectorType -like 'Tpm*' })
         if ($tpmProtector.Count -gt 0 -and $volStatus -eq 'FullyDecrypted') { $volStatus = 'FullyDecrypted (enable pending restart)' }
-        if ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'EncryptionPaused', 'FullyEncryptedWipeInProgress', 'EncryptionSuspended') -or $protStatus -eq 'On' -or $tpmProtector.Count -gt 0) {
+        # A volume mid-decryption is neither protected nor ready for a fresh enable: its own case, a stop
+        # with nothing planned and nothing changed. It is checked first so no other branch plans an enable on it.
+        if ($volStatus -in @('DecryptionInProgress', 'DecryptionPaused')) {
+            $script:Decrypting = $true
+        } elseif ($volStatus -in @('FullyEncrypted', 'EncryptionInProgress', 'EncryptionPaused', 'FullyEncryptedWipeInProgress', 'EncryptionSuspended') -or $protStatus -eq 'On' -or $tpmProtector.Count -gt 0) {
             $script:AlreadyProtected = $true
         }
         # Automatic device encryption leaves an encrypted volume whose recovery password exists only on
@@ -317,12 +527,23 @@ function Get-ForwardPlan {
     $script:OsVolumeStatus = $volStatus
     $script:OsProtectionStatus = $protStatus
 
-    $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RecoveryKeyDirectory' -RequiresAdmin $false `
-                -CurrentValue $keyDir -DesiredValue 'existing directory off the OS volume' `
-                -Action "Precondition: recovery key directory $keyDir exists and is not on $mount"))
-    $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyDirectoryWritable' -RequiresAdmin $false `
-                -CurrentValue 'not tested under -WhatIf' -DesiredValue 'writable' `
-                -Action 'Precondition: recovery key directory is writable (a probe file is written and deleted on a live run)'))
+    if ($script:KeyDest.Type -eq 'Folder') {
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'RecoveryKeyDirectory' -RequiresAdmin $false `
+                    -CurrentValue $keyDir -DesiredValue 'existing directory off the OS volume' `
+                    -Action "Precondition: recovery key directory $keyDir exists and is not on $mount"))
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyDirectoryWritable' -RequiresAdmin $false `
+                    -CurrentValue 'not tested under -WhatIf' -DesiredValue 'writable' `
+                    -Action 'Precondition: recovery key directory is writable (a probe file is written and deleted on a live run)'))
+    } else {
+        $keyAction = switch ($script:KeyDest.Type) {
+            'EntraId' { 'Precondition: Key backup: Entra ID (host is Entra joined or hybrid joined, so BackupToAAD-BitLockerKeyProtector can escrow the recovery password)' }
+            'ActiveDirectory' { 'Precondition: Key backup: Active Directory (host is domain joined, so Backup-BitLockerKeyProtector can escrow the recovery password)' }
+            default { "Precondition: Key backup: not configured ($($script:KeyDest.Reason)); pass -RecoveryKeyDirectory or set BitLockerKeyBackup in the organisation settings" }
+        }
+        $keyCurrent = if ($script:KeyDest.Type -eq 'NotConfigured') { 'not configured' } else { 'join state not read yet' }
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'KeyBackup' -RequiresAdmin $false `
+                    -CurrentValue $keyCurrent -DesiredValue "key escrowed to $keyDir before encryption starts" -Action $keyAction))
+    }
     $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'Elevated' -RequiresAdmin $false `
                 -CurrentValue (Test-IsAdministrator) -DesiredValue 'True' -Action 'Precondition: session is elevated'))
     $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'Tpm' -RequiresAdmin $false `
@@ -333,14 +554,46 @@ function Get-ForwardPlan {
                 -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue 'FullyDecrypted;Off' `
                 -Action 'Precondition: OS volume is not already encrypted or encrypting'))
 
-    $action = if ($script:AlreadyProtected) {
-        "No change (OS volume $mount is already encrypted or encrypting: $volStatus, protection $protStatus)"
-    } else {
-        "Protect ${mount}: add recovery password protector, save it to $keyDir, read it back, then enable BitLocker (TPM protector, $($script:EncryptionMethod), used space only)"
+    # The PIN path only plans its checks and policy writes when an enable can actually follow.
+    $pinActive = ($script:UsePin -and -not $script:AlreadyProtected -and -not $script:Decrypting)
+    if ($pinActive) {
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'NotVirtualMachine' -RequiresAdmin $false `
+                    -CurrentValue 'unread' -DesiredValue 'physical machine' `
+                    -Action 'Precondition: this is not a virtual machine (nobody can type a pre-boot PIN on a session host or other guest)'))
+        $items.Add((Get-PlanItem -Category 'Precondition' -Setting 'StartupPin' -RequiresAdmin $false `
+                    -CurrentValue 'supplied (value never recorded)' -DesiredValue '6 to 20 digits, 0-9 only' `
+                    -Action 'Precondition: the startup PIN is 6 to 20 digits'))
+        foreach ($control in $script:FveControl) {
+            $prior = Get-FveValue -Name $control.Name
+            $policyAction = if ("$prior" -eq "$($control.Value)") {
+                "No change ($($script:FveKey)\$($control.Name) is already $($control.Value))"
+            } else {
+                "Set $($script:FveKey)\$($control.Name) to $($control.Value) so BitLocker accepts a TPM plus startup PIN protector (prior value: $prior)"
+            }
+            $items.Add((Get-PlanItem -Category $script:FveCategory -Setting $control.Name -RequiresAdmin $true `
+                        -CurrentValue $prior -DesiredValue "$($control.Value)" -Action $policyAction))
+        }
     }
+
+    $saveText = if ($script:KeyDest.Type -eq 'Folder') { "save it to $keyDir, read it back" } else { "back it up to $keyDir (encryption is not started unless the backup succeeds)" }
+    $action = if ($script:Decrypting) {
+        "No change (OS volume $mount is being decrypted: $volStatus, protection $protStatus; this script does not enable or protect a volume mid-decryption, so nothing is planned until decryption finishes)"
+    } elseif ($script:AlreadyProtected) {
+        "No change (OS volume $mount is already encrypted or encrypting: $volStatus, protection $protStatus)"
+    } elseif ($script:UsePin) {
+        "Protect ${mount}: add recovery password protector, $saveText, then enable BitLocker (TPM and startup PIN protector, $($script:EncryptionMethod), used space only)"
+    } else {
+        "Protect ${mount}: add recovery password protector, $saveText, then enable BitLocker (TPM protector, $($script:EncryptionMethod), used space only)"
+    }
+    $desired = if ($script:UsePin) { "TPM and startup PIN protector plus recovery password, $($script:EncryptionMethod)" } else { "TPM protector plus recovery password, $($script:EncryptionMethod)" }
     $items.Add((Get-PlanItem -Category $script:EnableCategory -Setting $mount -RequiresAdmin $true -RequiresReboot $true `
-                -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue "TPM protector plus recovery password, $($script:EncryptionMethod)" `
+                -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue $desired `
                 -Action $action))
+    if ($script:UsePin -and $script:AlreadyProtected) {
+        $items.Add((Get-PlanItem -Category 'Report' -Setting 'StartupPin' -RequiresAdmin $false `
+                    -CurrentValue "VolumeStatus=$volStatus;ProtectionStatus=$protStatus" -DesiredValue 'report only' `
+                    -Action "No change (report only: -UseTpmAndPin has no effect because $mount is already protected; this script does not change the protectors of a volume it did not enable, so no PIN, policy or protector change is made)"))
+    }
     if ($noRecoveryToBackUp) {
         $items.Add((Get-PlanItem -Category 'Report' -Setting 'RecoveryPassword' -RequiresAdmin $false `
                     -CurrentValue "VolumeStatus=$volStatus;no RecoveryPassword protector" -DesiredValue 'report only' `
@@ -412,6 +665,28 @@ function Get-RollbackEntryProblem {
     $null
 }
 
+# Returns $null when an FvePolicy record is acceptable, otherwise text saying what is wrong. The record may
+# carry only Category, Name and PriorValue: the name must be one of the policy values this script writes
+# (ControlName), so no other registry value can be named, and no path is recorded. Pure.
+function Get-RollbackPolicyEntryProblem {
+    param(
+        $Entry,
+        [Parameter(Mandatory = $true)][string[]]$ControlName,
+        [Parameter(Mandatory = $true)][string]$PolicyCategory
+    )
+    if ($null -eq $Entry -or $Entry -isnot [pscustomobject]) { return 'the entry is not an object' }
+    foreach ($property in $Entry.PSObject.Properties) {
+        if ($property.Name -cnotin @('Category', 'Name', 'PriorValue')) { return "field '$($property.Name)' is not one this script records for a policy value" }
+    }
+    foreach ($field in 'Category', 'Name', 'PriorValue') {
+        if (-not $Entry.PSObject.Properties[$field]) { return "the entry has no $field" }
+    }
+    if ($Entry.Category -isnot [string] -or $Entry.Category -cne $PolicyCategory) { return "Category '$($Entry.Category)' is not $PolicyCategory" }
+    if ($Entry.Name -isnot [string] -or $Entry.Name -cnotin $ControlName) { return "Name '$($Entry.Name)' is not a policy value this script writes" }
+    if ($Entry.PriorValue -isnot [string] -or $Entry.PriorValue -cnotmatch '^(absent|unknown|[0-9]{1,9})\z') { return "PriorValue '$($Entry.PriorValue)' is not absent, unknown or a whole number" }
+    $null
+}
+
 # True only for an executing rollback in which nothing failed, was skipped or was merely previewed.
 # Only then is the rollback file spent; anything less leaves it for a retry.
 function Test-RollbackFileConsumable {
@@ -451,16 +726,36 @@ function Get-RollbackPlan {
     if ($problem) {
         throw "Rollback file '$($file.FullName)' refused at the top-level fields: $problem. $advice"
     }
+    $policyEntries = [System.Collections.Generic.List[pscustomobject]]::new()
+    $enableEntryCount = 0
+    $policyNameSeen = @{}
+    $controlName = @($script:FveControl | ForEach-Object { $_.Name })
     for ($i = 0; $i -lt $entries.Count; $i++) {
-        $problem = Get-RollbackEntryProblem -Entry $entries[$i] -AllowedField $script:RollbackEntryField `
-            -RequiredField $script:RollbackEntryField -OsDrive $osDrive `
-            -EnableCategory $script:EnableCategory -EncryptionMethod $script:EncryptionMethod
-        if (-not $problem -and ($entries[$i].MountPoint -ine $data.MountPoint -or $entries[$i].ProtectorId -ine $data.ProtectorId)) {
-            $problem = 'MountPoint or ProtectorId differs from the file top level'
+        $entry = $entries[$i]
+        $isPolicy = ($entry -is [pscustomobject] -and $entry.PSObject.Properties['Category'] -and
+            $entry.Category -is [string] -and $entry.Category -ceq $script:FveCategory)
+        if ($isPolicy) {
+            $problem = Get-RollbackPolicyEntryProblem -Entry $entry -ControlName $controlName -PolicyCategory $script:FveCategory
+            if (-not $problem -and $policyNameSeen.ContainsKey($entry.Name)) { $problem = "policy value '$($entry.Name)' is listed twice" }
+            if (-not $problem) {
+                $policyNameSeen[$entry.Name] = $true
+                [void]$policyEntries.Add($entry)
+            }
+        } else {
+            $problem = Get-RollbackEntryProblem -Entry $entry -AllowedField $script:RollbackEntryField `
+                -RequiredField $script:RollbackEntryField -OsDrive $osDrive `
+                -EnableCategory $script:EnableCategory -EncryptionMethod $script:EncryptionMethod
+            if (-not $problem -and ($entry.MountPoint -ine $data.MountPoint -or $entry.ProtectorId -ine $data.ProtectorId)) {
+                $problem = 'MountPoint or ProtectorId differs from the file top level'
+            }
+            if (-not $problem) { $enableEntryCount++ }
         }
         if ($problem) {
             throw "Rollback file '$($file.FullName)' refused at ChangedSettings entry $i (zero-based): $problem. $advice"
         }
+    }
+    if ($enableEntryCount -eq 0) {
+        throw "Rollback file '$($file.FullName)' refused: ChangedSettings holds no $($script:EnableCategory) entry. $advice"
     }
     $script:RollbackSourceFile = $file
 
@@ -469,6 +764,18 @@ function Get-RollbackPlan {
     $items.Add((Get-PlanItem -Category 'DisableOsVolume' -Setting $mount -RequiresAdmin $true `
                 -CurrentValue 'encrypted by this script' -DesiredValue 'decrypted' `
                 -Action "Disable BitLocker on $mount (decryption takes hours and is not a quick undo; keep the recovery key file you saved until it completes)"))
+    foreach ($policy in $policyEntries) {
+        $current = Get-FveValue -Name $policy.Name
+        $restoreAction = if ($policy.PriorValue -eq 'unknown') {
+            "No change (the prior value of $($script:FveKey)\$($policy.Name) was not readable when this script wrote it, so it cannot be restored; set it by hand)"
+        } elseif ($current -eq $policy.PriorValue) {
+            "No change ($($script:FveKey)\$($policy.Name) already holds its prior value: $($policy.PriorValue))"
+        } else {
+            "Restore $($script:FveKey)\$($policy.Name) to its prior value ($($policy.PriorValue); current $current)"
+        }
+        $items.Add((Get-PlanItem -Category $script:FveRestoreCategory -Setting $policy.Name -RequiresAdmin $true `
+                    -CurrentValue $current -DesiredValue $policy.PriorValue -Action $restoreAction))
+    }
     $items
 }
 
@@ -478,10 +785,32 @@ function Test-PreconditionItem {
 
     # An already-protected volume makes the whole run NoChange; the other checks are moot.
     if ($script:AlreadyProtected -and $Item.Setting -in @('Tpm', 'SecureBoot')) { return 'NoChange' }
-    if ($script:AlreadyProtected -and -not $script:BackupPlanned -and $Item.Setting -eq 'KeyDirectoryWritable') { return 'NoChange' }
+    if ($script:AlreadyProtected -and -not $script:BackupPlanned -and $Item.Setting -in @('KeyDirectoryWritable', 'KeyBackup')) { return 'NoChange' }
+    # A volume mid-decryption stops the run on its own row; the checks that only matter for an enable are
+    # reported as not evaluated (not met, not failed), and nothing is written, not even the write probe.
+    if ($script:Decrypting -and $Item.Setting -in @('Tpm', 'SecureBoot', 'KeyDirectoryWritable', 'KeyBackup')) {
+        return 'Skipped: not evaluated (OS volume is being decrypted)'
+    }
 
     switch ($Item.Setting) {
         'RecoveryKeyDirectory' { return 'Met' }
+        'KeyBackup' {
+            if ($script:KeyDest.Type -eq 'NotConfigured') {
+                $script:StopReason = "Key backup: not configured ($($script:KeyDest.Reason)); nothing was changed. Pass -RecoveryKeyDirectory or set BitLockerKeyBackup in the organisation settings"
+                return "Failed: $($script:StopReason)"
+            }
+            # The join facts are read, never assumed: $null (not determined) is as unmet as $false.
+            try { $ctx = Get-OpsHostContext } catch { $ctx = $null }
+            $factName = if ($script:KeyDest.Type -eq 'EntraId') { 'AzureAdJoined' } else { 'DomainJoined' }
+            $fact = if ($null -ne $ctx) { Get-OpsPropertyValue -InputObject $ctx -Name $factName } else { $null }
+            $Item.CurrentValue = "$factName=$(if ($null -eq $fact) { 'unknown' } else { $fact })"
+            if ($fact -ne $true) {
+                $need = if ($script:KeyDest.Type -eq 'EntraId') { 'an Entra joined or hybrid joined host' } else { 'a domain joined host' }
+                $script:StopReason = "Key backup: $($script:KeyDest.Location) needs $need ($($Item.CurrentValue)); nothing was changed"
+                return "Failed: $($script:StopReason)"
+            }
+            return 'Met'
+        }
         'KeyDirectoryWritable' {
             if ($WhatIfPreference) { return 'Previewed' }
             $probe = Join-Path $script:ResolvedKeyDirectory (".ops-write-probe-" + [guid]::NewGuid().ToString('N'))
@@ -538,7 +867,32 @@ function Test-PreconditionItem {
             }
             return 'Met'
         }
+        'NotVirtualMachine' {
+            $vm = Get-VirtualMachineEvidence
+            $Item.CurrentValue = $vm.Text
+            if (-not $vm.Determined) {
+                $script:StopReason = "could not tell whether this is a virtual machine ($($vm.Text)), so a startup PIN is refused: a guest nobody can type a PIN at would never start"
+                return "Failed: $($script:StopReason)"
+            }
+            if ($vm.IsVirtualMachine) {
+                $script:StopReason = "this is a virtual machine ($($vm.Text)); -UseTpmAndPin is refused because nobody can type a pre-boot PIN on a guest such as an Azure Virtual Desktop session host, and the host would never start"
+                return "Failed: $($script:StopReason)"
+            }
+            return 'Met'
+        }
+        'StartupPin' {
+            $pinProblem = Get-StartupPinProblem -Pin $script:StartupPin
+            if ($pinProblem) {
+                $script:StopReason = $pinProblem
+                return "Failed: $pinProblem"
+            }
+            return 'Met'
+        }
         'OsVolumeNotProtected' {
+            if ($script:Decrypting) {
+                $script:StopReason = "OS volume is being decrypted ($($script:OsVolumeStatus), protection $($script:OsProtectionStatus)); nothing was changed and no enable is planned until decryption finishes"
+                return "Failed: OS volume is being decrypted ($($script:OsVolumeStatus)); nothing was changed and no enable is planned until decryption finishes"
+            }
             if ($script:AlreadyProtected) { return 'NoChange' }
             $os = Get-OsVolumeState
             # Get-BitLockerVolume needs elevation too, so an unelevated failed read is unread, not a stop.
@@ -558,7 +912,63 @@ function Test-PreconditionItem {
     "Failed: unknown precondition $($Item.Setting)"
 }
 
-# The ordered, all-or-nothing enable. Never returns or logs the recovery password.
+# Writes one FVE policy DWord. The key is created only when it is missing: New-Item -Force on a key that
+# exists replaces it and wipes its other values. Records the prior value so a rollback can restore it.
+function Invoke-FvePolicySet {
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    $name = [string]$Item.Setting
+    $prior = [string]$Item.CurrentValue
+    if ($prior -cnotmatch '^(absent|[0-9]{1,9})$') { $prior = 'unknown' }
+    try {
+        if (-not (Test-Path -LiteralPath $script:FveKey)) { New-Item -Path $script:FveKey -Force | Out-Null }
+        Set-ItemProperty -Path $script:FveKey -Name $name -Value ([int]$Item.DesiredValue) -Type DWord -Force -ErrorAction Stop
+    } catch {
+        $script:StopReason = "FVE policy write failed for ${name}: $($_.Exception.Message)"
+        return "Failed: $($script:StopReason)"
+    }
+    [void]$script:PolicyChanges.Add([pscustomobject]@{ Category = $script:FveCategory; Name = $name; PriorValue = $prior })
+    'Applied'
+}
+
+# Puts one FVE policy value back to its recorded prior value. 'absent' removes the value; 'unknown'
+# cannot be restored and is NoChange with the reason in the text after a colon.
+function Invoke-FveValueRestore {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Prior)
+
+    if ($Prior -eq 'unknown') { return 'NoChange' }
+    try {
+        $current = Get-FveValue -Name $Name
+        if ($current -eq $Prior) { return 'NoChange' }
+        if ($Prior -eq 'absent') {
+            Remove-ItemProperty -Path $script:FveKey -Name $Name -Force -ErrorAction Stop
+        } else {
+            if (-not (Test-Path -LiteralPath $script:FveKey)) { New-Item -Path $script:FveKey -Force | Out-Null }
+            Set-ItemProperty -Path $script:FveKey -Name $Name -Value ([int]$Prior) -Type DWord -Force -ErrorAction Stop
+        }
+    } catch {
+        return "Failed: $($_.Exception.Message)"
+    }
+    'Reverted'
+}
+
+# Restores every policy value this run wrote, newest first, and returns text for the item's result.
+# Empty when nothing was written. Used when the enable fails, is declined, or a policy row failed.
+function Undo-FvePolicyChange {
+    if ($script:PolicyChanges.Count -eq 0) { return '' }
+    $failed = [System.Collections.Generic.List[string]]::new()
+    $restored = 0
+    for ($i = $script:PolicyChanges.Count - 1; $i -ge 0; $i--) {
+        $change = $script:PolicyChanges[$i]
+        $r = Invoke-FveValueRestore -Name $change.Name -Prior $change.PriorValue
+        if ($r -like 'Failed:*' -or $change.PriorValue -eq 'unknown') { [void]$failed.Add("$($change.Name) (prior $($change.PriorValue))") } elseif ($r -eq 'Reverted') { $restored++ }
+    }
+    $script:PolicyChanges.Clear()
+    if ($failed.Count -gt 0) { return " WARNING: restoring the FVE policy values failed for: $($failed -join ', '); put them back by hand." }
+    " The FVE policy values written for the PIN were restored ($restored restored)."
+}
+
+# The ordered, all-or-nothing enable. Never returns or logs the recovery password or the PIN.
 function Invoke-EnableOsVolume {
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
@@ -582,20 +992,30 @@ function Invoke-EnableOsVolume {
         if (-not $new) { throw 'Add-BitLockerKeyProtector did not return a new recovery password protector.' }
         $protectorId = [string]$new.KeyProtectorId
         $password = [string](Get-OpsPropertyValue -InputObject $new -Name 'RecoveryPassword')
-        if ([string]::IsNullOrWhiteSpace($password)) { throw 'The new recovery password protector carried no recovery password.' }
+        if ($script:KeyDest.Type -eq 'Folder') {
+            if ([string]::IsNullOrWhiteSpace($password)) { throw 'The new recovery password protector carried no recovery password.' }
 
-        # Step 2: write the key file, then Step 3: read it back. Neither message may contain the password.
-        $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
-        if (Test-Path -LiteralPath $keyFile) { throw "Key file $keyFile already exists; refusing to overwrite it." }
-        $content = Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password
-        Set-Content -LiteralPath $keyFile -Value $content -Encoding ascii -ErrorAction Stop
-        $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
-        if ($null -eq $readBack -or -not $readBack.Contains($password)) {
-            throw "Key file $keyFile was written but reading it back did not show the recovery password."
+            # Step 2: write the key file, then Step 3: read it back. Neither message may contain the password.
+            $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
+            if (Test-Path -LiteralPath $keyFile) { throw "Key file $keyFile already exists; refusing to overwrite it." }
+            $content = Get-RecoveryKeyFileText -Mount $mount -ProtectorId $protectorId -KeyValue $password
+            Set-Content -LiteralPath $keyFile -Value $content -Encoding ascii -ErrorAction Stop
+            $readBack = Get-Content -LiteralPath $keyFile -Raw -ErrorAction Stop
+            if ($null -eq $readBack -or -not $readBack.Contains($password)) {
+                throw "Key file $keyFile was written but reading it back did not show the recovery password."
+            }
+        } else {
+            # Steps 2 and 3 for an escrow destination: the backup must succeed (it throws otherwise) before encryption starts.
+            Invoke-ProtectorEscrow -Mount $mount -ProtectorId $protectorId
         }
 
         # Step 4: only now start encryption.
-        Enable-BitLocker -MountPoint $mount -TpmProtector -EncryptionMethod $script:EncryptionMethod -UsedSpaceOnly -ErrorAction Stop | Out-Null
+        if ($script:UsePin) {
+            # The SecureString goes straight to the cmdlet; it is never converted to text here.
+            Enable-BitLocker -MountPoint $mount -TpmAndPinProtector -Pin $script:StartupPin -EncryptionMethod $script:EncryptionMethod -UsedSpaceOnly -ErrorAction Stop | Out-Null
+        } else {
+            Enable-BitLocker -MountPoint $mount -TpmProtector -EncryptionMethod $script:EncryptionMethod -UsedSpaceOnly -ErrorAction Stop | Out-Null
+        }
     } catch {
         $message = $_.Exception.Message
         if ($password) { $message = $message.Replace($password, '[redacted]') }
@@ -611,13 +1031,15 @@ function Invoke-EnableOsVolume {
                 $cleanup += " Key file $keyFile refers to the removed protector and can be deleted."
             }
         }
+        $cleanup += (Undo-FvePolicyChange)
         $script:StopReason = "enable failed: $message"
+        if ($script:KeyDest.Type -ne 'Folder') { $script:StopReason = "enable failed (key backup to $($script:KeyDest.Location) or a later step): $message" }
         return "Failed: $message$cleanup BitLocker was not enabled."
     } finally {
         $password = $null
     }
 
-    $Item.Detail = "ProtectorId=$protectorId;KeyFile=$keyFile"
+    $Item.Detail = if ($script:KeyDest.Type -eq 'Folder') { "ProtectorId=$protectorId;KeyFile=$keyFile" } else { "ProtectorId=$protectorId;KeyBackup=$($script:KeyDest.Type);KeyBackupLocation=$($script:KeyDest.Location)" }
     [void]$script:ChangedSettings.Add([pscustomobject]@{
             Category = $script:EnableCategory; MountPoint = $mount; ProtectorId = $protectorId
             ScriptEnabledBitLocker = $true; EncryptionMethod = $script:EncryptionMethod
@@ -632,6 +1054,16 @@ function Invoke-BackupRecoveryProtector {
     $mount = [string]$script:ResolvedBackupVolume
     $protectorId = [string]$Item.Setting
     $password = $null
+    if ($script:KeyDest.Type -ne 'Folder') {
+        try {
+            Invoke-ProtectorEscrow -Mount $mount -ProtectorId $protectorId
+        } catch {
+            $script:StopReason = "recovery protector backup failed: $($_.Exception.Message)"
+            return "Failed: $($script:StopReason)"
+        }
+        $Item.Detail = "Volume=$mount;ProtectorId=$protectorId;KeyBackup=$($script:KeyDest.Type);KeyBackupLocation=$($script:KeyDest.Location)"
+        return 'Applied'
+    }
     $keyFile = Get-RecoveryKeyFilePath -ProtectorId $protectorId
     try {
         $volume = @(Get-BitLockerVolume -MountPoint $mount -ErrorAction Stop | Select-Object -First 1)
@@ -665,18 +1097,46 @@ function Invoke-BackupRecoveryProtector {
     'Applied'
 }
 
+# True when the plan could not read the item's current value, the same test Test-WindowsHardeningState.ps1
+# uses to count an item Unread: an Action that starts Unreadable, Cannot assess or Skipped, or a current value of
+# unknown or unreadable (alone or after = or ;).
+function Test-PlanItemUnread {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][pscustomobject]$Item)
+
+    if ("$($Item.Action)" -match '^(Unreadable|Cannot assess|Skipped)') { return $true }
+    if ("$($Item.CurrentValue)" -match '(^|[=;])\s*(unknown|unreadable)\b') { return $true }
+    $false
+}
+
 function Invoke-PlanItem {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
     param([Parameter(Mandatory = $true)][pscustomobject]$Item)
 
     if ($Item.Category -eq 'Precondition') { return (Test-PreconditionItem -Item $Item) }
     if ($Item.Action -like 'No change*') { return 'NoChange' }
-    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) { return 'Skipped: requires elevation' }
-    if ($script:StopReason) { return "Skipped: precondition failed ($($script:StopReason))" }
-    if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) { return 'Previewed' }
+    if ($Item.RequiresAdmin -and -not (Test-IsAdministrator)) {
+        # A live run changes nothing and says so. Under -WhatIf only, an item whose current value was read goes on
+        # to ShouldProcess so its "What if:" line prints; one whose value was not read stays a skip.
+        if (-not $WhatIfPreference) { return 'Skipped: requires elevation' }
+        if (Test-PlanItemUnread -Item $Item) { return 'Skipped: requires elevation (not read)' }
+    }
+    if ($script:StopReason) {
+        # A policy row that failed earlier leaves the rows before it written: put those back when the enable is skipped.
+        $undo = if ($Item.Category -eq $script:EnableCategory) { Undo-FvePolicyChange } else { '' }
+        return "Skipped: precondition failed ($($script:StopReason))$undo"
+    }
+    if (-not $PSCmdlet.ShouldProcess($Item.Setting, $Item.Action)) {
+        $undo = if ($Item.Category -eq $script:EnableCategory) { Undo-FvePolicyChange } else { '' }
+        if ($undo) { return "Previewed:$undo" }
+        return 'Previewed'
+    }
 
     switch ($Item.Category) {
         { $_ -eq $script:EnableCategory } { return (Invoke-EnableOsVolume -Item $Item) }
+        { $_ -eq $script:FveCategory } { return (Invoke-FvePolicySet -Item $Item) }
+        { $_ -eq $script:FveRestoreCategory } { return (Invoke-FveValueRestore -Name $Item.Setting -Prior ([string]$Item.DesiredValue)) }
         { $_ -eq $script:BackupCategory } { return (Invoke-BackupRecoveryProtector -Item $Item) }
         'DisableOsVolume' {
             try {
@@ -695,7 +1155,12 @@ function Invoke-PlanItem {
 # ---------------------------------------------------------------------------
 
 if (-not $Rollback) {
-    $script:ResolvedKeyDirectory = Resolve-RecoveryKeyDirectory -Path $RecoveryKeyDirectory
+    $script:OrgSettings = Get-OpsOrgSettings
+    $script:KeyDest = Resolve-KeyBackupDestination
+    # A folder (the parameter or the settings value) gets the same validation; a bad one refuses before any change.
+    if ($script:KeyDest.Type -eq 'Folder') {
+        $script:ResolvedKeyDirectory = Resolve-RecoveryKeyDirectory -Path $script:KeyDest.Location
+    }
 }
 
 $script:ResolvedBackupVolume = ([string]$env:SystemDrive).TrimEnd('\')
@@ -760,14 +1225,21 @@ if (-not $Rollback -and -not $WhatIfPreference -and $script:ChangedSettings.Coun
         ProtectorId = $first.ProtectorId
         ScriptEnabledBitLocker = $true
         EncryptionMethod = $first.EncryptionMethod
-        ChangedSettings = @($script:ChangedSettings)
+        # The enable record first, then the prior value of each policy value written for the PIN (none without it).
+        ChangedSettings = @(@($script:ChangedSettings) + @($script:PolicyChanges))
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $rollbackPath -Encoding utf8 -WhatIf:$false
 }
 
 $summary = [pscustomobject]@{
     Operation = "BitLockerOsVolume ($mode)"
     IsElevated = (Test-IsAdministrator)
+    UseTpmAndPin = [bool]$script:UsePin
     RecoveryKeyDirectory = $script:ResolvedKeyDirectory
+    KeyBackupDestination = $script:KeyDest.Type
+    KeyBackupLocation = if ($script:KeyDest.Type -eq 'Folder') { $script:ResolvedKeyDirectory } else { $script:KeyDest.Location }
+    KeyBackupSource = $script:KeyDest.Source
+    KeyBackupNote = if ($script:KeyDest.IgnoredSettingsFolder) { "-RecoveryKeyDirectory was given, so the Folder value in the organisation settings ($($script:KeyDest.IgnoredSettingsFolder)) was ignored." } else { $null }
+    KeyBackupProtectorIds = @($state | Where-Object { $_.Result -eq 'Applied' -and $_.Detail -match 'ProtectorId=' } | ForEach-Object { if ($_.Detail -match 'ProtectorId=(\{[0-9a-fA-F-]+\})') { $Matches[1] } })
     PlanCsvPath = (Resolve-Path -LiteralPath $planPath).Path
     PlanJsonPath = (Resolve-Path -LiteralPath $planJsonPath).Path
     StateCsvPath = (Resolve-Path -LiteralPath $statePath).Path

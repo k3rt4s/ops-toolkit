@@ -44,7 +44,7 @@ function Write-FakeDismMutation {
     param([string]$Command, [string]$Target, [string]$Detail)
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -79,7 +79,9 @@ function Get-WindowsOptionalFeature {
 
 function Disable-WindowsOptionalFeature {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    # The real cmdlet declares no SupportsShouldProcess (checked with Get-Command, 2026-11-06), so neither does
+    # this one: a -WhatIf passed to it fails to bind, as it does against the real module.
+    [CmdletBinding()]
     param(
         [Parameter()][switch]$Online,
         [Parameter(Mandatory = $true)][string[]]$FeatureName,
@@ -95,7 +97,9 @@ function Disable-WindowsOptionalFeature {
 
 function Enable-WindowsOptionalFeature {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    # The real cmdlet declares no SupportsShouldProcess (checked with Get-Command, 2026-11-06), so neither does
+    # this one: a -WhatIf passed to it fails to bind, as it does against the real module.
+    [CmdletBinding()]
     param(
         [Parameter()][switch]$Online,
         [Parameter(Mandatory = $true)][string[]]$FeatureName,
@@ -120,12 +124,12 @@ foreach ($a in $args) {
     elseif ($a -match '^/(Get-FeatureInfo|Disable-Feature|Enable-Feature|Get-ProvisionedAppxPackages|Remove-ProvisionedAppxPackage)$') { $verb = $Matches[1] }
 }
 if ($env:OPSTOOLKIT_TEST_DISM_LOG) {
-    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_DISM_LOG -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_DISM_LOG -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Verb = $verb; Feature = $featureName; Package = $packageName; ProcessId = $PID; Arguments = ($args -join ' ') } | ConvertTo-Json -Compress)
 }
 function Write-Mutation([string]$Target) {
     if ($env:OPSTOOLKIT_TEST_MUTATION_LOG) {
-        Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -Value ([pscustomobject]@{
+        Add-Content -LiteralPath $env:OPSTOOLKIT_TEST_MUTATION_LOG -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
                 Command = 'Dism.exe'; Target = $Target; Detail = "/$verb" } | ConvertTo-Json -Compress)
     }
 }
@@ -265,10 +269,10 @@ function Write-FakeDismExecutable {
     New-Item -ItemType Directory -Path $Directory -Force | Out-Null
     $scriptPath = Join-Path $Directory 'fake-dism.ps1'
     $launcher = Join-Path $Directory 'fake-dism.cmd'
-    Set-Content -LiteralPath $scriptPath -Value $script:FakeDismScript -Encoding utf8
+    Set-Content -LiteralPath $scriptPath -Value $script:FakeDismScript -Encoding utf8 -WhatIf:$false
     $pwsh = Join-Path $PSHOME 'pwsh.exe'
     if (-not (Test-Path -LiteralPath $pwsh)) { $pwsh = Join-Path $PSHOME 'powershell.exe' }
-    Set-Content -LiteralPath $launcher -Encoding ascii -Value @(
+    Set-Content -LiteralPath $launcher -Encoding ascii -WhatIf:$false -Value @(
         '@echo off'
         "`"$pwsh`" -NoProfile -NonInteractive -File `"%~dp0fake-dism.ps1`" %*"
         'exit /b %ERRORLEVEL%'

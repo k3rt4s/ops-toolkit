@@ -3,7 +3,79 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'TestHelpers.psm1') -Force
     Import-ScriptFunction -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1' `
-        -FunctionName @('Get-OpsEndpointCoverageStatus', 'Get-OpsControlConclusion')
+        -FunctionName @('Get-OpsEndpointCoverageStatus', 'Get-OpsControlConclusion', 'Get-OpsHardeningControlStatus')
+}
+
+Describe 'Security evidence-pack CFG-01 hardening grade' {
+    # CFG-01 used to read only drift and compliant counts, so an item the verifier could not read
+    # vanished into a Met control. It now reads UnreadCount and Passed too.
+    It 'is NotAssessed when nothing was checked' {
+        Get-OpsHardeningControlStatus -ItemsChecked 0 -TotalDrift 0 -CompliantCount 0 -UnreadCount 0 -Passed $false |
+            Should -Be 'NotAssessed'
+        Get-OpsHardeningControlStatus -ItemsChecked 0 -TotalDrift 0 -CompliantCount 0 -UnreadCount 5 -Passed $false |
+            Should -Be 'NotAssessed'
+    }
+
+    It 'is Partial, never Met, while any item is unread even with no drift' {
+        Get-OpsHardeningControlStatus -ItemsChecked 10 -TotalDrift 0 -CompliantCount 10 -UnreadCount 1 -Passed $false |
+            Should -Be 'Partial'
+        Get-OpsHardeningControlStatus -ItemsChecked 10 -TotalDrift 0 -CompliantCount 10 -UnreadCount 1 -Passed $true |
+            Should -Be 'Partial' -Because 'UnreadCount alone must hold the grade below Met'
+    }
+
+    It 'is Partial when the verifier did not pass for another reason, such as a target it could not check' {
+        Get-OpsHardeningControlStatus -ItemsChecked 10 -TotalDrift 0 -CompliantCount 10 -UnreadCount 0 -Passed $false |
+            Should -Be 'Partial'
+    }
+
+    It 'is Met only when the verifier passed and nothing is unread' {
+        Get-OpsHardeningControlStatus -ItemsChecked 10 -TotalDrift 0 -CompliantCount 10 -UnreadCount 0 -Passed $true |
+            Should -Be 'Met'
+    }
+
+    It 'keeps the drift grades: NotMet with nothing compliant, Partial otherwise' {
+        Get-OpsHardeningControlStatus -ItemsChecked 4 -TotalDrift 4 -CompliantCount 0 -UnreadCount 0 -Passed $false |
+            Should -Be 'NotMet'
+        Get-OpsHardeningControlStatus -ItemsChecked 4 -TotalDrift 1 -CompliantCount 3 -UnreadCount 2 -Passed $false |
+            Should -Be 'Partial'
+    }
+}
+
+Describe 'Security evidence-pack CFG-01 verifier wiring' {
+    BeforeAll {
+        $script:cfgPackPath = Get-RepositoryScriptPath -RelativePath 'scripts\reporting\Export-SecurityControlEvidencePack.ps1'
+        $script:cfgPackSource = Get-Content -Raw $script:cfgPackPath
+        $script:cfgCheckerPath = Get-RepositoryScriptPath -RelativePath 'scripts\it-operations\windows-hardening\Test-WindowsHardeningState.ps1'
+    }
+
+    It 'grades CFG-01 from UnreadCount and Passed through the shared decision function' {
+        $script:cfgPackSource | Should -Match ([regex]::Escape("Get-OpsPropertyValue -InputObject `$hardening -Name 'UnreadCount'"))
+        $script:cfgPackSource | Should -Match ([regex]::Escape("Get-OpsPropertyValue -InputObject `$hardening -Name 'Passed'"))
+        $script:cfgPackSource | Should -Match ([regex]::Escape('-UnreadCount $unread -Passed $hardeningPassed'))
+    }
+
+    It "passes the verifier every target name its -Target accepts, as one comma-joined value" {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:cfgCheckerPath, [ref]$null, [ref]$null)
+        $param = $ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Target' }
+        $validate = $param.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateScript' }
+        $accepted = @($validate.Extent.Text | Select-String -Pattern "'([A-Za-z]+)'" -AllMatches |
+                ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
+                Where-Object { $_ -in @('SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
+                        'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall', 'WdacAudit', 'BitLocker') } |
+                Sort-Object -Unique)
+        $accepted.Count | Should -Be 12
+
+        $match = [regex]::Match($script:cfgPackSource, "\`$hardeningTargetArgument = '([^']+)'")
+        $match.Success | Should -BeTrue
+        @($match.Groups[1].Value -split ',' | Sort-Object) | Should -Be @($accepted)
+        $script:cfgPackSource | Should -Match ([regex]::Escape("-Argument @('-Target', `$hardeningTargetArgument)"))
+    }
+
+    It 'leaves the verifier default at SchannelTls and Privacy' {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:cfgCheckerPath, [ref]$null, [ref]$null)
+        $param = $ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Target' }
+        @($param.DefaultValue.SafeGetValue()) | Should -Be @('SchannelTls', 'Privacy')
+    }
 }
 
 Describe 'Security evidence-pack endpoint coverage decisions' {

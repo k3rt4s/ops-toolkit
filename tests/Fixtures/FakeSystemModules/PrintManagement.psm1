@@ -26,18 +26,18 @@ function Write-FakePrinterMutation {
     param([string]$Command, [string]$Target)
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = '' } | ConvertTo-Json -Compress)
 }
 
 function Get-Printer {
     [CmdletBinding()]
-    param([Parameter()]$Name)
+    param([Parameter()][string[]]$Name)
 
     foreach ($entry in @(($env:OPSTOOLKIT_TEST_PRINTERS -split ';') | Where-Object { $_ })) {
         $parts = $entry -split '\|'
         if ($parts.Count -lt 2) { continue }
-        if ($Name -and [string]$Name -ne $parts[0]) { continue }
+        if ($Name -and -not (@($Name) | Where-Object { $parts[0] -like $_ })) { continue }
         [pscustomobject]@{
             Name = $parts[0]; Type = $parts[1]
             DriverName = 'Fake Driver'; PortName = 'FAKE:'
@@ -46,15 +46,20 @@ function Get-Printer {
 }
 
 function Add-Printer {
-    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter()]$Name, [Parameter()]$ConnectionName)
-    Write-FakePrinterMutation -Command 'Add-Printer' -Target ([string]$ConnectionName)
+    if ($PSCmdlet.ShouldProcess([string]$ConnectionName, 'Add-Printer')) {
+        Write-FakePrinterMutation -Command 'Add-Printer' -Target ([string]$ConnectionName)
+    }
 }
 
 function Remove-Printer {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter()]$Name)
-    Write-FakePrinterMutation -Command 'Remove-Printer' -Target ([string]$Name)
+    if ($PSCmdlet.ShouldProcess([string]$Name, 'Remove-Printer')) {
+        Write-FakePrinterMutation -Command 'Remove-Printer' -Target ([string]$Name)
+    }
 }
 
 Export-ModuleMember -Function 'Get-Printer', 'Add-Printer', 'Remove-Printer'

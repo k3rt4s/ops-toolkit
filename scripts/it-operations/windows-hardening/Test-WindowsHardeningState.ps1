@@ -10,27 +10,47 @@ Instructions:
 - Runs unelevated. The hardening scripts refuse to apply without elevation but
   will always produce a plan, which is all this needs. Some current values cannot be
   read without elevation; those items are reported as Unread, never as compliant, and
-  an elevated run reads them.
+  an elevated run reads them. Run unelevated under -WhatIf, a plan item whose value was read is
+  'Previewed' (Drifted here) and one whose value was not read is 'Skipped: requires elevation
+  (not read)' (Unread here).
 - -Target selects what to verify. SchannelTls and Privacy are read from the older
-  plan CSV (Action: NoChange, CreateValue, SetValue, DeleteValue, Skipped). Defender,
+  plan CSV (Action: NoChange, CreateValue, SetValue, DeleteValue, Skipped). A local row of
+  that plan the checker cannot classify is Unread, not drift and not a pass: a Skipped
+  row, a service row (the plan records no startup type to compare), a Missing row and
+  any action it does not know. A scheduled-task row is compared (task state against
+  desired state). Defender,
   CredentialProtection, NetworkProtocol, ExploitMitigation, AuditLogging, RemoteAccess,
   LocalAccount, Firewall and WdacAudit are read from the apply-state JSON the newer
   scripts write (Result: NoChange, Previewed, ReportOnly, Skipped, Failed). BitLocker
   is read directly from the OS volume with Get-BitLockerVolume, because
-  Enable-BitLockerOsVolume.ps1 needs a recovery key directory and is never run here.
+  Enable-BitLockerOsVolume.ps1 needs a key backup destination and is never run here;
+  a second BitLocker row (Category KeyBackup, ReportOnly) names the destination the
+  organisation settings file configures, or says it is not configured or invalid, and
+  never claims a key reached it.
   The default is SchannelTls and Privacy, the two targets the evidence pack has always
-  verified; name the newer targets with -Target to verify them.
+  verified; name the newer targets with -Target to verify them. -Target also accepts one
+  comma-joined value (A,B), which is how pwsh -File and the evidence pack pass a list.
 - State per item: Compliant (already in the desired state), Drifted (the plan would
   change it), NotConfigured, Failed, ReportOnly (listed, not counted as compliant or
   drifted), Precondition (a prerequisite row, recorded and excluded from the counts),
   Unread (the value could not be read, for example because the item needs elevation
   to read, or the read failed) and NotCheckedRemotely. Unread and NotCheckedRemotely are
   undetermined: never counted compliant, and any one of them makes Passed false.
-- A newer-schema item whose result is exactly 'Skipped: requires elevation' is
+- 'Previewed' is Drifted. 'Skipped: requires elevation (not read)', which the scripts return
+  for an unelevated -WhatIf item whose current value was not read, is Unread like any other
+  'Skipped:*' result.
+- A state file from an older run can still carry the exact result 'Skipped: requires elevation'
+  (an unelevated item before the scripts previewed under -WhatIf). Such an item is
   reported as Drifted, because every one of those scripts decides 'No change' before it
   checks elevation, so reaching the elevation check means the value was read and is not
   the desired one. Where the item itself says its current value was unreadable, it is
   Unread instead.
+- AuditLogging also carries the off-host rows of Set-WindowsAuditLogging (from the organisation
+  settings file). The WEF subscription manager value and the NETWORK SERVICE group row are
+  compared like any other setting (Compliant when already as configured, Drifted when the
+  plan would change them). Its report-only rows (no destination configured or invalid, an
+  Azure Monitor Agent or share destination, a WinRM service that is not confirmed running)
+  are Unread, so none of them can lift a pass: delivery off the host is never assumed.
 - WdacAudit is Compliant when the toolkit audit policy is already active, Drifted when
   it is not, and Unread when the active policy list cannot be read or the policy cannot
   be built (the ConfigCI module, CiTool.exe or the example policy is missing).
@@ -105,10 +125,26 @@ Active script kept in the reorganized ops-toolkit repo.
 [CmdletBinding()]
 param(
     [Parameter()]
-    [ValidateSet(
-        'SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
-        'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
-        'WdacAudit', 'BitLocker')]
+    # Not a ValidateSet: pwsh -File hands a comma-joined list (what the evidence pack sends) over as one
+    # string, which a ValidateSet rejects. Each value, or each comma-separated part of one, must be a target name.
+    [ArgumentCompleter({
+            param($commandName, $parameterName, $wordToComplete)
+            $null = $commandName, $parameterName
+            'SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
+            'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
+            'WdacAudit', 'BitLocker' | Where-Object { $_ -like "$wordToComplete*" }
+        })]
+    [ValidateScript({
+            $valid = @('SchannelTls', 'Privacy', 'Defender', 'CredentialProtection', 'NetworkProtocol',
+                'ExploitMitigation', 'AuditLogging', 'RemoteAccess', 'LocalAccount', 'Firewall',
+                'WdacAudit', 'BitLocker')
+            foreach ($part in ([string]$_ -split ',')) {
+                if ($part.Trim() -notin $valid) {
+                    throw "'$($part.Trim())' is not a target. Valid targets: $($valid -join ', ')."
+                }
+            }
+            $true
+        })]
     [string[]]$Target = @('SchannelTls', 'Privacy'),
 
     [Parameter()]
@@ -145,12 +181,17 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Reporting') -Force
+Import-Module (Join-Path $PSScriptRoot '..\..\..\modules\OpsToolkit.Hardening') -Force
 
 # pwsh -File hands every argument as a literal string, so an estate-scoped caller
 # that joins targets into one comma-separated value needs them split back into a
 # real array here. An unbound -ComputerName is left alone.
 if ($PSBoundParameters.ContainsKey('ComputerName')) {
     $ComputerName = ConvertTo-OpsSplitList -Value $ComputerName
+}
+# The same for -Target, which the evidence pack sends as one comma-joined value.
+if ($PSBoundParameters.ContainsKey('Target')) {
+    $Target = @(ConvertTo-OpsSplitList -Value $Target)
 }
 
 # Schema 'Legacy' reads the plan CSV of the two older scripts. Schema 'State' reads the
@@ -183,6 +224,41 @@ $targetScript = @{
 # or hide drift.
 $nonVerdictState = @('Unread', 'ReportOnly', 'Precondition', 'NotCheckedRemotely')
 
+# Maps one local row of the older plan CSV to a state. A row the checker cannot classify is
+# Unread, never drift and never a pass: Skipped rows, services (the plan records the status but not
+# the startup type, so 'Stopped; Disabled' cannot be compared), Missing rows (an absent item cannot be
+# told from a failed read) and any action this mapping does not know. A scheduled-task row carries the
+# task state and the desired state, so it is compared.
+function Get-LegacyRowState {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([Parameter(Mandatory = $true)][AllowNull()][object]$Item)
+
+    $action = [string](Get-OpsPropertyValue -InputObject $Item -Name 'Action')
+    $current = ([string](Get-OpsPropertyValue -InputObject $Item -Name 'CurrentValue')).Trim()
+    $desired = ([string](Get-OpsPropertyValue -InputObject $Item -Name 'DesiredValue')).Trim()
+
+    switch ($action) {
+        'NoChange' { return [pscustomobject]@{ State = 'Compliant'; Reason = '' } }
+        'CreateValue' { return [pscustomobject]@{ State = 'NotConfigured'; Reason = '' } }
+        'SetValue' { return [pscustomobject]@{ State = 'Drifted'; Reason = '' } }
+        'DeleteValue' { return [pscustomobject]@{ State = 'Drifted'; Reason = '' } }
+        { $_ -in @('DisableScheduledTask', 'EnableScheduledTask') } {
+            $known = @('Ready', 'Running', 'Queued', 'Disabled')
+            if ($current -notin $known -or $desired -notin @('Enabled', 'Disabled')) {
+                return [pscustomobject]@{ State = 'Unread'; Reason = "The scheduled task state '$current' could not be compared with '$desired'; not assumed compliant." }
+            }
+            $isDisabled = ($current -eq 'Disabled')
+            $meets = if ($desired -eq 'Disabled') { $isDisabled } else { -not $isDisabled }
+            return [pscustomobject]@{ State = $(if ($meets) { 'Compliant' } else { 'Drifted' }); Reason = '' }
+        }
+        default {
+            $why = if ($action -eq 'Skipped') { 'The plan skipped this row' } elseif ($action) { "The plan action '$action' cannot be compared with the machine" } else { 'The plan row carried no action' }
+            return [pscustomobject]@{ State = 'Unread'; Reason = "$why; not assumed compliant." }
+        }
+    }
+}
+
 function Get-HardeningStateVerdict {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -195,6 +271,17 @@ function Get-HardeningStateVerdict {
 
     if ($category -eq 'Precondition' -or $result -eq 'Met') {
         $state = 'Precondition'; $reason = 'Prerequisite row; not counted.'
+    } elseif ($category -eq 'OffHostReport' -and $result -eq 'ReportOnly') {
+        # The off-host rows of Set-WindowsAuditLogging. They state facts the script cannot turn into a delivery
+        # check (no destination configured, an agent or share destination it only reports, a service that is
+        # not running), so each is Unread, which keeps Passed false: logs that may never leave the host are
+        # not a pass. The one exception is WinRM confirmed running, a supporting fact beside the WEF value row.
+        $setting = [string](Get-OpsPropertyValue -InputObject $Item -Name 'Setting')
+        if ($setting -eq 'WinRM service' -and $current -eq 'Running') {
+            $state = 'ReportOnly'; $reason = 'WinRM is running; source-initiated forwarding can start. Delivery itself is not checked here.'
+        } else {
+            $state = 'Unread'; $reason = 'Whether logs leave this host is not established by this row; not assumed compliant.'
+        }
     } elseif ($result -eq 'ReportOnly') {
         $state = 'ReportOnly'; $reason = 'Reported only; the script changes nothing here.'
     } elseif ($result -eq 'NoChange') {
@@ -209,7 +296,9 @@ function Get-HardeningStateVerdict {
     } elseif ($result -like 'Failed:*') {
         $state = 'Failed'; $reason = 'The script reported a failure; counted as drift.'
     } elseif ($result -eq 'Skipped: requires elevation') {
-        # Every newer script returns NoChange before it checks elevation, so an item that
+        # The exact result now comes only from older state files and live unelevated runs (an unelevated
+        # -WhatIf run returns Previewed or 'Skipped: requires elevation (not read)'). Every script
+        # returns NoChange before it checks elevation, so an item that
         # reaches this result was read and is not already the desired value. The exceptions
         # are items whose own text says the read failed: Set-WindowsNetworkProtocolHardening
         # and Set-WindowsFirewallBaseline check elevation before their unreadable test.
@@ -255,7 +344,7 @@ function Get-WdacDeployVerdict {
     [pscustomobject]@{ State = 'Unread'; Reason = "Whether the audit policy is active could not be determined ($activeCheck)." }
 }
 
-# Reads the OS volume directly. Enable-BitLockerOsVolume.ps1 needs a recovery key directory and is
+# Reads the OS volume directly. Enable-BitLockerOsVolume.ps1 needs a recovery key destination and is
 # never run here. Only status fields are read; no key protector or recovery password is touched.
 function Get-BitLockerOsVolumeState {
     [CmdletBinding()]
@@ -422,6 +511,22 @@ foreach ($name in $Target) {
                         -Category 'OsVolume' -ItemType 'BitLockerVolume' -Item $mountPoint -CurrentValue $currentValue `
                         -DesiredValue 'ProtectionStatus=On' -DesiredState 'OS volume encrypted with protection on' `
                         -PlannedAction '' -Reason $reason))
+            if ($machine -eq $env:COMPUTERNAME) {
+                # Where recovery keys are meant to go, from the organisation settings file. ReportOnly always: this
+                # check does not read a protector or a key, so it cannot say a key reached the destination.
+                $keyBackup = (Get-OpsOrgSettings).BitLockerKeyBackup
+                $keyCurrent = "Status=$($keyBackup.Status);Type=$($keyBackup.Type)"
+                $keyReason = if ($keyBackup.Status -eq 'Configured') {
+                    $where = if ($keyBackup.Type -eq 'Folder') { " (folder $($keyBackup.FolderPath))" } else { '' }
+                    "Organisation settings send recovery keys to $($keyBackup.Type)$where. Whether a key reached it is not checked here."
+                } else {
+                    "Key backup destination is $($keyBackup.Status): $($keyBackup.Reason)"
+                }
+                $complianceRecords.Add((ConvertTo-HardeningComplianceRecord -Target $name -ComputerName $machine -State 'ReportOnly' `
+                            -Category 'KeyBackup' -ItemType 'OrgSetting' -Item 'BitLockerKeyBackup' -CurrentValue $keyCurrent `
+                            -DesiredValue 'Configured' -DesiredState 'A recovery key destination is configured' `
+                            -PlannedAction '' -Reason $keyReason))
+            }
             $forTarget = @($complianceRecords | Where-Object { $_.Target -eq $name -and $_.ComputerName -eq $machine })
             $scriptResults.Add((ConvertTo-HardeningScriptResult -Target $name -ComputerName $machine -Status 'Checked' `
                         -Note 'Get-BitLockerVolume' -Record $forTarget -Schema 'State'))
@@ -585,18 +690,14 @@ foreach ($name in $Target) {
 
             $registryPath = [string](Get-OpsPropertyValue -InputObject $item -Name 'RegistryPath')
             $valueName = [string](Get-OpsPropertyValue -InputObject $item -Name 'ValueName')
+            $legacyReason = ''
 
             if ($machine -eq $env:COMPUTERNAME) {
                 # NoChange is the plan saying the machine already holds the desired
                 # value. Anything else is the hardening not being in effect right now.
-                $state = switch ($action) {
-                    'NoChange' { 'Compliant' }
-                    'CreateValue' { 'NotConfigured' }
-                    'SetValue' { 'Drifted' }
-                    'DeleteValue' { 'Drifted' }
-                    'Skipped' { 'Skipped' }
-                    default { if ($action) { "Other:$action" } else { 'Unknown' } }
-                }
+                $legacyRow = Get-LegacyRowState -Item $item
+                $state = $legacyRow.State
+                $legacyReason = $legacyRow.Reason
             } elseif (-not $registryPath) {
                 # Services and scheduled tasks are in the plan but were not read
                 # remotely. Saying so beats implying they were checked.
@@ -617,6 +718,7 @@ foreach ($name in $Target) {
             # The two hardening scripts describe the same thing differently: the
             # privacy plan carries a combined Target, the Schannel plan carries
             # RegistryPath and ValueName separately.
+            $rowReason = (@([string](Get-OpsPropertyValue -InputObject $item -Name 'Reason'), $legacyReason) | Where-Object { $_ }) -join ' '
             $itemLabel = if (Get-OpsPropertyValue -InputObject $item -Name 'Target') {
                 [string](Get-OpsPropertyValue -InputObject $item -Name 'Target')
             } else {
@@ -629,7 +731,7 @@ foreach ($name in $Target) {
                         -Item $itemLabel -CurrentValue $currentValue -DesiredValue $desiredValue `
                         -DesiredState ([string](Get-OpsPropertyValue -InputObject $item -Name 'DesiredState')) `
                         -PlannedAction $action `
-                        -Reason ([string](Get-OpsPropertyValue -InputObject $item -Name 'Reason'))))
+                        -Reason $rowReason))
         }
 
         if ($name -eq 'CredentialProtection') {

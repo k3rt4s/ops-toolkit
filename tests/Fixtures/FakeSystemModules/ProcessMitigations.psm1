@@ -34,7 +34,7 @@ function Write-FakePmMutation {
     param([string]$Command, [string]$Target, [string]$Detail)
     $path = $env:OPSTOOLKIT_TEST_MUTATION_LOG
     if (-not $path) { return }
-    Add-Content -LiteralPath $path -Encoding utf8 -Value ([pscustomobject]@{
+    Add-Content -LiteralPath $path -Encoding utf8 -WhatIf:$false -Value ([pscustomobject]@{
             Command = $Command; Target = $Target; Detail = $Detail } | ConvertTo-Json -Compress)
 }
 
@@ -59,11 +59,23 @@ function Get-ProcessMitigation {
 
     if ($RegistryConfigFilePath) {
         Write-FakePmMutation -Command 'Get-ProcessMitigation' -Target $RegistryConfigFilePath -Detail 'RegistryConfigFilePath export'
-        Set-Content -LiteralPath $RegistryConfigFilePath -Value '<MitigationPolicy />' -Encoding utf8
+        Set-Content -LiteralPath $RegistryConfigFilePath -Value '<MitigationPolicy />' -Encoding utf8 -WhatIf:$false
         return
     }
 
     if ($env:OPSTOOLKIT_TEST_PM_SYSTEM -eq 'UNREADABLE') { throw 'Fake Get-ProcessMitigation: unreadable.' }
+
+    # -Name and -Id ask about one process's own policy, not the system defaults the fixture describes, so
+    # such a process reports nothing set rather than the system values.
+    if (-not $System -and ($Name -or $Id)) {
+        return [pscustomobject]@{
+            Name = if ($Name) { $Name } else { "$Id" }
+            DEP = [pscustomobject]@{ Enable = 'NOTSET'; EmulateAtlThunks = 'NOTSET' }
+            ASLR = [pscustomobject]@{ BottomUp = 'NOTSET'; ForceRelocateImages = 'NOTSET'; HighEntropy = 'NOTSET'; DisallowStripped = 'NOTSET' }
+            SEHOP = [pscustomobject]@{ Enable = 'NOTSET' }
+            CFG = [pscustomobject]@{ Enable = 'NOTSET' }
+        }
+    }
 
     [pscustomobject]@{
         Name = 'System'

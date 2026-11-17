@@ -13,6 +13,9 @@ BeforeAll {
     $script:workRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ops-fw-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $script:workRoot -Force | Out-Null
     $script:systemModulePath = Use-FakeSystemModule
+    Import-Module (Join-Path $PSScriptRoot 'HostContextFixture.psm1') -Force
+    $script:hostFixture = Use-FakeHostContext -Directory $script:workRoot
+    $script:savedHostEnvironment = Set-FakeHostEnvironment -Fixture $script:hostFixture -Confirm:$false
 
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $script:isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -74,6 +77,7 @@ function netsh.exe {
 }
 
 AfterAll {
+    if ($script:savedHostEnvironment) { Restore-FakeHostEnvironment -Saved $script:savedHostEnvironment -Confirm:$false }
     foreach ($p in $script:workRoot, $script:systemModulePath) {
         if ($p -and (Test-Path $p)) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -660,5 +664,74 @@ Describe 'Set-WindowsFirewallBaseline rollback safety' {
         $rb3 = Invoke-FwRollback -Dir $dir -Tag 'fwLifoRollback3' -Execute
         $rb3.Run.ExitCode | Should -Not -Be 0
         $rb3.Run.Output | Should -Match 'Nothing to roll back'
+    }
+}
+
+Describe 'Set-WindowsFirewallBaseline on a session host or an unread host' {
+    BeforeAll {
+        $script:allSwitches = @{
+            BlockAllInboundOnPublic = $true
+            DisableStaleProgramRules = $true
+            DisablePublicFeatureGroup = @('TestFeatureGroup')
+            ScopeRuleDisplayName = @('Test Scope App')
+        }
+        $script:hostRuns = @{}
+        foreach ($kind in 'Physical', 'Avd', 'AvdUnread', 'Domain') {
+            $fixture = New-FirewallFixture -Name "host-$kind" -Rules $script:rules -Profiles $script:openProfiles
+            $args2 = @{ ReportDirectory = (Join-Path $script:workRoot "host-$kind") } + $script:allSwitches
+            $script:hostRuns[$kind] = Invoke-OpsWindowsScriptPair -WorkRoot $script:workRoot -ModulePath $script:systemModulePath `
+                -RelativePath $script:scriptPath -Tag "fw-host-$kind" -FixtureEnvironment $fixture `
+                -ExtraSetup ($script:netshStub + (Get-FakeHostSetupText -Fixture $script:hostFixture -Kind $kind)) -Argument $args2
+        }
+        $script:inboundSettings = 'Public.AllowInboundRules', 'fw-stale', 'fw-feature', 'fw-scope'
+    }
+
+    It 'runs to completion in both modes for every host kind' -ForEach @(
+        @{ Kind = 'Physical' }, @{ Kind = 'Avd' }, @{ Kind = 'AvdUnread' }, @{ Kind = 'Domain' }
+    ) {
+        $script:hostRuns[$Kind].WhatIf.ExitCode | Should -Be 0 -Because $script:hostRuns[$Kind].WhatIf.Output
+        $script:hostRuns[$Kind].Execute.ExitCode | Should -Be 0 -Because $script:hostRuns[$Kind].Execute.Output
+    }
+
+    It 'changes nothing under -WhatIf except the backup' -ForEach @(
+        @{ Kind = 'Avd' }, @{ Kind = 'AvdUnread' }
+    ) {
+        Assert-OpsNoChangeUnderWhatIf -Pair $script:hostRuns[$Kind] -IgnoreCommand 'netsh.exe'
+    }
+
+    It 'skips the inbound controls with a reason and keeps the profile defaults' -ForEach @(
+        @{ Kind = 'Avd'; Reason = 'Skipped: AVD session host*' }
+        @{ Kind = 'AvdUnread'; Reason = 'Skipped: could not determine whether this is an AVD session host*' }
+    ) {
+        $plan = Read-PlanJson -Summary $script:hostRuns[$Kind].Execute.Summary
+        $byName = @{}
+        foreach ($i in $plan) { $byName["$($i.Setting)"] = $i }
+        foreach ($name in $script:inboundSettings) {
+            $byName.ContainsKey($name) | Should -BeTrue -Because $name
+            $byName[$name].Action | Should -BeLike $Reason -Because $name
+        }
+        $byName['Public.DefaultInboundAction'].Action | Should -BeLike 'Set *'
+        # The executing run reports the same reason, not a generic one, so the skip is what stopped the write.
+        $results = @($script:hostRuns[$Kind].Execute.Summary.Items | Where-Object { $_.Setting -in $script:inboundSettings })
+        $results.Count | Should -Be 4
+        foreach ($r in $results) { $r.Result | Should -BeLike $Reason -Because $r.Setting }
+        # The executing run never touches a rule on a session host.
+        @(Get-OpsMutationRecord -Path $script:hostRuns[$Kind].ExecuteLog | Where-Object { $_.Command -in 'Set-NetFirewallRule', 'Disable-NetFirewallRule' }).Count | Should -Be 0
+    }
+
+    It 'still plans the inbound controls on a physical host' {
+        $plan = Read-PlanJson -Summary $script:hostRuns['Physical'].Execute.Summary
+        foreach ($name in $script:inboundSettings) {
+            $item = @($plan | Where-Object { $_.Setting -eq $name })
+            $item.Count | Should -Be 1 -Because $name
+            $item[0].Action | Should -Not -BeLike 'Skipped: *' -Because $name
+        }
+        $script:hostRuns['Physical'].Execute.Summary.HostNote | Should -BeNullOrEmpty
+    }
+
+    It 'records the host context and a policy note for a domain-joined host' {
+        $s = $script:hostRuns['Domain'].Execute.Summary
+        $s.HostContext.JoinType | Should -Be 'DomainJoined'
+        $s.HostNote | Should -Match 'policy'
     }
 }

@@ -5,6 +5,16 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-17
+
+### Added: Windows startup-load and freeze evaluation runbook
+
+`docs/windows-startup-freeze-runbook.md` is a paste-ready run prompt for an AI coding session on a Windows 11 laptop that
+freezes or crawls after startup. It carries the method (event-log freeze history, every startup surface, power settings,
+driver ages, external-drive roles, the developer's own scheduled tasks), the trim decisions already taken on the first
+run on 2026-11-16, the PowerShell 5.1 and registry pitfalls that run hit, the shape of the user-scope and elevated fix
+scripts with per-value backups, and the post-reboot verification commands.
+
 ## 2026-11-02
 
 ### Fixed: privacy hardening carries on past a refused setting, and exploit mitigation no longer reports unstored values as applied

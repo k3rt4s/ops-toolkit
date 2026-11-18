@@ -5,6 +5,16 @@ Notable changes to the ops-toolkit. Newest first.
 This file starts on 2026-08-15. Earlier history is in the git log; the reorganization
 that produced the current layout is described in the README under "What Changed".
 
+## 2026-11-18
+
+### Changed: thunderbird dependency bump
+
+- `pandas` 3.0.6 to 3.1.1 and `pyarrow` 25.0.1 to 26.0.1 in `scripts\email\thunderbird\requirements.txt` (Dependabot
+  PR #2, merge `620ee5c`). The only pandas or pyarrow call is `DataFrame.to_parquet` in `export_emails_to_parquet.py`.
+  Verified before merge: an export of 65 synthetic .eml files (sparse and non-ASCII headers, attachments, a bad date,
+  empty and garbage files, a three-part batch split) gave byte-identical Parquet content and schema on both pin sets.
+  The pandas 3.1 and Arrow 26 release notes were not read; both sites are outside the WebFetch allowlist.
+
 ## 2026-11-17
 
 ### Added: Windows startup-load and freeze evaluation runbook

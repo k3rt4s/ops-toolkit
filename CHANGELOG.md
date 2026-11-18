@@ -13,7 +13,10 @@ that produced the current layout is described in the README under "What Changed"
   PR #2, merge `620ee5c`). The only pandas or pyarrow call is `DataFrame.to_parquet` in `export_emails_to_parquet.py`.
   Verified before merge: an export of 65 synthetic .eml files (sparse and non-ASCII headers, attachments, a bad date,
   empty and garbage files, a three-part batch split) gave byte-identical Parquet content and schema on both pin sets.
-  The pandas 3.1 and Arrow 26 release notes were not read; both sites are outside the WebFetch allowlist.
+  Release notes read after merge (pandas 3.1.0 and 3.1.1, Arrow 26.0.0): no change touches `to_parquet` on a frame of
+  str, bool and int64 columns. The new floors are Python 3.11 (pyarrow), NumPy 2.0.2 (pandas) and NumPy 2.0 (pyarrow);
+  the venv has Python 3.13.5 and NumPy 2.5.3. pandas 3.1.0 also fixes `to_parquet` opening a local path twice, which
+  could truncate output to 0 bytes on some filesystems (GH 65810).
 
 ## 2026-11-17
 
